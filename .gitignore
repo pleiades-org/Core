@@ -1,0 +1,51 @@
+# Rust build output
+/target/
+
+# Packaged application and installer output
+/dist/
+*.exe
+*.msi
+*.pdb
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Editor and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# Agent tooling output
+agent-tools/
+
+# Benchmarks
+benches/
+
+# Graphify output
+/graphify-out/
+.graphify-cache/
+
+# MCP configuration
+.mcp/
+mcps/
+
+# Documentation
+docs/
+
+# Scripts
+scripts/
+
+# Miscellaneous generated files
+*.generated.*
+*.bk
+*.bak

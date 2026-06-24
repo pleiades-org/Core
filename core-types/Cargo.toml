@@ -1,0 +1,11 @@
+[package]
+name = "core-types"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "core_types"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }

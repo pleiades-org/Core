@@ -1,0 +1,12 @@
+---
+pid: 31312
+cwd: "C:\Users\Robert\code\rust\core"
+command: "$item = (Get-Content \"$env:APPDATA\\Core Launcher\\d2\\raw\\DestinyInventoryItemDefinition.json\" -Raw | ConvertFrom-Json).'1648948519'; Write-Output \"seasonHash=$($item.seasonHash) defaultDamageTypeHash=$($item.defaultDamageTypeHash) equippingBlock ammo=$($item.equippingBlock.ammoType)\"; $item.PSObject.Properties.Name | Where-Object { $_ -match 'season|damage|ammo' }"
+started_at: 2026-06-12T19:20:49.834Z
+running_for_ms: 11479996 
+---
+seasonHash= defaultDamageTypeHash=3454344768 equippingBlock ammo=2
+damageTypeHashes
+damageTypes
+defaultDamageType
+defaultDamageTypeHash
