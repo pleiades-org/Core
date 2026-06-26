@@ -51,17 +51,17 @@ pub fn border_subtle() -> Rgba {
 
 pub fn input_field_background(focused: bool) -> Rgba {
     if focused {
-        surface_overlay_mid()
+        rgba(0x00000088)
     } else {
-        surface_overlay_low()
+        rgba(0x00000066)
     }
 }
 
 pub fn input_field_border(focused: bool) -> Rgba {
     if focused {
-        rgba(0xffffff20)
+        rgba(0xffffff24)
     } else {
-        rgba(0x00000000)
+        rgba(0xffffff10)
     }
 }
 
@@ -242,10 +242,20 @@ pub fn browse_metadata_row(label: impl Into<String>, value: impl Into<String>) -
 }
 
 pub fn browse_action_hint(keys: impl Into<String>, action: impl Into<String>) -> impl IntoElement {
+    let keys = keys.into();
+    let action = action.into();
+
     div()
         .flex()
         .items_center()
         .gap(px(6.))
+        .child(
+            div()
+                .text_size(px(11.))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(rgb(0xd4d4d8))
+                .child(action),
+        )
         .child(
             div()
                 .px(px(6.))
@@ -256,13 +266,7 @@ pub fn browse_action_hint(keys: impl Into<String>, action: impl Into<String>) ->
                 .border_color(border_subtle())
                 .text_size(px(10.))
                 .text_color(rgb(0xd4d4d8))
-                .child(keys.into()),
-        )
-        .child(
-            div()
-                .text_size(px(11.))
-                .text_color(rgb(0x71717a))
-                .child(action.into()),
+                .child(keys),
         )
 }
 
@@ -279,7 +283,7 @@ pub fn browse_action_bar(primary: AnyElement, hints: Vec<AnyElement>) -> impl In
         .px(px(14.))
         .py(px(8.))
         .min_h(px(36.))
-        .bg(surface_overlay_low())
+        .bg(rgba(0x00000055))
         .border_t_1()
         .border_color(border_subtle())
         .child(

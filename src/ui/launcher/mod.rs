@@ -1350,7 +1350,7 @@ pub fn run() {
                 FileIndex::default()
             };
             let registered_hotkeys = register_global_hotkeys(&settings);
-            let window_bounds = Bounds::centered(None, size(px(720.0), px(520.0)), cx);
+            let window_bounds = Bounds::centered(None, size(px(755.0), px(484.0)), cx);
 
             let window_handle = cx
                 .open_window(

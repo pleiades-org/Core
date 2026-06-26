@@ -775,7 +775,7 @@ impl Render for TextInput {
         let (line_height, text_size, field_height, vertical_padding) = if self.compact {
             (px(20.), px(12.), px(30.), px(4.))
         } else {
-            (px(34.), px(24.), px(48.), px(7.))
+            (px(34.), px(24.), px(50.), px(7.))
         };
 
         let mut root = div()
@@ -819,9 +819,9 @@ impl Render for TextInput {
                 div()
                     .h(field_height)
                     .w_full()
-                    .px(px(10.))
+                    .px(px(14.))
                     .py(vertical_padding)
-                    .rounded_lg()
+                    .rounded_md()
                     .bg(input_field_background(is_focused))
                     .border_1()
                     .border_color(input_field_border(is_focused))

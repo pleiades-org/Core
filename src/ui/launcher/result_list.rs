@@ -188,9 +188,9 @@ impl LauncherView {
         div()
             .flex()
             .flex_col()
-            .gap(px(4.))
-            .px(px(10.))
-            .py(px(10.))
+            .gap(px(5.))
+            .px(px(8.))
+            .py(px(8.))
             .flex_1()
             .min_h(px(0.))
             .max_h(px(super::LAUNCHER_RESULTS_HEIGHT))
@@ -241,14 +241,14 @@ impl LauncherView {
             .id(("result-row", result_index))
             .flex()
             .items_center()
-            .gap(px(12.))
-            .px(px(10.))
-            .py(px(8.))
+            .gap(px(10.))
+            .px(px(8.))
+            .py(px(7.))
             .rounded_sm()
             .bg(result_row_background(is_selected))
             .border_1()
             .border_color(result_row_border_color(result, is_selected))
-            .hover(|style| style.bg(rgb(0x010101)).cursor_pointer())
+            .hover(|style| style.bg(rgb(0x090909)).cursor_pointer())
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(move |launcher, _: &MouseUpEvent, window, cx| {
@@ -272,7 +272,7 @@ impl LauncherView {
                         result_text.child(
                             div()
                                 .text_size(px(12.))
-                                .text_color(rgb(0xd9d9d9))
+                                .text_color(rgb(0xa1a1aa))
                                 .child(subtitle),
                         )
                     })
@@ -280,7 +280,7 @@ impl LauncherView {
                         result_text.child(
                             div()
                                 .text_size(px(11.))
-                                .text_color(rgb(0xd9d9d9))
+                                .text_color(rgb(0x71717a))
                                 .child(explanation),
                         )
                     }),
@@ -291,7 +291,7 @@ impl LauncherView {
                     .px(px(7.))
                     .py(px(3.))
                     .rounded_sm()
-                    .bg(rgb(0x050505))
+                    .bg(rgb(0x111111))
                     .text_color(category_color(&result.category))
                     .text_size(px(10.))
                     .child(category_label),
@@ -325,15 +325,21 @@ impl LauncherView {
             .flex()
             .flex_col()
             .gap(px(8.))
-            .px(px(8.))
-            .py(px(7.))
+            .px(px(10.))
+            .py(px(8.))
             .rounded_sm()
             .bg(if is_selected {
-                rgb(0x010101)
+                rgb(0x090909)
             } else {
                 rgb(0x000000)
             })
-            .hover(|style| style.bg(rgb(0x010101)).cursor_pointer())
+            .border_1()
+            .border_color(if is_selected {
+                rgb(0x22c55e)
+            } else {
+                rgb(0x111111)
+            })
+            .hover(|style| style.bg(rgb(0x090909)).cursor_pointer())
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(move |launcher, _: &MouseUpEvent, window, cx| {
@@ -342,8 +348,9 @@ impl LauncherView {
             )
             .child(
                 div()
-                    .text_size(px(13.))
-                    .text_color(rgb(0xd9d9d9))
+                    .text_size(px(12.))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(rgb(0xa1a1aa))
                     .child("Calculator"),
             )
             .child(
@@ -353,15 +360,17 @@ impl LauncherView {
                     .justify_between()
                     .h(px(118.))
                     .rounded_sm()
-                    .bg(rgb(0x050505))
-                    .px(px(18.))
+                    .bg(rgb(0x030303))
+                    .border_1()
+                    .border_color(rgb(0x171717))
+                    .px(px(16.))
                     .child(calculation_side(expression, kind_label, false))
                     .child(
                         div().flex().items_center().gap(px(14.)).child(
                             div()
-                                .text_size(px(28.))
-                                .text_color(rgb(0xffffff))
-                                .child("->"),
+                                .text_size(px(24.))
+                                .text_color(rgb(0x71717a))
+                                .child("→"),
                         ),
                     )
                     .child(calculation_side(answer, result_label, true)),
@@ -494,13 +503,13 @@ pub(super) fn calculation_side(primary_text: String, badge_text: String, is_answ
     let primary_text_size = calculation_primary_text_size(&primary_text, is_answer);
 
     div()
-        .w(px(260.))
+        .w(px(250.))
         .h_full()
         .flex()
         .flex_col()
         .items_center()
         .justify_center()
-        .gap(px(14.))
+        .gap(px(10.))
         .child(calculation_primary_text(
             primary_text,
             primary_text_size,
@@ -511,9 +520,9 @@ pub(super) fn calculation_side(primary_text: String, badge_text: String, is_answ
                 .px(px(8.))
                 .py(px(3.))
                 .rounded_sm()
-                .bg(rgb(0x242424))
-                .text_size(px(12.))
-                .text_color(rgb(0xffffff))
+                .bg(rgb(0x111111))
+                .text_size(px(11.))
+                .text_color(rgb(0xd4d4d8))
                 .child(badge_text),
         )
 }
@@ -682,7 +691,7 @@ pub(super) fn category_label(category: &CommandCategory) -> &'static str {
 
 pub(super) fn result_row_background(is_selected: bool) -> gpui::Rgba {
     if is_selected {
-        rgb(0x050505)
+        rgb(0x090909)
     } else {
         rgb(0x000000)
     }
@@ -697,8 +706,8 @@ pub(super) fn result_row_border_color(result: &CommandResult, is_selected: bool)
         CommandCategory::Note
         | CommandCategory::Clipboard
         | CommandCategory::File
-        | CommandCategory::Calendar => rgb(0x171717),
-        _ => rgb(0x050505),
+        | CommandCategory::Calendar => rgb(0x141414),
+        _ => rgb(0x0a0a0a),
     }
 }
 
