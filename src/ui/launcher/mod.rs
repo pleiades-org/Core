@@ -22,6 +22,7 @@ use crate::{
     },
     tray_icon::{start_tray_icon_event_loop, TrayIconEvent},
     ui::{
+        lucide_icons::{self, LucideIcon},
         platform_window::{hide_platform_window, show_platform_window},
         text_input::{bind_text_input_keys, TextInput},
     },
@@ -204,13 +205,14 @@ pub struct LauncherView {
     search_debounce_generation: u64,
     pending_search_query: Option<String>,
     last_built_query: String,
+    search_bar_hovered: bool,
 }
 
 mod destiny_detail;
 mod result_list;
 mod settings_panel;
 
-use result_list::{compact_display_text, result_row_background, result_row_border_color};
+use result_list::{compact_display_text, result_row_background, result_row_border_color, result_row_hover_border_color};
 
 impl LauncherView {
     fn new(
@@ -268,6 +270,7 @@ impl LauncherView {
             search_debounce_generation: 0,
             pending_search_query: None,
             last_built_query: String::new(),
+            search_bar_hovered: false,
         }
     }
 
@@ -822,16 +825,15 @@ impl Render for LauncherView {
             .size_full()
             .bg(launcher_background_color(&self.settings))
             .border_1()
-            .border_color(rgb(0x111111))
+            .border_color(rgba(0xa78bfa15))
             .text_color(rgb(0xffffff))
-            .child(self.render_header(cx))
             .child(if self.is_settings_open {
                 div()
                     .flex()
                     .flex_col()
                     .flex_1()
                     .min_h(px(0.))
-                    .child(self.text_input.clone())
+                    .child(self.render_search_container(false, cx))
                     .child(self.render_settings_menu(cx))
                     .into_any_element()
             } else if self.is_file_search_view && matches!(&self.panel, LauncherPanel::Home) {
@@ -839,7 +841,7 @@ impl Render for LauncherView {
                     .flex()
                     .flex_col()
                     .child(self.render_file_results(cx))
-                    .child(self.text_input.clone())
+                    .child(self.render_search_container(true, cx))
                     .into_any_element()
             } else {
                 let panel = match &self.panel {
@@ -865,7 +867,7 @@ impl Render for LauncherView {
                     .flex_col()
                     .flex_1()
                     .min_h(px(0.))
-                    .child(self.text_input.clone())
+                    .child(self.render_search_container(false, cx))
                     .child(
                         div()
                             .flex()
@@ -880,48 +882,100 @@ impl Render for LauncherView {
 }
 
 impl LauncherView {
-    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let hotkey_text = self
-            .registered_hotkeys
-            .launcher
-            .as_ref()
-            .map(|hotkey| hotkey.display_text.clone())
-            .unwrap_or_else(|| "Focused window only".to_string());
+    fn render_search_container(&self, at_bottom: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let hovered = self.search_bar_hovered;
 
-        div()
+        let settings_button = if hovered {
+            Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(26.))
+                    .rounded_md()
+                    .hover(|style| style.bg(rgba(0xffffff15)).cursor_pointer())
+                    .child(lucide_icons::render_lucide_icon(
+                        LucideIcon::Settings,
+                        14.,
+                        rgb(0x9ca3af),
+                        false,
+                    ))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(move |launcher, _: &MouseUpEvent, _window, cx| {
+                            if launcher.is_settings_open {
+                                launcher.is_settings_open = false;
+                                launcher.text_input.update(cx, |text_input, cx| {
+                                    text_input.set_placeholder(HOME_INPUT_PLACEHOLDER, cx);
+                                    text_input.reset(cx);
+                                });
+                                launcher.rebuild_results("");
+                                cx.notify();
+                            } else {
+                                launcher.enter_settings_mode(cx);
+                            }
+                        }),
+                    ),
+            )
+        } else {
+            None
+        };
+
+        let hotkey_badge = if !hovered {
+            let hotkey_text = self
+                .registered_hotkeys
+                .launcher
+                .as_ref()
+                .map(|hotkey| hotkey.display_text.clone())
+                .unwrap_or_else(|| "Alt+Space".to_string());
+            Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(
+                        div()
+                            .px(px(6.))
+                            .py(px(2.))
+                            .rounded(px(4.))
+                            .bg(rgba(0xffffff0d))
+                            .text_size(px(10.))
+                            .text_color(rgb(0x9ca3af))
+                            .child(hotkey_text),
+                    ),
+            )
+        } else {
+            None
+        };
+
+        let mut container = div()
+            .id("search-container")
             .flex()
-            .justify_between()
             .items_center()
-            .px(px(14.))
-            .pt(px(12.))
-            .pb(px(8.))
-            .text_size(px(12.))
-            .text_color(rgb(0xd9d9d9))
+            .justify_between()
+            .w_full()
+            .px(px(16.))
+            .py(px(12.))
+            .on_hover(cx.listener(|this, is_hovered: &bool, _window, cx| {
+                this.search_bar_hovered = *is_hovered;
+                cx.notify();
+            }));
+
+        if at_bottom {
+            container = container.border_t_1().border_color(rgba(0xffffff08));
+        } else {
+            container = container.border_b_1().border_color(rgba(0xffffff08));
+        }
+
+        container
+            .child(div().flex_1().child(self.text_input.clone()))
             .child(
                 div()
+                    .flex_none()
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .child(div().size(px(14.)).bg(rgb(APP_ICON_PURPLE)))
-                    .child("Core Launcher"),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .child(hotkey_text)
-                    .child(
-                        div()
-                            .px(px(8.))
-                            .py(px(3.))
-                            .rounded_sm()
-                            .bg(rgb(0x010101))
-                            .text_color(rgb(0xffffff))
-                            .hover(|style| style.bg(rgb(0x050505)).cursor_pointer())
-                            .child("Settings")
-                            .on_mouse_up(MouseButton::Left, cx.listener(Self::open_settings_menu)),
-                    ),
+                    .children(hotkey_badge)
+                    .children(settings_button),
             )
     }
 
@@ -1002,7 +1056,16 @@ impl LauncherView {
             .bg(result_row_background(is_selected))
             .border_1()
             .border_color(result_row_border_color(result, is_selected))
-            .hover(|style| style.bg(rgb(0x010101)).cursor_pointer())
+            .hover(|style| {
+                let style = style.cursor_pointer();
+                if is_selected {
+                    style
+                } else {
+                    style
+                        .bg(rgb(0x010101))
+                        .border_color(result_row_hover_border_color(result))
+                }
+            })
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(move |launcher, _: &MouseUpEvent, window, cx| {
@@ -1364,7 +1427,7 @@ pub fn run() {
                         ..Default::default()
                     },
                     |window, cx| {
-                        let text_input = cx.new(|cx| TextInput::new(HOME_INPUT_PLACEHOLDER, cx));
+                        let text_input = cx.new(|cx| TextInput::new(HOME_INPUT_PLACEHOLDER, cx).borderless());
                         cx.new(|cx| {
                             cx.observe_window_activation(
                                 window,

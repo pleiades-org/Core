@@ -695,7 +695,7 @@ impl Element for TextElement {
                         point(bounds.left() + cursor_position, bounds.top()),
                         size(px(2.), bounds.bottom() - bounds.top()),
                     ),
-                    gpui::blue(),
+                    rgb(0xa78bfa),
                 )),
             )
         } else {
@@ -711,7 +711,7 @@ impl Element for TextElement {
                             bounds.bottom(),
                         ),
                     ),
-                    rgba(0x2563eb45),
+                    rgba(0xa78bfa30),
                 )),
                 None,
             )

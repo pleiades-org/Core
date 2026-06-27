@@ -10,7 +10,7 @@ use crate::{
     },
 };
 use gpui::{
-    div, img, prelude::*, px, rgb, Context, MouseButton, MouseUpEvent, Window,
+    div, img, prelude::*, px, rgb, rgba, Context, MouseButton, MouseUpEvent, Window,
 };
 use super::{
     destiny_detail::{
@@ -248,7 +248,16 @@ impl LauncherView {
             .bg(result_row_background(is_selected))
             .border_1()
             .border_color(result_row_border_color(result, is_selected))
-            .hover(|style| style.bg(rgb(0x010101)).cursor_pointer())
+            .hover(|style| {
+                let style = style.cursor_pointer();
+                if is_selected {
+                    style
+                } else {
+                    style
+                        .bg(rgb(0x010101))
+                        .border_color(result_row_hover_border_color(result))
+                }
+            })
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(move |launcher, _: &MouseUpEvent, window, cx| {
@@ -299,6 +308,8 @@ impl LauncherView {
             .into_any_element()
     }
 
+
+
     pub(super) fn render_calculation_result(
         &self,
         result: &CommandResult,
@@ -329,11 +340,20 @@ impl LauncherView {
             .py(px(7.))
             .rounded_sm()
             .bg(if is_selected {
-                rgb(0x010101)
+                rgb(0x050505)
             } else {
-                rgb(0x000000)
+                rgba(0x00000000)
             })
-            .hover(|style| style.bg(rgb(0x010101)).cursor_pointer())
+            .hover(|style| {
+                let style = style.cursor_pointer();
+                if is_selected {
+                    style
+                } else {
+                    style
+                        .bg(rgb(0x010101))
+                        .border_color(result_row_hover_border_color(result))
+                }
+            })
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(move |launcher, _: &MouseUpEvent, window, cx| {
@@ -684,15 +704,19 @@ pub(super) fn result_row_background(is_selected: bool) -> gpui::Rgba {
     if is_selected {
         rgb(0x050505)
     } else {
-        rgb(0x000000)
+        rgba(0x00000000)
     }
 }
 
 pub(super) fn result_row_border_color(result: &CommandResult, is_selected: bool) -> gpui::Rgba {
     if is_selected {
-        return category_color(&result.category);
+        category_color(&result.category)
+    } else {
+        rgba(0x00000000)
     }
+}
 
+pub(super) fn result_row_hover_border_color(result: &CommandResult) -> gpui::Rgba {
     match result.category {
         CommandCategory::Note
         | CommandCategory::Clipboard
@@ -701,6 +725,7 @@ pub(super) fn result_row_border_color(result: &CommandResult, is_selected: bool)
         _ => rgb(0x050505),
     }
 }
+
 
 fn d2_scope_query_suffix(query: &str) -> Option<String> {
     let trimmed = query.trim();
