@@ -133,7 +133,7 @@ impl LauncherView {
             .map(destiny::d2_query_filter_pills)
             .unwrap_or_default();
 
-        div()
+        let mut panel = div()
             .flex()
             .flex_col()
             .flex_1()
@@ -151,8 +151,246 @@ impl LauncherView {
                 };
                 panel.child(browse_scope_bar("Destiny 2", filter_label))
             })
-            .child(self.render_results(cx))
-            .child(self.render_launcher_action_bar(cx))
+            .child(self.render_results(cx));
+
+        if let Some(spotify_bar) = self.render_spotify_bar(cx) {
+            panel = panel.child(spotify_bar);
+        }
+
+        panel.child(self.render_launcher_action_bar(cx))
+    }
+
+    pub(super) fn render_spotify_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        if self.spotify_closed {
+            return None;
+        }
+
+        let display_text = if let Some(title) = &self.spotify_title {
+            if let Some(art) = &self.spotify_artist {
+                if art.is_empty() {
+                    title.clone()
+                } else {
+                    format!("{title} · {art}")
+                }
+            } else {
+                title.clone()
+            }
+        } else {
+            "Not playing".to_string()
+        };
+
+        Some(
+            div()
+                .id("spotify-bar")
+                .w_full()
+                .flex()
+                .items_center()
+                .justify_between()
+                .px(px(14.))
+                .py(px(6.))
+                .bg(rgba(0xffffff06))
+                .border_t_1()
+                .border_color(rgba(0xffffff10))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .flex_1()
+                        .min_w(px(0.))
+                        .child(crate::ui::lucide_icons::render_lucide_icon(
+                            crate::ui::lucide_icons::LucideIcon::Music,
+                            14.,
+                            rgb(0x1db954), // Spotify Green
+                            false,
+                        ))
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(rgb(0xd4d4d8))
+                                .text_ellipsis()
+                                .child(display_text),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(16.))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
+                                .child(
+                                    div()
+                                        .rounded_md()
+                                        .hover(|style| style.bg(rgba(0xffffff10)).cursor_pointer())
+                                        .child(crate::ui::lucide_icons::render_hoverable_lucide_icon(
+                                            crate::ui::lucide_icons::LucideIcon::Volume2,
+                                            12.,
+                                            rgb(0x9ca3af),
+                                            false,
+                                        ))
+                                        .on_mouse_up(
+                                            gpui::MouseButton::Left,
+                                            cx.listener(move |launcher, _: &gpui::MouseUpEvent, _window, cx| {
+                                                let current = launcher.spotify_volume;
+                                                let new_vol = if current > 0.0 { 0.0 } else { 0.35 };
+                                                crate::media_tools::set_system_volume(new_vol);
+                                                launcher.spotify_volume = new_vol;
+                                                cx.notify();
+                                            }),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(2.))
+                                        .children((1..=10).map(|i| {
+                                            let target_vol = i as f32 * 0.1;
+                                            let active = self.spotify_volume >= (target_vol - 0.05);
+                                            let bar_color = if active {
+                                                rgb(0x1db954)
+                                            } else {
+                                                rgba(0xffffff20)
+                                            };
+                                            div()
+                                                .id(("volume-tick", i as usize))
+                                                .w(px(3.))
+                                                .h(px(10.))
+                                                .rounded_sm()
+                                                .bg(bar_color)
+                                                .hover(|style| style.bg(rgb(0xffffff)).cursor_pointer())
+                                                .on_mouse_up(
+                                                    gpui::MouseButton::Left,
+                                                    cx.listener(move |launcher, _: &gpui::MouseUpEvent, _window, cx| {
+                                                        crate::media_tools::set_system_volume(target_vol);
+                                                        launcher.spotify_volume = target_vol;
+                                                        cx.notify();
+                                                    }),
+                                                )
+                                        })),
+                                )
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .child(
+                                    div()
+                                        .rounded_md()
+                                        .hover(|style| style.bg(rgba(0xffffff10)).cursor_pointer())
+                                        .child(crate::ui::lucide_icons::render_hoverable_lucide_icon(
+                                            crate::ui::lucide_icons::LucideIcon::SkipBack,
+                                            12.,
+                                            rgb(0x9ca3af),
+                                            false,
+                                        ))
+                                        .on_mouse_up(
+                                            gpui::MouseButton::Left,
+                                            cx.listener(move |_launcher, _: &gpui::MouseUpEvent, _window, cx| {
+                                                let _ = crate::system_controls::execute_system_control(
+                                                    &crate::command::SystemControlCommand::MediaPrevious,
+                                                );
+                                                cx.spawn(async move |this, cx| {
+                                                    cx.background_executor().timer(std::time::Duration::from_millis(300)).await;
+                                                    let now_playing = crate::media_tools::read_now_playing();
+                                                    this.update(cx, |launcher, cx| {
+                                                        if let Some((t, a)) = now_playing {
+                                                            launcher.spotify_title = Some(t);
+                                                            launcher.spotify_artist = Some(a);
+                                                        }
+                                                        cx.notify();
+                                                    }).ok();
+                                                }).detach();
+                                            }),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .rounded_md()
+                                        .hover(|style| style.bg(rgba(0xffffff10)).cursor_pointer())
+                                        .child(crate::ui::lucide_icons::render_hoverable_lucide_icon(
+                                            crate::ui::lucide_icons::LucideIcon::Play,
+                                            12.,
+                                            rgb(0xf4f4f5),
+                                            false,
+                                        ))
+                                        .on_mouse_up(
+                                            gpui::MouseButton::Left,
+                                            cx.listener(move |_launcher, _: &gpui::MouseUpEvent, _window, cx| {
+                                                let _ = crate::system_controls::execute_system_control(
+                                                    &crate::command::SystemControlCommand::MediaPlayPause,
+                                                );
+                                                cx.spawn(async move |this, cx| {
+                                                    cx.background_executor().timer(std::time::Duration::from_millis(300)).await;
+                                                    let now_playing = crate::media_tools::read_now_playing();
+                                                    this.update(cx, |launcher, cx| {
+                                                        if let Some((t, a)) = now_playing {
+                                                            launcher.spotify_title = Some(t);
+                                                            launcher.spotify_artist = Some(a);
+                                                        }
+                                                        cx.notify();
+                                                    }).ok();
+                                                }).detach();
+                                            }),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .rounded_md()
+                                        .hover(|style| style.bg(rgba(0xffffff10)).cursor_pointer())
+                                        .child(crate::ui::lucide_icons::render_hoverable_lucide_icon(
+                                            crate::ui::lucide_icons::LucideIcon::SkipForward,
+                                            12.,
+                                            rgb(0x9ca3af),
+                                            false,
+                                        ))
+                                        .on_mouse_up(
+                                            gpui::MouseButton::Left,
+                                            cx.listener(move |_launcher, _: &gpui::MouseUpEvent, _window, cx| {
+                                                let _ = crate::system_controls::execute_system_control(
+                                                    &crate::command::SystemControlCommand::MediaNext,
+                                                );
+                                                cx.spawn(async move |this, cx| {
+                                                    cx.background_executor().timer(std::time::Duration::from_millis(300)).await;
+                                                    let now_playing = crate::media_tools::read_now_playing();
+                                                    this.update(cx, |launcher, cx| {
+                                                        if let Some((t, a)) = now_playing {
+                                                            launcher.spotify_title = Some(t);
+                                                            launcher.spotify_artist = Some(a);
+                                                        }
+                                                        cx.notify();
+                                                    }).ok();
+                                                }).detach();
+                                            }),
+                                        ),
+                                )
+                        )
+                        .child(
+                            div()
+                                .rounded_md()
+                                .hover(|style| style.bg(rgba(0xffffff10)).cursor_pointer())
+                                .child(crate::ui::lucide_icons::render_hoverable_lucide_icon(
+                                    crate::ui::lucide_icons::LucideIcon::X,
+                                    12.,
+                                    rgb(0xef4444),
+                                    false,
+                                ))
+                                .on_mouse_up(
+                                    gpui::MouseButton::Left,
+                                    cx.listener(move |launcher, _: &gpui::MouseUpEvent, _window, cx| {
+                                        launcher.spotify_closed = true;
+                                        cx.notify();
+                                    }),
+                                ),
+                        )
+                )
+                .into_any_element()
+        )
     }
 
     pub(super) fn render_launcher_action_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -188,6 +426,7 @@ impl LauncherView {
         div()
             .flex()
             .flex_col()
+            .overflow_hidden()
             .gap(px(4.))
             .px(px(10.))
             .py(px(10.))
@@ -213,7 +452,9 @@ impl LauncherView {
                         {
                             self.render_d2_manifest_download(result, is_selected)
                                 .into_any_element()
-                        } else if matches!(result.category, CommandCategory::Calculation) {
+                        } else if matches!(result.category, CommandCategory::Calculation)
+                            || result.calculation_display.is_some()
+                        {
                             self.render_calculation_result(result, result_index, is_selected, cx)
                         } else {
                             self.render_standard_result(result, result_index, is_selected, cx)
@@ -331,6 +572,18 @@ impl LauncherView {
             .map(|display| display.result_label.clone())
             .unwrap_or_else(|| "Result".to_string());
 
+        let display_title = match result.category {
+            CommandCategory::Calculation => "Calculator",
+            CommandCategory::Context => {
+                if result.title.contains(':') {
+                    "Time"
+                } else {
+                    "Date"
+                }
+            }
+            _ => "Calculator",
+        };
+
         div()
             .id(("result-row", result_index))
             .flex()
@@ -364,7 +617,7 @@ impl LauncherView {
                 div()
                     .text_size(px(13.))
                     .text_color(rgb(0xd9d9d9))
-                    .child("Calculator"),
+                    .child(display_title),
             )
             .child(
                 div()

@@ -6,11 +6,8 @@ use std::{
     sync::OnceLock,
 };
 
-const DEFAULT_DATE_FORMAT: &str = "weekday_month_day_year";
-const DEFAULT_TIME_FORMAT: &str = "12h";
 const DEFAULT_HOTKEY: &str = "Alt+Space";
 const LEGACY_DEFAULT_HOTKEY: &str = "Ctrl+Shift+Space";
-const DEFAULT_QUICK_NOTE_HOTKEY: &str = "Alt+Shift+N";
 const DEFAULT_QUICK_NOTE_ANCHOR: &str = "top-right";
 const FALLBACK_TIMEZONE: &str = "Europe/London";
 
@@ -18,8 +15,6 @@ const FALLBACK_TIMEZONE: &str = "Europe/London";
 #[serde(default)]
 pub struct LauncherSettings {
     pub local_timezone: String,
-    pub preferred_date_format: String,
-    pub preferred_time_format: String,
     pub home_currency: Option<String>,
     pub backdrop_blur_enabled: bool,
     pub hotkey_enabled: bool,
@@ -33,8 +28,6 @@ pub struct LauncherSettings {
     pub aliases: Vec<CommandAliasSetting>,
     pub custom_commands: Vec<CustomCommandSetting>,
     pub hotkeys: Vec<CommandHotkeySetting>,
-    pub quick_note_enabled: bool,
-    pub quick_note_hotkey: String,
     pub quick_note_anchor: String,
     pub quick_note_offset_x: i32,
     pub quick_note_offset_y: i32,
@@ -54,8 +47,6 @@ impl std::fmt::Debug for LauncherSettings {
             .unwrap_or("<none>");
         f.debug_struct("LauncherSettings")
             .field("local_timezone", &self.local_timezone)
-            .field("preferred_date_format", &self.preferred_date_format)
-            .field("preferred_time_format", &self.preferred_time_format)
             .field("home_currency", &self.home_currency)
             .field("backdrop_blur_enabled", &self.backdrop_blur_enabled)
             .field("hotkey_enabled", &self.hotkey_enabled)
@@ -69,8 +60,6 @@ impl std::fmt::Debug for LauncherSettings {
             .field("aliases", &self.aliases)
             .field("custom_commands", &self.custom_commands)
             .field("hotkeys", &self.hotkeys)
-            .field("quick_note_enabled", &self.quick_note_enabled)
-            .field("quick_note_hotkey", &self.quick_note_hotkey)
             .field("quick_note_anchor", &self.quick_note_anchor)
             .field("quick_note_offset_x", &self.quick_note_offset_x)
             .field("quick_note_offset_y", &self.quick_note_offset_y)
@@ -112,8 +101,6 @@ impl Default for LauncherSettings {
         Self {
             local_timezone: iana_time_zone::get_timezone()
                 .unwrap_or_else(|_| FALLBACK_TIMEZONE.to_string()),
-            preferred_date_format: DEFAULT_DATE_FORMAT.to_string(),
-            preferred_time_format: DEFAULT_TIME_FORMAT.to_string(),
             home_currency: None,
             backdrop_blur_enabled: false,
             hotkey_enabled: true,
@@ -127,8 +114,6 @@ impl Default for LauncherSettings {
             aliases: Vec::new(),
             custom_commands: Vec::new(),
             hotkeys: Vec::new(),
-            quick_note_enabled: true,
-            quick_note_hotkey: DEFAULT_QUICK_NOTE_HOTKEY.to_string(),
             quick_note_anchor: DEFAULT_QUICK_NOTE_ANCHOR.to_string(),
             quick_note_offset_x: 24,
             quick_note_offset_y: 24,

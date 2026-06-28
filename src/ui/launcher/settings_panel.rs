@@ -2,16 +2,16 @@ use crate::{
     action_executor::execute_result_action,
     command::{BuiltInAction, CommandResult},
     quicklinks,
-    recent_usage,
     settings::settings_file_path,
     snippets,
     startup::set_launch_at_startup,
     ui::{
         browse_views::{
-            border_subtle, browse_action_hint, settings_row_selected_background,
-            settings_sidebar_background, surface_overlay_low,
+            border_subtle, browse_action_bar, browse_action_hint, settings_row_background,
+            settings_row_hover_background, settings_row_selected_background,
+            settings_sidebar_background,
         },
-        lucide_icons,
+        lucide_icons::{self, LucideIcon},
     },
     ui_flow::{track_open_settings, track_save_settings},
 };
@@ -48,10 +48,10 @@ fn setting_toggle_row(
         .items_center()
         .justify_between()
         .rounded_sm()
-        .bg(rgb(0x000000))
+        .bg(settings_row_background())
         .px(px(12.))
         .py(px(10.))
-        .hover(|style| style.bg(rgb(0x010101)).cursor_pointer())
+        .hover(|style| style.bg(settings_row_hover_background()).cursor_pointer())
         .on_mouse_up(MouseButton::Left, on_click)
         .child(
             div()
@@ -80,9 +80,10 @@ fn settings_info_row(title: &'static str, value: &str) -> impl IntoElement {
         .items_center()
         .justify_between()
         .rounded_sm()
-        .bg(rgb(0x000000))
+        .bg(settings_row_background())
         .px(px(12.))
         .py(px(10.))
+        .hover(|style| style.bg(settings_row_hover_background()))
         .child(
             div()
                 .text_color(rgb(0xffffff))
@@ -165,6 +166,26 @@ fn settings_editor_section(
         .children(visible_rows.into_iter().map(settings_editor_row))
 }
 
+fn settings_add_form(title: &'static str, form_body: impl IntoElement) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .rounded_sm()
+        .bg(rgb(0x050505))
+        .border_1()
+        .border_color(rgb(0x171717))
+        .px(px(10.))
+        .py(px(9.))
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(0xf4f4f5))
+                .child(title),
+        )
+        .child(form_body)
+}
+
 fn settings_editor_row(row: SettingsEditorRow) -> gpui::Div {
     div()
         .flex()
@@ -172,9 +193,10 @@ fn settings_editor_row(row: SettingsEditorRow) -> gpui::Div {
         .items_center()
         .gap(px(12.))
         .rounded_sm()
-        .bg(rgb(0x000000))
+        .bg(settings_row_background())
         .px(px(9.))
         .py(px(7.))
+        .hover(|style| style.bg(settings_row_hover_background()).cursor_pointer())
         .child(
             div()
                 .text_size(px(12.))
@@ -215,18 +237,6 @@ fn toggle_pill(is_enabled: bool) -> impl IntoElement {
         }))
 }
 
-fn settings_button(label: &'static str) -> gpui::Div {
-    div()
-        .px(px(10.))
-        .py(px(5.))
-        .rounded_sm()
-        .bg(rgb(0x010101))
-        .text_color(rgb(0xffffff))
-        .text_size(px(12.))
-        .hover(|style| style.bg(rgb(0x050505)).cursor_pointer())
-        .child(label)
-}
-
 fn settings_section_intro(title: &'static str, subtitle: &'static str) -> impl IntoElement {
     div()
         .flex()
@@ -248,16 +258,19 @@ fn settings_section_intro(title: &'static str, subtitle: &'static str) -> impl I
         )
 }
 
-fn danger_settings_button(label: &'static str) -> gpui::Div {
+fn settings_footer_icon_button(
+    icon: LucideIcon,
+    icon_color: gpui::Rgba,
+) -> gpui::Div {
     div()
-        .px(px(10.))
-        .py(px(5.))
-        .rounded_sm()
-        .bg(rgb(0x2a0505))
-        .text_color(rgb(0xffd7d7))
-        .text_size(px(12.))
-        .hover(|style| style.bg(rgb(0x3a0808)).cursor_pointer())
-        .child(label)
+        .size(px(26.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
+        .bg(gpui::rgba(0x00000000))
+        .hover(|style| style.bg(gpui::rgba(0xffffff12)).cursor_pointer())
+        .child(lucide_icons::render_lucide_icon(icon, 13., icon_color, false))
 }
 
 
@@ -280,19 +293,6 @@ impl LauncherView {
         cx: &mut Context<Self>,
     ) {
         self.enter_settings_mode(cx);
-    }
-
-    pub(super) fn clear_recent_usage_from_settings(
-        &mut self,
-        _: &MouseUpEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let _ = recent_usage::clear_recent_usage();
-        if self.text_input.read(cx).content().trim().is_empty() {
-            self.rebuild_results("");
-        }
-        cx.notify();
     }
 
     pub(super) fn select_settings_section(
@@ -512,7 +512,7 @@ impl LauncherView {
                     .bg(if is_selected {
                         settings_row_selected_background()
                     } else {
-                        rgb(0x000000)
+                        settings_row_background()
                     })
                     .hover(|style| style.bg(settings_row_selected_background()).cursor_pointer())
                     .child(lucide_icons::render_lucide_icon(
@@ -690,20 +690,6 @@ impl LauncherView {
                     "Edit in config.toml or add [[hotkeys]] entries",
                     hotkey_rows,
                 )),
-            SettingsSection::Notes => div()
-                .flex()
-                .flex_col()
-                .gap(px(8.))
-                .child(settings_section_intro(
-                    "Notes",
-                    "Scratch pads and searchable note commands",
-                ))
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(0xa1a1aa))
-                        .child("Launcher notes use @note. Quick notes open a pinned scratch pad."),
-                ),
             SettingsSection::Aliases => div()
                 .flex()
                 .flex_col()
@@ -713,6 +699,39 @@ impl LauncherView {
                     "First-word query expansions",
                 ))
                 .child(settings_info_row("Configured", &aliases_count))
+                .child(
+                    settings_add_form(
+                        "Add Alias",
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .w(px(120.))
+                                    .child(self.alias_keyword_input.clone())
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(self.alias_expands_to_input.clone())
+                            )
+                            .child(
+                                div()
+                                    .px(px(10.))
+                                    .py(px(5.))
+                                    .rounded_sm()
+                                    .bg(rgb(0x7c3aed))
+                                    .text_color(rgb(0xffffff))
+                                    .text_size(px(12.))
+                                    .hover(|style| style.bg(rgb(0x6d28d9)).cursor_pointer())
+                                    .child("Add")
+                                    .on_mouse_up(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                        this.add_alias_from_settings(cx);
+                                    }))
+                            )
+                    )
+                )
                 .child(self.render_settings_editor_section(
                     "Aliases",
                     "Add aliases in config.toml",
@@ -740,6 +759,39 @@ impl LauncherView {
                     "Quicklinks",
                     "Keyword shortcuts to URLs and paths",
                 ))
+                .child(
+                    settings_add_form(
+                        "Add Quicklink",
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .w(px(120.))
+                                    .child(self.quicklink_keyword_input.clone())
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(self.quicklink_target_input.clone())
+                            )
+                            .child(
+                                div()
+                                    .px(px(10.))
+                                    .py(px(5.))
+                                    .rounded_sm()
+                                    .bg(rgb(0x7c3aed))
+                                    .text_color(rgb(0xffffff))
+                                    .text_size(px(12.))
+                                    .hover(|style| style.bg(rgb(0x6d28d9)).cursor_pointer())
+                                    .child("Add")
+                                    .on_mouse_up(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                        this.add_quicklink_from_settings(cx);
+                                    }))
+                            )
+                    )
+                )
                 .child(self.render_settings_editor_section(
                     "Quicklinks",
                     "Use @quicklink keyword = url-or-path",
@@ -753,6 +805,39 @@ impl LauncherView {
                     "Snippets",
                     "Reusable text expansions",
                 ))
+                .child(
+                    settings_add_form(
+                        "Add Snippet",
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .w(px(120.))
+                                    .child(self.snippet_keyword_input.clone())
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(self.snippet_body_input.clone())
+                            )
+                            .child(
+                                div()
+                                    .px(px(10.))
+                                    .py(px(5.))
+                                    .rounded_sm()
+                                    .bg(rgb(0x7c3aed))
+                                    .text_color(rgb(0xffffff))
+                                    .text_size(px(12.))
+                                    .hover(|style| style.bg(rgb(0x6d28d9)).cursor_pointer())
+                                    .child("Add")
+                                    .on_mouse_up(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                        this.add_snippet_from_settings(cx);
+                                    }))
+                            )
+                    )
+                )
                 .child(self.render_settings_editor_section(
                     "Snippets",
                     "Use @snippet keyword = reusable text",
@@ -776,55 +861,32 @@ impl LauncherView {
     }
 
     pub(super) fn render_settings_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id("settings-footer")
-            .w_full()
+        let primary_actions = div()
             .flex_none()
             .flex()
             .items_center()
-            .justify_between()
-            .gap(px(12.))
-            .bg(surface_overlay_low())
-            .border_t_1()
-            .border_color(border_subtle())
-            .px(px(14.))
-            .py(px(8.))
-            .min_h(px(SETTINGS_FOOTER_HEIGHT))
+            .gap(px(6.))
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(
-                        settings_button("Close")
-                            .on_mouse_up(MouseButton::Left, cx.listener(Self::close_settings_menu)),
-                    )
-                    .child(
-                        settings_button("Open config")
-                            .on_mouse_up(MouseButton::Left, cx.listener(Self::open_settings_file)),
-                    )
-                    .child(
-                        settings_button("Reload apps")
-                            .on_mouse_up(MouseButton::Left, cx.listener(Self::reload_applications)),
-                    )
-                    .child(
-                        danger_settings_button("Clear recent")
-                            .on_mouse_up(MouseButton::Left, cx.listener(Self::clear_recent_usage_from_settings)),
-                    )
-                    .child(
-                        danger_settings_button("Quit Core")
-                            .on_mouse_up(MouseButton::Left, cx.listener(Self::quit_from_settings)),
-                    ),
+                settings_footer_icon_button(LucideIcon::X, rgb(0xd4d4d8))
+                    .on_mouse_up(MouseButton::Left, cx.listener(Self::close_settings_menu)),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap(px(12.))
-                    .child(browse_action_hint("Esc", "Close settings"))
-                    .child(browse_action_hint("Ctrl+Q", "Quit Core")),
+                settings_footer_icon_button(LucideIcon::FileCog, rgb(0xd4d4d8))
+                    .on_mouse_up(MouseButton::Left, cx.listener(Self::open_settings_file)),
             )
+            .child(
+                settings_footer_icon_button(LucideIcon::RefreshCw, rgb(0xd4d4d8))
+                    .on_mouse_up(MouseButton::Left, cx.listener(Self::reload_applications)),
+            )
+            .child(
+                settings_footer_icon_button(LucideIcon::Power, rgb(0xfca5a5))
+                    .on_mouse_up(MouseButton::Left, cx.listener(Self::quit_from_settings)),
+            );
+
+        browse_action_bar(
+            primary_actions.into_any_element(),
+            vec![browse_action_hint("Esc", "Close settings").into_any_element()],
+        )
     }
 
     pub(super) fn render_settings_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -870,4 +932,55 @@ impl LauncherView {
             )
     }
 
+    pub(super) fn add_quicklink_from_settings(&mut self, cx: &mut Context<Self>) {
+        let keyword = self.quicklink_keyword_input.read(cx).content().to_string();
+        let target = self.quicklink_target_input.read(cx).content().to_string();
+        if keyword.trim().is_empty() || target.trim().is_empty() {
+            return;
+        }
+
+        let title = format!("Quicklink to {}", keyword);
+        if let Ok(_) = quicklinks::save_quicklink(keyword, title, target) {
+            self.quicklink_keyword_input.update(cx, |input, cx| input.reset(cx));
+            self.quicklink_target_input.update(cx, |input, cx| input.reset(cx));
+            cx.notify();
+        }
+    }
+
+    pub(super) fn add_alias_from_settings(&mut self, cx: &mut Context<Self>) {
+        let keyword = self.alias_keyword_input.read(cx).content().to_string();
+        let expands_to = self.alias_expands_to_input.read(cx).content().to_string();
+        if keyword.trim().is_empty() || expands_to.trim().is_empty() {
+            return;
+        }
+
+        let added = self.settings.upsert_alias(
+            crate::settings::CommandAliasSetting {
+                keyword,
+                expands_to,
+            },
+            None,
+        );
+        if added {
+            self.save_settings();
+            self.alias_keyword_input.update(cx, |input, cx| input.reset(cx));
+            self.alias_expands_to_input.update(cx, |input, cx| input.reset(cx));
+            cx.notify();
+        }
+    }
+
+    pub(super) fn add_snippet_from_settings(&mut self, cx: &mut Context<Self>) {
+        let keyword = self.snippet_keyword_input.read(cx).content().to_string();
+        let body = self.snippet_body_input.read(cx).content().to_string();
+        if keyword.trim().is_empty() || body.trim().is_empty() {
+            return;
+        }
+
+        let title = format!("Snippet signature {}", keyword);
+        if let Ok(_) = snippets::save_snippet(keyword, title, body) {
+            self.snippet_keyword_input.update(cx, |input, cx| input.reset(cx));
+            self.snippet_body_input.update(cx, |input, cx| input.reset(cx));
+            cx.notify();
+        }
+    }
 }

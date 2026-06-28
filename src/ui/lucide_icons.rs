@@ -43,6 +43,13 @@ pub enum LucideIcon {
     BookOpen,
     Search,
     X,
+    Play,
+    Pause,
+    SkipForward,
+    SkipBack,
+    Music,
+    Volume2,
+    Power,
 }
 
 impl LucideIcon {
@@ -79,6 +86,13 @@ impl LucideIcon {
             LucideIcon::BookOpen => "book-open",
             LucideIcon::Search => "search",
             LucideIcon::X => "x",
+            LucideIcon::Play => "play",
+            LucideIcon::Pause => "pause",
+            LucideIcon::SkipForward => "skip-forward",
+            LucideIcon::SkipBack => "skip-back",
+            LucideIcon::Music => "music",
+            LucideIcon::Volume2 => "volume-2",
+            LucideIcon::Power => "power",
         }
     }
 
@@ -121,6 +135,20 @@ pub fn render_lucide_icon(
     img(path)
         .w(px(size))
         .h(px(size))
+        .into_any_element()
+}
+
+pub fn render_hoverable_lucide_icon(
+    icon: LucideIcon,
+    size: f32,
+    color: Rgba,
+    filled: bool,
+) -> gpui::AnyElement {
+    let path = colored_icon_path(icon, color, filled);
+    img(path)
+        .w(px(size))
+        .h(px(size))
+        .hover(move |style| style.w(px(size * 1.25)).h(px(size * 1.25)))
         .into_any_element()
 }
 
@@ -268,6 +296,13 @@ lucide_embedded_icons!(
     "book-open",
     "search",
     "x",
+    "play",
+    "pause",
+    "skip-forward",
+    "skip-back",
+    "music",
+    "volume-2",
+    "power",
 );
 
 #[cfg(test)]

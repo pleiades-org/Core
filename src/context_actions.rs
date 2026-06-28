@@ -1,6 +1,6 @@
 use crate::{
     calculator::CalculationContext,
-    command::{CommandAction, CommandCategory, CommandResult, FeatureAction, SystemControlCommand},
+    command::{CalculationDisplay, CommandAction, CommandCategory, CommandResult, FeatureAction, SystemControlCommand},
     search_text::normalize_search_text,
     settings::LauncherSettings,
     timezone_resolver,
@@ -108,12 +108,17 @@ fn local_time_result(settings: &LauncherSettings) -> CommandResult {
     let copy_text = now.format("%Y-%m-%d %H:%M:%S").to_string();
 
     CommandResult {
-        title,
-        subtitle,
+        title: title.clone(),
+        subtitle: subtitle.clone(),
         copy_text: copy_text.clone(),
         explanation: Some(format!("Current local time in {timezone_name}.")),
         icon_path: None,
-        calculation_display: None,
+        calculation_display: Some(CalculationDisplay {
+            expression: format_long_date(now),
+            result: title,
+            kind_label: timezone_name,
+            result_label: "Time".to_string(),
+        }),
         category: CommandCategory::Context,
         action: CommandAction::CopyToClipboard(copy_text),
         confidence: 100,
@@ -128,12 +133,17 @@ fn local_date_result(settings: &LauncherSettings) -> CommandResult {
     let copy_text = now.format("%Y-%m-%d").to_string();
 
     CommandResult {
-        title,
-        subtitle,
+        title: title.clone(),
+        subtitle: subtitle.clone(),
         copy_text: copy_text.clone(),
         explanation: Some("Today's date in your local timezone.".to_string()),
         icon_path: None,
-        calculation_display: None,
+        calculation_display: Some(CalculationDisplay {
+            expression: subtitle,
+            result: title,
+            kind_label: "Calendar".to_string(),
+            result_label: "Date".to_string(),
+        }),
         category: CommandCategory::Context,
         action: CommandAction::CopyToClipboard(copy_text),
         confidence: 98,

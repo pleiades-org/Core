@@ -67,7 +67,6 @@ pub(super) enum SettingsSection {
     General,
     Indexing,
     Hotkeys,
-    Notes,
     Aliases,
     CustomCommands,
     Quicklinks,
@@ -81,7 +80,6 @@ impl SettingsSection {
             SettingsSection::General => "General",
             SettingsSection::Indexing => "Indexing",
             SettingsSection::Hotkeys => "Hotkeys",
-            SettingsSection::Notes => "Notes",
             SettingsSection::Aliases => "Aliases",
             SettingsSection::CustomCommands => "Commands",
             SettingsSection::Quicklinks => "Quicklinks",
@@ -96,7 +94,6 @@ impl SettingsSection {
             SettingsSection::General => LucideIcon::Settings,
             SettingsSection::Indexing => LucideIcon::Search,
             SettingsSection::Hotkeys => LucideIcon::Keyboard,
-            SettingsSection::Notes => LucideIcon::StickyNote,
             SettingsSection::Aliases => LucideIcon::TextQuote,
             SettingsSection::CustomCommands => LucideIcon::Terminal,
             SettingsSection::Quicklinks => LucideIcon::Link,
@@ -110,7 +107,6 @@ impl SettingsSection {
             SettingsSection::General,
             SettingsSection::Indexing,
             SettingsSection::Hotkeys,
-            SettingsSection::Notes,
             SettingsSection::Aliases,
             SettingsSection::CustomCommands,
             SettingsSection::Quicklinks,
@@ -182,6 +178,12 @@ actions!(
 
 pub struct LauncherView {
     text_input: Entity<TextInput>,
+    quicklink_keyword_input: Entity<TextInput>,
+    quicklink_target_input: Entity<TextInput>,
+    alias_keyword_input: Entity<TextInput>,
+    alias_expands_to_input: Entity<TextInput>,
+    snippet_keyword_input: Entity<TextInput>,
+    snippet_body_input: Entity<TextInput>,
     focus_handle: FocusHandle,
     services: DefaultLauncherServices,
     settings: LauncherSettings,
@@ -206,6 +208,10 @@ pub struct LauncherView {
     pending_search_query: Option<String>,
     last_built_query: String,
     search_bar_hovered: bool,
+    pub(super) spotify_title: Option<String>,
+    pub(super) spotify_artist: Option<String>,
+    pub(super) spotify_closed: bool,
+    pub(super) spotify_volume: f32,
 }
 
 mod destiny_detail;
@@ -234,6 +240,13 @@ impl LauncherView {
         })
         .detach();
 
+        let quicklink_keyword_input = cx.new(|cx| TextInput::new_compact("Keyword", cx));
+        let quicklink_target_input = cx.new(|cx| TextInput::new_compact("URL or Path", cx));
+        let alias_keyword_input = cx.new(|cx| TextInput::new_compact("Keyword", cx));
+        let alias_expands_to_input = cx.new(|cx| TextInput::new_compact("Expands to", cx));
+        let snippet_keyword_input = cx.new(|cx| TextInput::new_compact("Keyword", cx));
+        let snippet_body_input = cx.new(|cx| TextInput::new_compact("Snippet text", cx));
+
         let services = DefaultLauncherServices::new(CommandRouter::new(
             settings.clone(),
             application_index,
@@ -245,8 +258,14 @@ impl LauncherView {
             settings.preferred_terminal_profile.as_deref(),
         );
 
-        Self {
+        let launcher = Self {
             text_input,
+            quicklink_keyword_input,
+            quicklink_target_input,
+            alias_keyword_input,
+            alias_expands_to_input,
+            snippet_keyword_input,
+            snippet_body_input,
             focus_handle: cx.focus_handle(),
             services,
             settings,
@@ -271,7 +290,46 @@ impl LauncherView {
             pending_search_query: None,
             last_built_query: String::new(),
             search_bar_hovered: false,
-        }
+            spotify_title: None,
+            spotify_artist: None,
+            spotify_closed: false,
+            spotify_volume: crate::media_tools::get_system_volume().unwrap_or(0.5),
+        };
+
+        // Start background polling loop for Spotify/media status and system volume
+        cx.spawn(async move |this, cx| {
+            loop {
+                let media_info = cx.background_executor().spawn(async move {
+                    (
+                        crate::media_tools::read_now_playing(),
+                        crate::media_tools::get_system_volume().unwrap_or(0.5),
+                    )
+                }).await;
+
+                let result = this.update(cx, |launcher, cx| {
+                    let (now_playing, volume) = media_info;
+                    if let Some((title, artist)) = now_playing {
+                        launcher.spotify_title = Some(title);
+                        launcher.spotify_artist = Some(artist);
+                    } else {
+                        launcher.spotify_title = None;
+                        launcher.spotify_artist = None;
+                    }
+                    launcher.spotify_volume = volume;
+                    cx.notify();
+                });
+                if result.is_err() {
+                    break;
+                }
+
+                cx.background_executor()
+                    .timer(Duration::from_secs(2))
+                    .await;
+            }
+        })
+        .detach();
+
+        launcher
     }
 
     fn schedule_search_rebuild(&mut self, query: String, cx: &mut Context<Self>) {

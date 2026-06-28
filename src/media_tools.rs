@@ -69,21 +69,21 @@ fn now_playing_results() -> Vec<CommandResult> {
     }
 }
 
-fn read_now_playing() -> Option<(String, String)> {
+pub fn read_now_playing() -> Option<(String, String)> {
     let script = r#"
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
-$asTaskGeneric = ([System.Windows.Forms.Form].Assembly.GetType('System.Windows.Forms.UnsafeNativeMethods')).GetMethod('GetTypeFromHandle').Invoke($null, @([System.Runtime.InteropServices.HandleRef]::new([IntPtr]::Zero, [System.Runtime.InteropServices.GCHandle]::Alloc([Windows.Storage.Streams.DataReader]).AddrOfPinnedObject())))
+$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
 function Await($WinRtTask, $ResultType) {
     $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
     $netTask = $asTask.Invoke($null, @($WinRtTask))
     $netTask.Wait(-1) | Out-Null
-    $netTask.Result
+    return $netTask.Result
 }
 [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType=WindowsRuntime] | Out-Null
-$manager = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync().GetAwaiter().GetResult()
+$manager = Await ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
 $session = $manager.GetCurrentSession()
 if ($null -eq $session) { exit 1 }
-$info = Await ($session.TryGetMediaPropertiesAsync()) ([Windows.Media.MediaProperties.MusicDisplayProperties])
+$info = Await ($session.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties])
 $title = $info.Title
 $artist = $info.Artist
 Write-Output ("$title`t$artist")
@@ -184,4 +184,146 @@ mod tests {
         let results = search_media("");
         assert!(results.len() >= 4);
     }
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn is_spotify_process(pid: u32) -> bool {
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
+    };
+    use windows::Win32::Foundation::CloseHandle;
+    
+    let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+    if let Ok(handle) = handle {
+        let mut buffer = [0u16; 512];
+        let mut size = buffer.len() as u32;
+        if QueryFullProcessImageNameW(handle, PROCESS_NAME_FORMAT(0), windows::core::PWSTR(buffer.as_mut_ptr()), &mut size).is_ok() {
+            let path = String::from_utf16_lossy(&buffer[..size as usize]);
+            let path_lower = path.to_lowercase();
+            let is_spotify = path_lower.contains("spotify.exe");
+            let _ = CloseHandle(handle);
+            return is_spotify;
+        }
+        let _ = CloseHandle(handle);
+    }
+    false
+}
+
+#[cfg(target_os = "windows")]
+fn find_spotify_audio_volume() -> Option<windows::Win32::Media::Audio::ISimpleAudioVolume> {
+    unsafe {
+        use windows::Win32::Media::Audio::{
+            IMMDeviceEnumerator, MMDeviceEnumerator, eRender, eConsole,
+            IAudioSessionManager2, IAudioSessionControl2, ISimpleAudioVolume,
+        };
+        use windows::Win32::System::Com::{
+            CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
+        };
+        use windows::core::Interface;
+
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+        let enumerator: IMMDeviceEnumerator = CoCreateInstance(
+            &MMDeviceEnumerator,
+            None,
+            CLSCTX_ALL,
+        ).ok()?;
+
+        let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole).ok()?;
+        let session_manager: IAudioSessionManager2 = device.Activate(CLSCTX_ALL, None).ok()?;
+        let enumerator = session_manager.GetSessionEnumerator().ok()?;
+        let count = enumerator.GetCount().ok()?;
+        
+        for i in 0..count {
+            let session_control = enumerator.GetSession(i).ok()?;
+            if let Ok(session_control2) = session_control.cast::<IAudioSessionControl2>() {
+                let pid = session_control2.GetProcessId().unwrap_or(0);
+                if pid != 0 && is_spotify_process(pid) {
+                    if let Ok(simple_volume) = session_control2.cast::<ISimpleAudioVolume>() {
+                        return Some(simple_volume);
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn get_system_volume() -> Option<f32> {
+    if let Some(spotify_vol) = find_spotify_audio_volume() {
+        unsafe {
+            if let Ok(level) = spotify_vol.GetMasterVolume() {
+                return Some(level);
+            }
+        }
+    }
+
+    unsafe {
+        use windows::Win32::Media::Audio::{
+            IMMDeviceEnumerator, MMDeviceEnumerator, eRender, eConsole,
+        };
+        use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
+        use windows::Win32::System::Com::{
+            CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
+        };
+
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+        let enumerator: IMMDeviceEnumerator = CoCreateInstance(
+            &MMDeviceEnumerator,
+            None,
+            CLSCTX_ALL,
+        ).ok()?;
+
+        let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole).ok()?;
+        let volume: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None).ok()?;
+        let level = volume.GetMasterVolumeLevelScalar().ok()?;
+        Some(level)
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn set_system_volume(level: f32) -> Option<()> {
+    if let Some(spotify_vol) = find_spotify_audio_volume() {
+        unsafe {
+            if spotify_vol.SetMasterVolume(level, std::ptr::null()).is_ok() {
+                return Some(());
+            }
+        }
+    }
+
+    unsafe {
+        use windows::Win32::Media::Audio::{
+            IMMDeviceEnumerator, MMDeviceEnumerator, eRender, eConsole,
+        };
+        use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
+        use windows::Win32::System::Com::{
+            CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
+        };
+
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+        let enumerator: IMMDeviceEnumerator = CoCreateInstance(
+            &MMDeviceEnumerator,
+            None,
+            CLSCTX_ALL,
+        ).ok()?;
+
+        let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole).ok()?;
+        let volume: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None).ok()?;
+        
+        volume.SetMasterVolumeLevelScalar(level, std::ptr::null_mut()).ok()?;
+        Some(())
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn get_system_volume() -> Option<f32> {
+    None
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_system_volume(_level: f32) -> Option<()> {
+    None
 }

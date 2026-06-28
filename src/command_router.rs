@@ -913,7 +913,9 @@ fn result_sort_tier(result: &CommandResult) -> u8 {
     match result.category {
         CommandCategory::Calculation => 0,
         CommandCategory::Web if result.confidence >= 90 => 1,
-        CommandCategory::Application | CommandCategory::Web => 2,
+        CommandCategory::Application => 1,
+        CommandCategory::File => 3,
+        CommandCategory::Web => 2,
         _ => 1,
     }
 }
@@ -1225,5 +1227,38 @@ mod tests {
                 .any(|result| result.title.starts_with("Search the web for")),
             "typed URLs should open directly instead of defaulting to Google search"
         );
+    }
+
+    #[test]
+    fn applications_have_priority_over_files() {
+        let app_result = CommandResult {
+            title: "Steam".to_string(),
+            subtitle: "".to_string(),
+            copy_text: "".to_string(),
+            explanation: None,
+            icon_path: None,
+            calculation_display: None,
+            category: CommandCategory::Application,
+            action: CommandAction::None,
+            confidence: 100,
+        };
+
+        let file_result = CommandResult {
+            title: "steam_shortcut.lnk".to_string(),
+            subtitle: "".to_string(),
+            copy_text: "".to_string(),
+            explanation: None,
+            icon_path: None,
+            calculation_display: None,
+            category: CommandCategory::File,
+            action: CommandAction::None,
+            confidence: 100,
+        };
+
+        let mut results = vec![file_result.clone(), app_result.clone()];
+        results.sort_by(result_sort_order);
+
+        assert_eq!(results[0].category, CommandCategory::Application);
+        assert_eq!(results[1].category, CommandCategory::File);
     }
 }

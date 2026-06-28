@@ -279,7 +279,7 @@ pub fn browse_action_bar(primary: AnyElement, hints: Vec<AnyElement>) -> impl In
         .px(px(14.))
         .py(px(8.))
         .min_h(px(36.))
-        .bg(surface_overlay_low())
+        .bg(rgb(0x050505))
         .border_t_1()
         .border_color(border_subtle())
         .child(
