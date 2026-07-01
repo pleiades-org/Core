@@ -2,9 +2,10 @@
 
 **Core** is a fast, keyboard-first Windows command launcher inspired by [Raycast](https://www.raycast.com/), built with Rust and [GPUI](https://www.gpui.rs/) from Zed Industries.
 
-![built with Rust](https://img.shields.io/badge/built_with-Rust-orange) ![built with GPUI](https://img.shields.io/badge/built_with-GPUI-blue)
+<img width="733" height="530" alt="image" src="https://github.com/user-attachments/assets/ddeb1860-08c7-4eaa-babc-098aaf943c59" />
 
 ---
+
 
 ## Features
 
