@@ -8,6 +8,7 @@ pub enum TrayIconEvent {
 #[cfg(target_os = "windows")]
 mod platform {
     use super::TrayIconEvent;
+    use image;
     use std::{
         sync::{mpsc::Sender, Mutex, OnceLock},
         thread,
@@ -37,6 +38,7 @@ mod platform {
     const TRAY_TOOLTIP: &str = "Core Launcher - Alt+Space";
     const TRAY_ICON_SIZE: i32 = 32;
     const APP_ICON_BGRA_PIXEL: [u8; 4] = [0xed, 0x3a, 0x7c, 0xff];
+    const CORE_ICON_PNG: &[u8] = include_bytes!("../assets/Core.png");
     const TRAY_MENU_OPEN: usize = 1;
     const TRAY_MENU_SETTINGS: usize = 2;
     const TRAY_MENU_QUIT: usize = 3;
@@ -100,7 +102,8 @@ mod platform {
     }
 
     fn add_tray_icon(tray_window: HWND) -> bool {
-        let tray_icon = create_purple_square_icon()
+        let tray_icon = create_core_icon_from_png()
+            .or_else(create_purple_square_icon)
             .or_else(|| unsafe { LoadIconW(None, IDI_APPLICATION) }.ok())
             .unwrap_or_default();
         let mut notify_icon_data = NOTIFYICONDATAW {
@@ -117,6 +120,37 @@ mod platform {
         unsafe { Shell_NotifyIconW(NIM_ADD, &notify_icon_data) }.as_bool()
     }
 
+    fn create_core_icon_from_png() -> Option<HICON> {
+        let icon_image = image::load_from_memory(CORE_ICON_PNG).ok()?;
+        let resized = icon_image.resize_exact(
+            TRAY_ICON_SIZE as u32,
+            TRAY_ICON_SIZE as u32,
+            image::imageops::FilterType::Triangle,
+        );
+        let rgba = resized.into_rgba8();
+        let pixel_count = (TRAY_ICON_SIZE * TRAY_ICON_SIZE) as usize;
+        let and_mask = vec![0u8; pixel_count];
+        let mut bgra_pixels = Vec::with_capacity(pixel_count * 4);
+        for pixel in rgba.as_raw().chunks_exact(4) {
+            bgra_pixels.push(pixel[2]);
+            bgra_pixels.push(pixel[1]);
+            bgra_pixels.push(pixel[0]);
+            bgra_pixels.push(pixel[3]);
+        }
+
+        unsafe {
+            CreateIcon(
+                None,
+                TRAY_ICON_SIZE,
+                TRAY_ICON_SIZE,
+                1,
+                32,
+                and_mask.as_ptr(),
+                bgra_pixels.as_ptr(),
+            )
+            .ok()
+        }
+    }
     fn create_purple_square_icon() -> Option<HICON> {
         let pixel_count = (TRAY_ICON_SIZE * TRAY_ICON_SIZE) as usize;
         let and_mask = vec![0; pixel_count];

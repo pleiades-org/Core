@@ -1409,11 +1409,18 @@ impl AssetSource for FileAssets {
 }
 
 fn purple_app_icon_image() -> Arc<image::RgbaImage> {
-    Arc::new(image::RgbaImage::from_pixel(
+    const CORE_ICON_PNG: &[u8] = include_bytes!("../../../assets/Core.png");
+    let fallback = Arc::new(image::RgbaImage::from_pixel(
         64,
         64,
         image::Rgba([0x7c, 0x3a, 0xed, 0xff]),
-    ))
+    ));
+    Arc::new(
+        image::load_from_memory(CORE_ICON_PNG)
+            .ok()
+            .and_then(|img| Some(img.into_rgba8()))
+            .unwrap_or_else(|| (*fallback).clone()),
+    )
 }
 
 fn window_background_appearance(settings: &LauncherSettings) -> WindowBackgroundAppearance {
