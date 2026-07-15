@@ -212,13 +212,14 @@ pub struct LauncherView {
     pub(super) spotify_artist: Option<String>,
     pub(super) spotify_closed: bool,
     pub(super) spotify_volume: f32,
+    pub window_handle: Option<WindowHandle<LauncherView>>,
 }
 
 mod destiny_detail;
 mod result_list;
 mod settings_panel;
 
-use result_list::{compact_display_text, result_row_background, result_row_border_color, result_row_hover_border_color};
+use result_list::{compact_display_text, result_row_background};
 
 impl LauncherView {
     fn new(
@@ -231,6 +232,32 @@ impl LauncherView {
     ) -> Self {
         cx.observe(&text_input, |launcher, text_input, cx| {
             let query = text_input.read(cx).content().to_string();
+
+            // Auto-expand bangs on space press (e.g. "!yt " -> "YouTube | ")
+            let bangs_to_expand = [
+                ("!g", "Google | "),
+                ("!yt", "YouTube | "),
+                ("!w", "Wikipedia | "),
+                ("!wiki", "Wikipedia | "),
+                ("!gh", "GitHub | "),
+                ("!d", "DuckDuckGo | "),
+            ];
+
+            let mut expanded = None;
+            for (bang, replacement) in bangs_to_expand {
+                if query == format!("{} ", bang) {
+                    expanded = Some(replacement.to_string());
+                    break;
+                }
+            }
+
+            if let Some(replaced) = expanded {
+                text_input.update(cx, |input, cx| {
+                    input.set_content(replaced, cx);
+                });
+                return;
+            }
+
             if launcher.is_settings_open {
                 launcher.settings_search_query = query;
                 cx.notify();
@@ -294,6 +321,7 @@ impl LauncherView {
             spotify_artist: None,
             spotify_closed: false,
             spotify_volume: crate::media_tools::get_system_volume().unwrap_or(0.5),
+            window_handle: None,
         };
 
         // Start background polling loop for Spotify/media status and system volume
@@ -411,23 +439,140 @@ impl LauncherView {
         }
     }
 
+    pub fn apply_launcher_window_geometry(&self, window: &mut Window) {
+        let scale = window.scale_factor();
+        let (x, y, w, h) = self.geometry_for_display(1.0, scale);
+        self.set_window_geometry_with_resize(window, x, y, w, h);
+        set_dwm_corners(window, self.settings.display_position);
+    }
+
+    fn set_window_position(&self, window: &mut Window, left: i32, top: i32) {
+        set_launcher_window_position(window, left, top);
+    }
+
+    /// Full geometry set including GPUI resize — use only for initial placement, not per-frame animation.
+    fn set_window_geometry_with_resize(&self, window: &mut Window, left: i32, top: i32, width: i32, height: i32) {
+        let scale = window.scale_factor();
+        let logical_w = width as f32 / scale;
+        let logical_h = height as f32 / scale;
+        window.resize(size(px(logical_w), px(logical_h)));
+        set_launcher_window_position(window, left, top);
+    }
+
+    fn geometry_for_display(&self, t: f32, scale_factor: f32) -> (i32, i32, i32, i32) {
+        use crate::settings::DisplayPosition;
+        let (work_left, work_top, work_width, work_height) = get_primary_work_area();
+        let max_width = (720.0 * scale_factor).round() as i32;
+        let max_height = (520.0 * scale_factor).round() as i32;
+
+        match self.settings.display_position {
+            DisplayPosition::Center => {
+                let left = work_left + (work_width - max_width) / 2;
+                let top = work_top + (work_height - max_height) / 2;
+                (left, top, max_width, max_height)
+            }
+            DisplayPosition::Top => {
+                let left = work_left + (work_width - max_width) / 2;
+                let top = work_top - (max_height as f32 * (1.0 - t)) as i32;
+                (left, top, max_width, max_height)
+            }
+            DisplayPosition::Bottom => {
+                let left = work_left + (work_width - max_width) / 2;
+                let top = work_top + work_height - (max_height as f32 * t) as i32;
+                (left, top, max_width, max_height)
+            }
+            DisplayPosition::Left => {
+                let left = work_left - (max_width as f32 * (1.0 - t)) as i32;
+                let top = work_top + (work_height - max_height) / 2;
+                (left, top, max_width, max_height)
+            }
+            DisplayPosition::Right => {
+                let left = work_left + work_width - (max_width as f32 * t) as i32;
+                let top = work_top + (work_height - max_height) / 2;
+                (left, top, max_width, max_height)
+            }
+        }
+    }
+
     pub fn show_launcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.last_external_foreground_window = window_management::active_window_handle();
-        show_platform_window(window);
         self.is_launcher_visible = true;
         self.last_visibility_change_at = Instant::now();
         window.focus(&self.text_input.focus_handle(cx), cx);
         window.activate_window();
         cx.activate(true);
-        cx.notify();
+
+        use crate::settings::DisplayPosition;
+        if self.settings.display_position == DisplayPosition::Center {
+            self.apply_launcher_window_geometry(window);
+            show_platform_window(window);
+            cx.notify();
+        } else {
+            let scale = window.scale_factor();
+            let (start_x, start_y, start_w, start_h) = self.geometry_for_display(0.0, scale);
+            self.set_window_geometry_with_resize(window, start_x, start_y, start_w, start_h);
+            show_platform_window(window);
+
+            let window_handle = self.window_handle.clone().unwrap();
+            window.spawn(cx, async move |cx: &mut gpui::AsyncWindowContext| {
+                let duration = std::time::Duration::from_millis(150);
+                let frames = 15;
+                let frame_dur = duration / frames;
+                for i in 1..=frames {
+                    cx.background_executor().timer(frame_dur).await;
+                    let t = i as f32 / frames as f32;
+                    // Ease out cubic
+                    let ease_t = 1.0 - (1.0 - t).powi(3);
+                    let _ = window_handle.update(cx, |launcher, window, _| {
+                        let scale = window.scale_factor();
+                        let (x, y, _, _) = launcher.geometry_for_display(ease_t, scale);
+                        launcher.set_window_position(window, x, y);
+                    });
+                }
+                let _ = window_handle.update(cx, |launcher, window, _| {
+                    // Force GPUI viewport to re-sync after ShowWindow(SW_SHOW)
+                    // may have sent WM_SIZE that clobbered the initial resize.
+                    launcher.apply_launcher_window_geometry(window);
+                });
+            }).detach();
+            cx.notify();
+        }
     }
 
     fn hide_launcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.is_launcher_visible = false;
         self.last_visibility_change_at = Instant::now();
         self.is_settings_open = false;
-        hide_platform_window(window);
-        cx.notify();
+
+        use crate::settings::DisplayPosition;
+        if self.settings.display_position == DisplayPosition::Center {
+            self.is_launcher_visible = false;
+            hide_platform_window(window);
+            cx.notify();
+        } else {
+            let window_handle = self.window_handle.clone().unwrap();
+            window.spawn(cx, async move |cx: &mut gpui::AsyncWindowContext| {
+                let duration = std::time::Duration::from_millis(150);
+                let frames = 15;
+                let frame_dur = duration / frames;
+                for i in 1..=frames {
+                    cx.background_executor().timer(frame_dur).await;
+                    let t = i as f32 / frames as f32;
+                    // Ease in cubic
+                    let ease_t = 1.0 - t.powi(3); // goes from 1.0 down to 0.0
+                    let _ = window_handle.update(cx, |launcher, window, _| {
+                        let scale = window.scale_factor();
+                        let (x, y, _, _) = launcher.geometry_for_display(ease_t, scale);
+                        launcher.set_window_position(window, x, y);
+                    });
+                }
+                let _ = window_handle.update(cx, |launcher, window, cx| {
+                    launcher.is_launcher_visible = false;
+                    hide_platform_window(window);
+                    cx.notify();
+                });
+            }).detach();
+            cx.notify();
+        }
     }
 
     fn should_hide_for_focus_loss(&self, window: &Window) -> bool {
@@ -863,6 +1008,19 @@ impl Focusable for LauncherView {
 
 impl Render for LauncherView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+
+        // Outer corner radii
+        let tl_out = px(12.);
+        let tr_out = px(12.);
+        let bl_out = px(12.);
+        let br_out = px(12.);
+
+        // Inner corner radii (slightly smaller for concentric layout)
+        let tl_in = px(11.);
+        let tr_in = px(11.);
+        let bl_in = px(11.);
+        let br_in = px(11.);
+
         div()
             .key_context("Launcher")
             .track_focus(&self.focus_handle(cx))
@@ -878,64 +1036,86 @@ impl Render for LauncherView {
             .on_action(cx.listener(Self::clear_d2_weapon_compare))
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::quit_application))
-            .flex()
-            .flex_col()
             .size_full()
-            .bg(launcher_background_color(&self.settings))
-            .border_1()
-            .border_color(rgba(0xa78bfa15))
-            .text_color(rgb(0xffffff))
-            .child(if self.is_settings_open {
+            .bg(rgba(0xa78bfa15)) // border color
+            .p(px(1.))            // 1px padding acts as border thickness
+            .overflow_hidden()
+            .rounded_tl(tl_out)
+            .rounded_tr(tr_out)
+            .rounded_bl(bl_out)
+            .rounded_br(br_out)
+            .child(
                 div()
                     .flex()
                     .flex_col()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .child(self.render_search_container(false, cx))
-                    .child(self.render_settings_menu(cx))
-                    .into_any_element()
-            } else if self.is_file_search_view && matches!(&self.panel, LauncherPanel::Home) {
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(self.render_file_results(cx))
-                    .child(self.render_search_container(true, cx))
-                    .into_any_element()
-            } else {
-                let panel = match &self.panel {
-                    LauncherPanel::Home => self.render_home_panel(cx).into_any_element(),
-                    LauncherPanel::D2WeaponDetail { weapon_hash } => div()
-                        .key_context("D2WeaponDetail")
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_h(px(0.))
-                        .child(self.render_d2_weapon_detail(*weapon_hash, cx))
-                        .into_any_element(),
-                    LauncherPanel::TerminalShellPicker { command_text } => self
-                        .render_terminal_shell_picker(command_text, cx)
-                        .into_any_element(),
-                    LauncherPanel::TerminalSession(session) => {
-                        self.render_terminal_session(session).into_any_element()
-                    }
-                };
-
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .child(self.render_search_container(false, cx))
-                    .child(
+                    .size_full()
+                    .bg(launcher_background_color(&self.settings))
+                    .text_color(rgb(0xffffff))
+                    .overflow_hidden()
+                    .rounded_tl(tl_in)
+                    .rounded_tr(tr_in)
+                    .rounded_bl(bl_in)
+                    .rounded_br(br_in)
+                    .child(if !self.is_launcher_visible {
                         div()
                             .flex()
                             .flex_col()
                             .flex_1()
                             .min_h(px(0.))
-                            .child(panel),
-                    )
-                    .into_any_element()
-            })
+                            .child(self.render_search_container(false, cx))
+                            .into_any_element()
+                    } else if self.is_settings_open {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h(px(0.))
+                            .child(self.render_search_container(false, cx))
+                            .child(self.render_settings_menu(cx))
+                            .into_any_element()
+                    } else if self.is_file_search_view && matches!(&self.panel, LauncherPanel::Home) {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(self.render_file_results(cx))
+                            .child(self.render_search_container(true, cx))
+                            .into_any_element()
+                    } else {
+                        let panel = match &self.panel {
+                            LauncherPanel::Home => self.render_home_panel(cx).into_any_element(),
+                            LauncherPanel::D2WeaponDetail { weapon_hash } => div()
+                                .key_context("D2WeaponDetail")
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_h(px(0.))
+                                .child(self.render_d2_weapon_detail(*weapon_hash, cx))
+                                .into_any_element(),
+                            LauncherPanel::TerminalShellPicker { command_text } => self
+                                .render_terminal_shell_picker(command_text, cx)
+                                .into_any_element(),
+                            LauncherPanel::TerminalSession(session) => {
+                                self.render_terminal_session(session).into_any_element()
+                            }
+                        };
+
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h(px(0.))
+                            .child(self.render_search_container(false, cx))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .min_h(px(0.))
+                                    .child(panel),
+                            )
+                            .into_any_element()
+                    })
+            )
     }
 }
 
@@ -1112,16 +1292,12 @@ impl LauncherView {
             .py(px(9.))
             .rounded_sm()
             .bg(result_row_background(is_selected))
-            .border_1()
-            .border_color(result_row_border_color(result, is_selected))
             .hover(|style| {
                 let style = style.cursor_pointer();
                 if is_selected {
                     style
                 } else {
-                    style
-                        .bg(rgb(0x010101))
-                        .border_color(result_row_hover_border_color(result))
+                    style.bg(rgb(0x010101))
                 }
             })
             .on_mouse_up(
@@ -1427,7 +1603,7 @@ fn window_background_appearance(settings: &LauncherSettings) -> WindowBackground
     if settings.backdrop_blur_enabled {
         WindowBackgroundAppearance::Blurred
     } else {
-        WindowBackgroundAppearance::Opaque
+        WindowBackgroundAppearance::Transparent
     }
 }
 
@@ -1519,6 +1695,7 @@ pub fn run() {
 
             window_handle
                 .update(cx, move |launcher, window, cx| {
+                    launcher.window_handle = Some(window_handle.clone());
                     launcher.show_launcher(window, cx);
                     start_global_hotkey_poll(window_handle, window, cx);
                     start_tray_icon_event_poll(window_handle, window, cx, tray_event_receiver);
@@ -2051,4 +2228,104 @@ fn start_global_hotkey_poll(
     _cx: &mut Context<LauncherView>,
 ) {
 }
+
+
+
+#[cfg(target_os = "windows")]
+fn get_primary_work_area() -> (i32, i32, i32, i32) {
+    use windows::Win32::{
+        Foundation::POINT,
+        Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTOPRIMARY},
+    };
+
+    let monitor = unsafe {
+        MonitorFromPoint(
+            POINT { x: 0, y: 0 },
+            MONITOR_DEFAULTTOPRIMARY,
+        )
+    };
+    if monitor.0.is_null() {
+        return fallback();
+    }
+
+    let mut monitor_info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    let succeeded = unsafe { GetMonitorInfoW(monitor, &mut monitor_info).as_bool() };
+    if !succeeded {
+        return fallback();
+    }
+
+    let rect = monitor_info.rcWork;
+    (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
+}
+
+#[cfg(target_os = "windows")]
+fn fallback() -> (i32, i32, i32, i32) {
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+    let width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+    let height = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+    (0, 0, width.max(1280), height.max(800))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn get_primary_work_area() -> (i32, i32, i32, i32) {
+    (0, 0, 1280, 800)
+}
+
+#[cfg(target_os = "windows")]
+fn set_launcher_window_position(window: &Window, left: i32, top: i32) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::{
+        Foundation::HWND,
+        UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOREDRAW, SWP_NOSIZE, SWP_NOZORDER},
+    };
+
+    if let Ok(window_handle) = HasWindowHandle::window_handle(window) {
+        if let RawWindowHandle::Win32(win32_window_handle) = window_handle.as_raw() {
+            unsafe {
+                let hwnd = HWND(win32_window_handle.hwnd.get() as *mut std::ffi::c_void);
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    left,
+                    top,
+                    0,
+                    0,
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOREDRAW,
+                );
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn set_launcher_window_position(_window: &Window, _left: i32, _top: i32) {}
+
+#[cfg(target_os = "windows")]
+fn set_dwm_corners(window: &Window, _display_position: crate::settings::DisplayPosition) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::{
+        Foundation::HWND,
+        Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND},
+    };
+
+    if let Ok(window_handle) = HasWindowHandle::window_handle(window) {
+        if let RawWindowHandle::Win32(win32_window_handle) = window_handle.as_raw() {
+            unsafe {
+                let preference = DWMWCP_ROUND.0 as i32;
+                let _ = DwmSetWindowAttribute(
+                    HWND(win32_window_handle.hwnd.get() as *mut std::ffi::c_void),
+                    DWMWA_WINDOW_CORNER_PREFERENCE,
+                    &preference as *const i32 as *const std::ffi::c_void,
+                    std::mem::size_of::<i32>() as u32,
+                );
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn set_dwm_corners(_window: &Window, _display_position: crate::settings::DisplayPosition) {}
 

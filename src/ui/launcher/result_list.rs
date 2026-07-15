@@ -17,7 +17,7 @@ use super::{
         destiny_weapon_portrait_for_result, render_destiny_weapon_portrait,
         D2_SEARCH_WEAPON_ICON_SIZE,
     },
-    fallback_icon, LauncherPanel, LauncherView, MoveSelectionDown,
+    LauncherPanel, LauncherView, MoveSelectionDown,
     MoveSelectionFirst, MoveSelectionLast, MoveSelectionPageDown, MoveSelectionPageUp,
     MoveSelectionUp,
 };
@@ -134,6 +134,7 @@ impl LauncherView {
             .unwrap_or_default();
 
         let mut panel = div()
+            .relative()
             .flex()
             .flex_col()
             .flex_1()
@@ -157,7 +158,44 @@ impl LauncherView {
             panel = panel.child(spotify_bar);
         }
 
-        panel.child(self.render_launcher_action_bar(cx))
+        panel = panel.child(self.render_launcher_action_bar(cx));
+
+        if self.spotify_closed {
+            panel = panel.child(
+                div()
+                    .absolute()
+                    .bottom(px(42.))
+                    .right(px(14.))
+                    .child(
+                        div()
+                            .id("expand-spotify")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(20.))
+                            .rounded_md()
+                            .bg(rgba(0xffffff0d))
+                            .border_1()
+                            .border_color(rgba(0xffffff15))
+                            .hover(|style| style.bg(rgba(0xffffff20)).cursor_pointer())
+                            .child(crate::ui::lucide_icons::render_lucide_icon(
+                                crate::ui::lucide_icons::LucideIcon::ChevronUp,
+                                12.,
+                                rgb(0x1db954),
+                                false,
+                            ))
+                            .on_mouse_up(
+                                gpui::MouseButton::Left,
+                                cx.listener(move |launcher, _: &gpui::MouseUpEvent, _window, cx| {
+                                    launcher.spotify_closed = false;
+                                    cx.notify();
+                                }),
+                            ),
+                    )
+            );
+        }
+
+        panel
     }
 
     pub(super) fn render_spotify_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
@@ -375,9 +413,9 @@ impl LauncherView {
                                 .rounded_md()
                                 .hover(|style| style.bg(rgba(0xffffff10)).cursor_pointer())
                                 .child(crate::ui::lucide_icons::render_hoverable_lucide_icon(
-                                    crate::ui::lucide_icons::LucideIcon::X,
+                                    crate::ui::lucide_icons::LucideIcon::ChevronDown,
                                     12.,
-                                    rgb(0xef4444),
+                                    rgb(0x9ca3af),
                                     false,
                                 ))
                                 .on_mouse_up(
@@ -428,7 +466,8 @@ impl LauncherView {
             .flex_col()
             .overflow_hidden()
             .gap(px(4.))
-            .px(px(10.))
+            .pl(px(5.))
+            .pr(px(8.))
             .py(px(10.))
             .flex_1()
             .min_h(px(0.))
@@ -470,81 +509,124 @@ impl LauncherView {
         is_selected: bool,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let title = compact_display_text(&result.title, 72);
+        let has_at_prefix = result.title.starts_with('@');
+        let raw_title = if has_at_prefix {
+            result.title.strip_prefix('@').unwrap_or(&result.title).to_string()
+        } else {
+            result.title.clone()
+        };
+        let title = compact_display_text(&raw_title, 72);
         let subtitle = compact_display_text(&result.subtitle, 86);
         let explanation = compact_display_text(&result.explanation.clone().unwrap_or_default(), 96);
         let is_application = matches!(result.category, CommandCategory::Application);
         let shows_subtitle = should_show_subtitle(result);
         let shows_explanation = shows_subtitle && !explanation.is_empty();
-        let category_label = category_label(&result.category);
+        
+        let category_label = if has_at_prefix {
+            "Function"
+        } else {
+            match &result.category {
+                CommandCategory::Application => "App",
+                CommandCategory::BuiltIn
+                | CommandCategory::System
+                | CommandCategory::WindowManagement
+                | CommandCategory::DevTools
+                | CommandCategory::Git => "Command",
+                CommandCategory::Note => "Function",
+                CommandCategory::Web | CommandCategory::Quicklink => "Link",
+                CommandCategory::Calculation => "Calc",
+                _ => category_label(&result.category),
+            }
+        };
+
+        let (badge_text, badge_bg, badge_border) = category_badge_theme(&result.category, has_at_prefix);
 
         div()
-            .id(("result-row", result_index))
+            .w_full()
             .flex()
             .items_center()
-            .gap(px(12.))
-            .px(px(10.))
-            .py(px(8.))
-            .rounded_sm()
-            .bg(result_row_background(is_selected))
-            .border_1()
-            .border_color(result_row_border_color(result, is_selected))
-            .hover(|style| {
-                let style = style.cursor_pointer();
-                if is_selected {
-                    style
-                } else {
-                    style
-                        .bg(rgb(0x010101))
-                        .border_color(result_row_hover_border_color(result))
-                }
-            })
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(move |launcher, _: &MouseUpEvent, window, cx| {
-                    launcher.accept_mouse_result(result_index, window, cx);
-                }),
+            .gap(px(4.))
+            .child(
+                // Selection indicator line
+                div()
+                    .w(px(3.))
+                    .h(px(18.))
+                    .rounded_full()
+                    .bg(if is_selected { rgb(0xa78bfa) } else { rgba(0x00000000) })
             )
-            .child(render_result_icon(result))
             .child(
                 div()
+                    .id(("result-row", result_index))
                     .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .w_full()
+                    .items_center()
+                    .gap(px(12.))
+                    .pl(px(4.))
+                    .pr(px(8.))
+                    .py(px(8.))
+                    .flex_1()
+                    .rounded_md()
+                    .bg(if is_selected { rgba(0xffffff0d) } else { rgba(0x00000000) })
+                    .border_1()
+                    .border_color(if is_selected { rgba(0xffffff14) } else { rgba(0x00000000) })
+                    .hover(|style| {
+                        let style = style.cursor_pointer();
+                        if is_selected {
+                            style
+                        } else {
+                            style.bg(rgba(0xffffff06))
+                        }
+                    })
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(move |launcher, _: &MouseUpEvent, window, cx| {
+                            launcher.accept_mouse_result(result_index, window, cx);
+                        }),
+                    )
+                    .child(render_result_icon(result))
                     .child(
                         div()
-                            .text_size(if is_application { px(16.) } else { px(15.) })
-                            .text_color(rgb(0xffffff))
-                            .child(title),
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.))
+                            .w_full()
+                            .child(
+                                div()
+                                    .text_size(if is_application { px(15.) } else { px(14.) })
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(rgb(0xffffff))
+                                    .child(title),
+                            )
+                            .when(shows_subtitle, |result_text| {
+                                result_text.child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(rgb(0xa1a1aa))
+                                        .child(subtitle),
+                                )
+                            })
+                            .when(shows_explanation, |result_text| {
+                                result_text.child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(rgb(0x71717a))
+                                        .child(explanation),
+                                )
+                            }),
                     )
-                    .when(shows_subtitle, |result_text| {
-                        result_text.child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(rgb(0xd9d9d9))
-                                .child(subtitle),
-                        )
-                    })
-                    .when(shows_explanation, |result_text| {
-                        result_text.child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(rgb(0xd9d9d9))
-                                .child(explanation),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .px(px(7.))
-                    .py(px(3.))
-                    .rounded_sm()
-                    .bg(rgb(0x050505))
-                    .text_color(category_color(&result.category))
-                    .text_size(px(10.))
-                    .child(category_label),
+                    .child(
+                        div()
+                            .flex_none()
+                            .px(px(8.))
+                            .py(px(2.))
+                            .rounded_full()
+                            .bg(badge_bg)
+                            .border_1()
+                            .border_color(badge_border)
+                            .text_color(badge_text)
+                            .text_size(px(10.))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(category_label),
+                    )
             )
             .into_any_element()
     }
@@ -585,59 +667,74 @@ impl LauncherView {
         };
 
         div()
-            .id(("result-row", result_index))
+            .w_full()
             .flex()
-            .flex_col()
-            .gap(px(8.))
-            .px(px(8.))
-            .py(px(7.))
-            .rounded_sm()
-            .bg(if is_selected {
-                rgb(0x050505)
-            } else {
-                rgba(0x00000000)
-            })
-            .hover(|style| {
-                let style = style.cursor_pointer();
-                if is_selected {
-                    style
-                } else {
-                    style
-                        .bg(rgb(0x010101))
-                        .border_color(result_row_hover_border_color(result))
-                }
-            })
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(move |launcher, _: &MouseUpEvent, window, cx| {
-                    launcher.accept_mouse_result(result_index, window, cx);
-                }),
+            .items_center()
+            .gap(px(4.))
+            .child(
+                // Selection indicator line
+                div()
+                    .w(px(3.))
+                    .h(px(18.))
+                    .rounded_full()
+                    .bg(if is_selected { rgb(0xa78bfa) } else { rgba(0x00000000) })
             )
             .child(
                 div()
-                    .text_size(px(13.))
-                    .text_color(rgb(0xd9d9d9))
-                    .child(display_title),
-            )
-            .child(
-                div()
+                    .id(("result-row", result_index))
                     .flex()
-                    .items_center()
-                    .justify_between()
-                    .h(px(118.))
-                    .rounded_sm()
-                    .bg(rgb(0x050505))
-                    .px(px(18.))
-                    .child(calculation_side(expression, kind_label, false))
-                    .child(
-                        div().flex().items_center().gap(px(14.)).child(
-                            div()
-                                .text_size(px(28.))
-                                .text_color(rgb(0xffffff))
-                                .child("->"),
-                        ),
+                    .flex_col()
+                    .gap(px(8.))
+                    .pl(px(4.))
+                    .pr(px(8.))
+                    .py(px(7.))
+                    .flex_1()
+                    .rounded_md()
+                    .bg(if is_selected { rgba(0xffffff0d) } else { rgba(0x00000000) })
+                    .border_1()
+                    .border_color(if is_selected { rgba(0xffffff14) } else { rgba(0x00000000) })
+                    .hover(|style| {
+                        let style = style.cursor_pointer();
+                        if is_selected {
+                            style
+                        } else {
+                            style.bg(rgba(0xffffff06))
+                        }
+                    })
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(move |launcher, _: &MouseUpEvent, window, cx| {
+                            launcher.accept_mouse_result(result_index, window, cx);
+                        }),
                     )
-                    .child(calculation_side(answer, result_label, true)),
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(rgb(0xd9d9d9))
+                            .child(display_title),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .h(px(118.))
+                            .rounded_sm()
+                            .bg(rgba(0xffffff06))
+                            .border_1()
+                            .border_color(rgba(0xffffff0a))
+                            .px(px(18.))
+                            .child(calculation_side(expression, kind_label, false))
+                            .child(
+                                div().flex().items_center().gap(px(14.)).child(
+                                    div()
+                                        .text_size(px(28.))
+                                        .text_color(rgb(0xffffff))
+                                        .child("->"),
+                                ),
+                            )
+                            .child(calculation_side(answer, result_label, true)),
+                    )
             )
             .into_any_element()
     }
@@ -650,42 +747,152 @@ impl LauncherView {
         let progress = destiny::current_manifest_progress().unwrap_or_default();
         let pct = progress.percent.clamp(0.0, 1.0);
         div()
+            .w_full()
             .flex()
-            .flex_col()
+            .items_center()
             .gap(px(4.))
-            .px(px(10.))
-            .py(px(8.))
-            .rounded_sm()
-            .bg(result_row_background(is_selected))
-            .child(div().text_size(px(14.)).child(result.title.clone()))
             .child(
+                // Selection indicator line
                 div()
-                    .text_size(px(11.))
-                    .text_color(rgb(0xa1a1aa))
-                    .child(format!("{} - {:.0}%", progress.stage, pct * 100.0)),
+                    .w(px(3.))
+                    .h(px(18.))
+                    .rounded_full()
+                    .bg(if is_selected { rgb(0xa78bfa) } else { rgba(0x00000000) })
             )
             .child(
                 div()
-                    .w(px(340.))
-                    .h(px(6.))
-                    .bg(rgb(0x27272a))
-                    .rounded(px(2.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .pl(px(4.))
+                    .pr(px(8.))
+                    .py(px(8.))
+                    .flex_1()
+                    .rounded_md()
+                    .bg(if is_selected { rgba(0xffffff0d) } else { rgba(0x00000000) })
+                    .border_1()
+                    .border_color(if is_selected { rgba(0xffffff14) } else { rgba(0x00000000) })
+                    .child(div().text_size(px(14.)).child(result.title.clone()))
                     .child(
                         div()
-                            .w(px(340.0 * pct))
-                            .h_full()
-                            .bg(rgb(0x7c3aed))
-                            .rounded(px(2.)),
-                    ),
-            )
-            .child(
-                div()
-                    .text_size(px(10.))
-                    .text_color(rgb(0x71717a))
-                    .child(progress.message.clone()),
+                            .text_size(px(11.))
+                            .text_color(rgb(0xa1a1aa))
+                            .child(format!("{} - {:.0}%", progress.stage, pct * 100.0)),
+                    )
+                    .child(
+                        div()
+                            .w(px(340.))
+                            .h(px(6.))
+                            .bg(rgb(0x27272a))
+                            .rounded(px(2.))
+                            .child(
+                                div()
+                                    .w(px(340.0 * pct))
+                                    .h_full()
+                                    .bg(rgb(0x7c3aed))
+                                    .rounded(px(2.)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(rgb(0x71717a))
+                            .child(progress.message.clone()),
+                    )
             )
     }
 }
+fn category_icon_theme(category: &CommandCategory) -> (gpui::Rgba, gpui::Rgba, gpui::Rgba) {
+    match category {
+        CommandCategory::Application => (
+            rgb(0x4ade80),
+            rgba(0x22c55e14),
+            rgba(0x22c55e30),
+        ),
+        CommandCategory::BuiltIn | CommandCategory::System | CommandCategory::WindowManagement => (
+            rgb(0xa78bfa),
+            rgba(0x7c3aed14),
+            rgba(0x7c3aed30),
+        ),
+        CommandCategory::Note | CommandCategory::Snippet => (
+            rgb(0xf472b6),
+            rgba(0xec489914),
+            rgba(0xec489930),
+        ),
+        CommandCategory::Web | CommandCategory::Quicklink => (
+            rgb(0x60a5fa),
+            rgba(0x3b82f614),
+            rgba(0x3b82f630),
+        ),
+        CommandCategory::Calculation => (
+            rgb(0xfbbf24),
+            rgba(0xf59e0b14),
+            rgba(0xf59e0b30),
+        ),
+        CommandCategory::Destiny => (
+            rgb(0xfdba74),
+            rgba(0xf9731614),
+            rgba(0xf9731630),
+        ),
+        _ => {
+            let color = category_color(category);
+            (
+                color,
+                rgba(0xffffff06),
+                rgba(0xffffff0c),
+            )
+        }
+    }
+}
+
+fn category_badge_theme(
+    category: &CommandCategory,
+    has_at_prefix: bool,
+) -> (gpui::Rgba, gpui::Rgba, gpui::Rgba) {
+    if has_at_prefix {
+        return (
+            rgb(0xa78bfa),
+            rgba(0x7c3aed14),
+            rgba(0x7c3aed2d),
+        );
+    }
+    match category {
+        CommandCategory::Application => (
+            rgb(0x4ade80),
+            rgba(0x22c55e10),
+            rgba(0x22c55e25),
+        ),
+        CommandCategory::BuiltIn | CommandCategory::System | CommandCategory::WindowManagement => (
+            rgb(0xa1a1aa),
+            rgba(0xffffff06),
+            rgba(0xffffff0c),
+        ),
+        CommandCategory::Note | CommandCategory::Snippet => (
+            rgb(0xf472b6),
+            rgba(0xec489910),
+            rgba(0xec489925),
+        ),
+        CommandCategory::Web | CommandCategory::Quicklink => (
+            rgb(0x60a5fa),
+            rgba(0x3b82f610),
+            rgba(0x3b82f625),
+        ),
+        CommandCategory::Calculation => (
+            rgb(0xfbbf24),
+            rgba(0xf59e0b10),
+            rgba(0xf59e0b25),
+        ),
+        _ => {
+            let color = category_color(category);
+            (
+                color,
+                rgba(0xffffff06),
+                rgba(0xffffff0c),
+            )
+        }
+    }
+}
+
 pub(super) fn render_result_icon(result: &CommandResult) -> gpui::AnyElement {
     if matches!(result.category, CommandCategory::Destiny) {
         let portrait = destiny_weapon_portrait_for_result(result);
@@ -698,41 +905,35 @@ pub(super) fn render_result_icon(result: &CommandResult) -> gpui::AnyElement {
         }
     }
 
+    let icon = LucideIcon::for_category(&result.category);
+
     if let Some(icon_path) = result.icon_path.clone() {
+        let fallback_cat = result.category.clone();
         return img(icon_path)
             .size(px(28.))
             .rounded_sm()
-            .with_fallback(|| fallback_icon("A", rgb(0x123322)).into_any_element())
+            .with_fallback(move || render_result_fallback_icon_themed(icon, &fallback_cat))
             .into_any_element();
     }
 
-    let label = match &result.category {
-        CommandCategory::Calculation => "=",
-        CommandCategory::Application => "A",
-        CommandCategory::File => "F",
-        CommandCategory::BuiltIn => "S",
-        CommandCategory::Web => "W",
-        CommandCategory::Help => "?",
-        CommandCategory::Note => "N",
-        CommandCategory::Focus => "F",
-        CommandCategory::Clipboard => "C",
-        CommandCategory::WindowManagement => "W",
-        CommandCategory::Snippet => "T",
-        CommandCategory::Quicklink => "Q",
-        CommandCategory::Calendar => "D",
-        CommandCategory::System => "P",
-        CommandCategory::Emoji => ":",
-        CommandCategory::Destiny => "D2",
-        CommandCategory::Context => "Ctx",
-        CommandCategory::DevTools => "Dev",
-        CommandCategory::Git => "Git",
-        CommandCategory::Package => "Pkg",
-        CommandCategory::Lookup => "Lu",
-        CommandCategory::Media => "Md",
-        CommandCategory::Network => "Nt",
-    };
+    render_result_fallback_icon_themed(icon, &result.category)
+}
 
-    fallback_icon(label, category_color(&result.category)).into_any_element()
+fn render_result_fallback_icon_themed(icon: LucideIcon, category: &CommandCategory) -> gpui::AnyElement {
+    use crate::ui::lucide_icons::render_lucide_icon;
+    let (icon_color, bg_color, border_color) = category_icon_theme(category);
+    div()
+        .size(px(28.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
+        .bg(bg_color)
+        .border_1()
+        .border_color(border_color)
+        .child(render_lucide_icon(icon, 14.0, icon_color, false))
+        .into_any_element()
 }
 
 pub(super) fn should_show_subtitle(result: &CommandResult) -> bool {
@@ -955,27 +1156,9 @@ pub(super) fn category_label(category: &CommandCategory) -> &'static str {
 
 pub(super) fn result_row_background(is_selected: bool) -> gpui::Rgba {
     if is_selected {
-        rgb(0x050505)
+        rgba(0xffffff0e)
     } else {
         rgba(0x00000000)
-    }
-}
-
-pub(super) fn result_row_border_color(result: &CommandResult, is_selected: bool) -> gpui::Rgba {
-    if is_selected {
-        category_color(&result.category)
-    } else {
-        rgba(0x00000000)
-    }
-}
-
-pub(super) fn result_row_hover_border_color(result: &CommandResult) -> gpui::Rgba {
-    match result.category {
-        CommandCategory::Note
-        | CommandCategory::Clipboard
-        | CommandCategory::File
-        | CommandCategory::Calendar => rgb(0x171717),
-        _ => rgb(0x050505),
     }
 }
 

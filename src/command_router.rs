@@ -95,6 +95,33 @@ impl CommandRouter {
             return self.default_results();
         }
 
+        if let Some((bang, search_term)) = match_bang_query(trimmed_query) {
+            let url = if search_term.is_empty() {
+                bang.home_url.to_string()
+            } else {
+                let encoded = search_term.replace(' ', "+");
+                bang.search_url.replace("{}", &encoded)
+            };
+
+            let title = if search_term.is_empty() {
+                format!("Search {}", bang.name)
+            } else {
+                format!("Search {} for \"{}\"", bang.name, search_term)
+            };
+
+            return vec![CommandResult {
+                title,
+                subtitle: url.clone(),
+                copy_text: url.clone(),
+                explanation: None,
+                icon_path: None,
+                calculation_display: None,
+                category: CommandCategory::Web,
+                action: CommandAction::OpenUrl(url),
+                confidence: 100,
+            }];
+        }
+
         if alias_depth < 5 {
             if let Some(expanded_query) =
                 custom_commands::expand_alias_query(trimmed_query, &self.settings)
@@ -931,6 +958,78 @@ fn parse_named_feature_query<'a>(query: &'a str, feature_name: &str) -> Option<&
         .then_some(remaining_query.trim())
 }
 
+struct BangSearch {
+    prefix_bang: &'static str,
+    prefix_expanded: &'static str,
+    name: &'static str,
+    search_url: &'static str,
+    home_url: &'static str,
+}
+
+const BANGS: &[BangSearch] = &[
+    BangSearch {
+        prefix_bang: "!g",
+        prefix_expanded: "Google | ",
+        name: "Google",
+        search_url: "https://www.google.com/search?q={}",
+        home_url: "https://www.google.com",
+    },
+    BangSearch {
+        prefix_bang: "!yt",
+        prefix_expanded: "YouTube | ",
+        name: "YouTube",
+        search_url: "https://www.youtube.com/results?search_query={}",
+        home_url: "https://www.youtube.com",
+    },
+    BangSearch {
+        prefix_bang: "!w",
+        prefix_expanded: "Wikipedia | ",
+        name: "Wikipedia",
+        search_url: "https://en.wikipedia.org/wiki/Special:Search?search={}",
+        home_url: "https://en.wikipedia.org",
+    },
+    BangSearch {
+        prefix_bang: "!wiki",
+        prefix_expanded: "Wikipedia | ",
+        name: "Wikipedia",
+        search_url: "https://en.wikipedia.org/wiki/Special:Search?search={}",
+        home_url: "https://en.wikipedia.org",
+    },
+    BangSearch {
+        prefix_bang: "!gh",
+        prefix_expanded: "GitHub | ",
+        name: "GitHub",
+        search_url: "https://github.com/search?q={}",
+        home_url: "https://github.com",
+    },
+    BangSearch {
+        prefix_bang: "!d",
+        prefix_expanded: "DuckDuckGo | ",
+        name: "DuckDuckGo",
+        search_url: "https://duckduckgo.com/?q={}",
+        home_url: "https://duckduckgo.com",
+    },
+];
+
+fn match_bang_query(query: &str) -> Option<(&BangSearch, &str)> {
+    let trimmed = query.trim_start();
+    for bang in BANGS {
+        if trimmed.starts_with(bang.prefix_bang) {
+            let rest = &trimmed[bang.prefix_bang.len()..];
+            if rest.is_empty() {
+                return Some((bang, ""));
+            } else if rest.starts_with(' ') {
+                return Some((bang, rest.trim()));
+            }
+        }
+        if trimmed.starts_with(bang.prefix_expanded) {
+            let rest = &trimmed[bang.prefix_expanded.len()..];
+            return Some((bang, rest.trim()));
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1260,5 +1359,24 @@ mod tests {
 
         assert_eq!(results[0].category, CommandCategory::Application);
         assert_eq!(results[1].category, CommandCategory::File);
+    }
+
+    #[test]
+    fn bang_search_works() {
+        let router = CommandRouter::new(
+            LauncherSettings::default(),
+            ApplicationIndex::default(),
+            FileIndex::default(),
+        );
+
+        let results = router.search("!g fortnite");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].category, CommandCategory::Web);
+        assert_eq!(results[0].title, "Search Google for \"fortnite\"");
+        assert_eq!(results[0].subtitle, "https://www.google.com/search?q=fortnite");
+
+        let results_expanded = router.search("Google | fortnite");
+        assert_eq!(results_expanded.len(), 1);
+        assert_eq!(results_expanded[0].title, "Search Google for \"fortnite\"");
     }
 }

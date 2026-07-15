@@ -59,7 +59,7 @@ pub fn input_field_background(focused: bool) -> Rgba {
 
 pub fn input_field_border(focused: bool) -> Rgba {
     if focused {
-        rgba(0xffffff20)
+        rgba(0xa78bfa80)
     } else {
         rgba(0x00000000)
     }

@@ -50,6 +50,8 @@ pub enum LucideIcon {
     Music,
     Volume2,
     Power,
+    ChevronDown,
+    ChevronUp,
 }
 
 impl LucideIcon {
@@ -93,6 +95,8 @@ impl LucideIcon {
             LucideIcon::Music => "music",
             LucideIcon::Volume2 => "volume-2",
             LucideIcon::Power => "power",
+            LucideIcon::ChevronDown => "chevron-down",
+            LucideIcon::ChevronUp => "chevron-up",
         }
     }
 
@@ -303,6 +307,8 @@ lucide_embedded_icons!(
     "music",
     "volume-2",
     "power",
+    "chevron-down",
+    "chevron-up",
 );
 
 #[cfg(test)]

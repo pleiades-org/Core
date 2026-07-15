@@ -15,7 +15,7 @@ use crate::{
     },
     ui_flow::{track_open_settings, track_save_settings},
 };
-use gpui::{div, prelude::*, px, rgb, App, Context, MouseButton, MouseUpEvent, Window};
+use gpui::{div, prelude::*, px, rgb, rgba, App, Context, MouseButton, MouseUpEvent, Window};
 use super::{
     LauncherSettings, LauncherView, RegisteredHotkeys, SettingsEditorRow, SettingsSection,
     SETTINGS_INPUT_PLACEHOLDER, SETTINGS_PANEL_HEIGHT, SETTINGS_SIDEBAR_WIDTH,
@@ -72,6 +72,96 @@ fn setting_toggle_row(
                 ),
         )
         .child(toggle_pill(is_enabled))
+}
+
+
+
+fn setting_cross_select_row(
+    title: &'static str,
+    subtitle: &str,
+    current_position: crate::settings::DisplayPosition,
+    on_select: impl Fn(crate::settings::DisplayPosition, &mut Window, &mut App) + Clone + 'static,
+) -> impl IntoElement {
+    let cell = move |pos: crate::settings::DisplayPosition, tooltip: &'static str| {
+        let is_selected = current_position == pos;
+        let on_select = on_select.clone();
+        div()
+            .id(tooltip)
+            .size(px(20.))
+            .rounded(px(3.))
+            .border_1()
+            .border_color(if is_selected { rgb(0x7c3aed) } else { rgb(0x27272a) })
+            .bg(if is_selected { rgb(0x7c3aed) } else { rgb(0x0a0a0a) })
+            .hover(|style| {
+                if is_selected {
+                    style
+                } else {
+                    style.bg(rgb(0x18181b)).cursor_pointer()
+                }
+            })
+            .on_mouse_up(MouseButton::Left, move |_, window, cx| {
+                on_select(pos, window, cx);
+            })
+    };
+
+    let empty = || div().size(px(20.));
+
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .rounded_sm()
+        .bg(settings_row_background())
+        .px(px(12.))
+        .py(px(10.))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(
+                    div()
+                        .text_color(rgb(0xffffff))
+                        .text_size(px(14.))
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .text_color(rgb(0xd9d9d9))
+                        .text_size(px(12.))
+                        .child(subtitle.to_string()),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(4.))
+                        .child(empty())
+                        .child(cell(crate::settings::DisplayPosition::Top, "Top"))
+                        .child(empty())
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(4.))
+                        .child(cell(crate::settings::DisplayPosition::Left, "Left"))
+                        .child(cell(crate::settings::DisplayPosition::Center, "Center"))
+                        .child(cell(crate::settings::DisplayPosition::Right, "Right"))
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(4.))
+                        .child(empty())
+                        .child(cell(crate::settings::DisplayPosition::Bottom, "Bottom"))
+                        .child(empty())
+                )
+        )
 }
 
 fn settings_info_row(title: &'static str, value: &str) -> impl IntoElement {
@@ -133,24 +223,57 @@ fn settings_hotkey_rows(settings: &LauncherSettings) -> Vec<SettingsEditorRow> {
     rows
 }
 
+fn render_settings_empty_state(message: &str) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(8.))
+        .w_full()
+        .py(px(20.))
+        .px(px(12.))
+        .rounded_sm()
+        .bg(rgba(0xffffff02))
+        .border_1()
+        .border_color(rgba(0xffffff0c))
+        .child(
+            crate::ui::lucide_icons::render_lucide_icon(
+                crate::ui::lucide_icons::LucideIcon::CircleQuestionMark,
+                16.,
+                rgb(0x71717a),
+                false,
+            )
+        )
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(rgb(0xa1a1aa))
+                .text_align(gpui::TextAlign::Center)
+                .child(message.to_string())
+        )
+}
+
 fn settings_editor_section(
     title: &'static str,
     empty_text: &'static str,
     rows: Vec<SettingsEditorRow>,
 ) -> gpui::Div {
-    let visible_rows = if rows.is_empty() {
-        vec![SettingsEditorRow {
-            title: "No entries yet".to_string(),
-            subtitle: empty_text.to_string(),
-        }]
+    let content = if rows.is_empty() {
+        render_settings_empty_state(empty_text).into_any_element()
     } else {
-        rows
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .children(rows.into_iter().map(settings_editor_row))
+            .into_any_element()
     };
 
     div()
         .flex()
         .flex_col()
-        .gap(px(6.))
+        .gap(px(8.))
         .rounded_sm()
         .bg(rgb(0x050505))
         .border_1()
@@ -163,7 +286,7 @@ fn settings_editor_section(
                 .text_color(rgb(0xf4f4f5))
                 .child(title),
         )
-        .children(visible_rows.into_iter().map(settings_editor_row))
+        .child(content)
 }
 
 fn settings_add_form(title: &'static str, form_body: impl IntoElement) -> gpui::Div {
@@ -460,6 +583,20 @@ impl LauncherView {
         cx.notify();
     }
 
+
+
+    pub(super) fn select_display_position(
+        &mut self,
+        position: crate::settings::DisplayPosition,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.display_position = position;
+        self.apply_launcher_window_geometry(window);
+        self.save_settings();
+        cx.notify();
+    }
+
     pub(super) fn save_settings(&mut self) {
         track_save_settings();
         self.services.router_mut().update_settings(self.settings.clone());
@@ -644,6 +781,22 @@ impl LauncherView {
                             "Store searchable local clipboard text",
                             self.settings.clipboard_history_enabled,
                             cx.listener(Self::toggle_clipboard_history),
+                        ))
+                    },
+                )
+                .when(
+                    self.settings_row_matches_search("Display position", "launcher position screen center top bottom left right"),
+                    |section| {
+                        let handle = cx.entity().clone();
+                        section.child(setting_cross_select_row(
+                            "Display position",
+                            "Optionally snap and slide the launcher to an edge of the screen",
+                            self.settings.display_position,
+                            move |pos, window, cx| {
+                                let _ = handle.update(cx, |launcher, cx| {
+                                    launcher.select_display_position(pos, window, cx);
+                                });
+                            },
                         ))
                     },
                 ),

@@ -11,6 +11,29 @@ const LEGACY_DEFAULT_HOTKEY: &str = "Ctrl+Shift+Space";
 const DEFAULT_QUICK_NOTE_ANCHOR: &str = "top-right";
 const FALLBACK_TIMEZONE: &str = "Europe/London";
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum DisplayPosition {
+    #[default]
+    Center,
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+impl DisplayPosition {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DisplayPosition::Center => "center",
+            DisplayPosition::Top => "top",
+            DisplayPosition::Bottom => "bottom",
+            DisplayPosition::Left => "left",
+            DisplayPosition::Right => "right",
+        }
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct LauncherSettings {
@@ -33,6 +56,7 @@ pub struct LauncherSettings {
     pub quick_note_offset_y: i32,
     pub quick_note_width: f32,
     pub quick_note_height: f32,
+    pub display_position: DisplayPosition,
     /// Optional Bungie API key for Destiny 2 features (@d2). Get one at https://www.bungie.net/en/Application
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bungie_api_key: Option<String>,
@@ -65,6 +89,7 @@ impl std::fmt::Debug for LauncherSettings {
             .field("quick_note_offset_y", &self.quick_note_offset_y)
             .field("quick_note_width", &self.quick_note_width)
             .field("quick_note_height", &self.quick_note_height)
+            .field("display_position", &self.display_position)
             .field("bungie_api_key", &bungie_api_key)
             .finish()
     }
@@ -119,6 +144,7 @@ impl Default for LauncherSettings {
             quick_note_offset_y: 24,
             quick_note_width: 380.,
             quick_note_height: 300.,
+            display_position: DisplayPosition::Center,
             bungie_api_key: None,
         }
     }
