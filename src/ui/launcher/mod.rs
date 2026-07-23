@@ -300,7 +300,12 @@ impl LauncherView {
         let alias_expands_to_input = cx.new(|cx| TextInput::new_compact("Expands to", cx));
         let snippet_keyword_input = cx.new(|cx| TextInput::new_compact("Keyword", cx));
         let snippet_body_input = cx.new(|cx| TextInput::new_compact("Snippet text", cx));
-        let hotkey_binding_input = cx.new(|cx| TextInput::new_compact("Ctrl+Alt+N", cx));
+        let hotkey_seed = settings.hotkey.clone();
+        let hotkey_binding_input = cx.new(|cx| {
+            let mut input = TextInput::new_compact("Alt+Space", cx);
+            input.set_content(hotkey_seed, cx);
+            input
+        });
         let hotkey_query_input = cx.new(|cx| TextInput::new_compact("@note Scratch", cx));
         let custom_name_input = cx.new(|cx| TextInput::new_compact("Name", cx));
         let custom_command_input = cx.new(|cx| TextInput::new_compact("Shell command", cx));

@@ -885,41 +885,91 @@ impl LauncherView {
                     .child(
                         div()
                             .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(8.))
-                            .children(["Alt+Space", "Ctrl+Space", "Ctrl+Shift+Space", "Super+Space"].into_iter().map(|preset| {
-                                let is_selected = hotkey_enabled && current_hotkey.eq_ignore_ascii_case(preset);
-                                let preset_str = preset.to_string();
+                            .flex_col()
+                            .gap(px(10.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .flex_wrap()
+                                    .gap(px(8.))
+                                    .children(["Alt+Space", "Ctrl+Space", "Ctrl+Shift+Space", "Super+Space"].into_iter().map(|preset| {
+                                        let is_selected = hotkey_enabled && current_hotkey.eq_ignore_ascii_case(preset);
+                                        let preset_str = preset.to_string();
 
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .px(px(12.))
+                                            .py(px(6.))
+                                            .rounded(px(6.))
+                                            .cursor_pointer()
+                                            .bg(if is_selected { result_row_background(true) } else { surface_muted() })
+                                            .border_1()
+                                            .border_color(if is_selected { colors::accent() } else { border_subtle() })
+                                            .text_color(if is_selected { colors::text_primary() } else { colors::text_muted() })
+                                            .on_mouse_up(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                                                this.settings.hotkey = preset_str.clone();
+                                                this.settings.hotkey_enabled = true;
+                                                this.save_settings();
+                                                #[cfg(target_os = "windows")]
+                                                {
+                                                    this.registered_hotkeys = super::register_global_hotkeys(&this.settings);
+                                                }
+                                                cx.notify();
+                                            }))
+                                            .child(
+                                                div()
+                                                    .text_size(px(type_scale::CAPTION))
+                                                    .font_weight(if is_selected { gpui::FontWeight::SEMIBOLD } else { gpui::FontWeight::NORMAL })
+                                                    .child(preset)
+                                            )
+                                    })),
+                            )
+                            .child(
                                 div()
                                     .flex()
                                     .items_center()
-                                    .px(px(12.))
-                                    .py(px(6.))
-                                    .rounded(px(6.))
-                                    .cursor_pointer()
-                                    .bg(if is_selected { result_row_background(true) } else { surface_muted() })
-                                    .border_1()
-                                    .border_color(if is_selected { colors::accent() } else { border_subtle() })
-                                    .text_color(if is_selected { colors::text_primary() } else { colors::text_muted() })
-                                    .on_mouse_up(MouseButton::Left, cx.listener(move |this, _, _, cx| {
-                                        this.settings.hotkey = preset_str.clone();
-                                        this.settings.hotkey_enabled = true;
-                                        this.save_settings();
-                                        #[cfg(target_os = "windows")]
-                                        {
-                                            this.registered_hotkeys = super::register_global_hotkeys(&this.settings);
-                                        }
-                                        cx.notify();
-                                    }))
+                                    .gap(px(8.))
+                                    .mt(px(4.))
                                     .child(
                                         div()
                                             .text_size(px(type_scale::CAPTION))
-                                            .font_weight(if is_selected { gpui::FontWeight::SEMIBOLD } else { gpui::FontWeight::NORMAL })
-                                            .child(preset)
+                                            .text_color(colors::text_muted())
+                                            .child("Custom keybind:")
                                     )
-                            })),
+                                    .child(
+                                        div()
+                                            .w(px(150.))
+                                            .child(self.hotkey_binding_input.clone())
+                                    )
+                                    .child(
+                                        div()
+                                            .px(px(12.))
+                                            .py(px(5.))
+                                            .rounded(px(6.))
+                                            .bg(colors::accent())
+                                            .text_color(colors::text_primary())
+                                            .text_size(px(type_scale::CAPTION))
+                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .cursor_pointer()
+                                            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                                let custom_hotkey = this.hotkey_binding_input.read(cx).content().trim().to_string();
+                                                if !custom_hotkey.is_empty() {
+                                                    this.settings.hotkey = custom_hotkey;
+                                                    this.settings.hotkey_enabled = true;
+                                                    this.save_settings();
+                                                    #[cfg(target_os = "windows")]
+                                                    {
+                                                        this.registered_hotkeys = super::register_global_hotkeys(&this.settings);
+                                                    }
+                                                    cx.notify();
+                                                }
+                                            }))
+                                            .child("Save Custom"),
+                                    ),
+                            ),
                     ),
             )
             .child(
