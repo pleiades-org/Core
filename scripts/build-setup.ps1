@@ -222,6 +222,7 @@ function Set-SetupExecutableIcon {
     $iconUpdaterSource = @"
 using System;
 using System.IO;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
 public static class SetupIconHelper {
@@ -234,12 +235,38 @@ public static class SetupIconHelper {
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool EndUpdateResource(IntPtr hUpdate, bool fDiscard);
 
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr LoadLibraryEx(string lpFileName, IntPtr hFile, uint dwFlags);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool FreeLibrary(IntPtr hModule);
+
+    private delegate bool EnumResNameDelegate(IntPtr hModule, IntPtr lpszType, IntPtr lpszName, IntPtr lParam);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool EnumResourceNames(IntPtr hModule, IntPtr lpszType, EnumResNameDelegate lpEnumFunc, IntPtr lParam);
+
     private static readonly IntPtr RT_ICON = (IntPtr)3;
     private static readonly IntPtr RT_GROUP_ICON = (IntPtr)14;
 
     public static bool ApplyIcon(string exePath, string icoPath) {
         try {
             if (!File.Exists(exePath) || !File.Exists(icoPath)) return false;
+
+            List<IntPtr> groupIconIds = new List<IntPtr>();
+            IntPtr hMod = LoadLibraryEx(exePath, IntPtr.Zero, 2);
+            if (hMod != IntPtr.Zero) {
+                EnumResourceNames(hMod, RT_GROUP_ICON, (h, type, name, param) => {
+                    groupIconIds.Add(name);
+                    return true;
+                }, IntPtr.Zero);
+                FreeLibrary(hMod);
+            }
+
+            if (groupIconIds.Count == 0) {
+                groupIconIds.Add((IntPtr)1);
+                groupIconIds.Add((IntPtr)3000);
+            }
 
             byte[] icoBytes = File.ReadAllBytes(icoPath);
             if (icoBytes.Length < 6) return false;
@@ -274,7 +301,10 @@ public static class SetupIconHelper {
                 UpdateResource(hUpdate, RT_ICON, (IntPtr)iconId, 0, iconImageData, (uint)iconImageData.Length);
             }
 
-            UpdateResource(hUpdate, RT_GROUP_ICON, (IntPtr)1, 0, groupBytes, (uint)groupBytes.Length);
+            foreach (IntPtr groupName in groupIconIds) {
+                UpdateResource(hUpdate, RT_GROUP_ICON, groupName, 0, groupBytes, (uint)groupBytes.Length);
+            }
+
             return EndUpdateResource(hUpdate, false);
         } catch {
             return false;
