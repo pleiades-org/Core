@@ -225,6 +225,7 @@ pub struct LauncherView {
     browse_results_scroll_handle: ScrollHandle,
     registered_hotkeys: RegisteredHotkeys,
     is_settings_open: bool,
+    is_onboarding_open: bool,
     settings_section: SettingsSection,
     is_launcher_visible: bool,
     last_visibility_change_at: Instant,
@@ -327,6 +328,8 @@ impl LauncherView {
             settings.preferred_terminal_profile.as_deref(),
         );
 
+        let onboarding_completed = settings.onboarding_completed;
+
         let launcher = Self {
             text_input,
             quicklink_keyword_input,
@@ -354,6 +357,7 @@ impl LauncherView {
             browse_results_scroll_handle: ScrollHandle::new(),
             registered_hotkeys,
             is_settings_open: false,
+            is_onboarding_open: !onboarding_completed,
             settings_section: SettingsSection::default(),
             is_launcher_visible: true,
             last_visibility_change_at: Instant::now(),
@@ -761,6 +765,11 @@ impl LauncherView {
             CommandAction::BuiltIn(BuiltInAction::OpenSettings) => {
                 self.enter_settings_mode(cx);
             }
+            CommandAction::BuiltIn(BuiltInAction::OpenOnboarding) => {
+                self.is_onboarding_open = true;
+                self.is_settings_open = false;
+                cx.notify();
+            }
             CommandAction::BuiltIn(BuiltInAction::ReloadApplications) => {
                 self.services.router_mut().reload_application_index();
                 let query = self.text_input.read(cx).content().to_string();
@@ -1063,7 +1072,7 @@ impl Focusable for LauncherView {
 }
 
 impl Render for LauncherView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
 
         // Outer corner radii
         let tl_out = px(12.);
@@ -1117,6 +1126,14 @@ impl Render for LauncherView {
                             .flex_1()
                             .min_h(px(0.))
                             .child(self.render_search_container(false, cx))
+                            .into_any_element()
+                    } else if self.is_onboarding_open {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h(px(0.))
+                            .child(self.render_onboarding_panel(window, cx))
                             .into_any_element()
                     } else if self.is_settings_open {
                         div()

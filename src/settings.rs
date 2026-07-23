@@ -56,6 +56,8 @@ pub struct LauncherSettings {
     pub quick_note_width: f32,
     pub quick_note_height: f32,
     pub display_position: DisplayPosition,
+    #[serde(default)]
+    pub onboarding_completed: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -108,6 +110,7 @@ impl Default for LauncherSettings {
             quick_note_width: 380.,
             quick_note_height: 300.,
             display_position: DisplayPosition::Center,
+            onboarding_completed: false,
         }
     }
 }

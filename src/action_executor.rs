@@ -68,6 +68,9 @@ pub fn execute_result_action_with_context(
             open_path(&settings_path)?;
             Ok(ExecutedAction::OpenedSettings)
         }
+        CommandAction::BuiltIn(BuiltInAction::OpenOnboarding) => {
+            Ok(ExecutedAction::OpenedSettings)
+        }
         CommandAction::BuiltIn(BuiltInAction::ReloadApplications) => {
             Ok(ExecutedAction::ReloadApplications)
         }

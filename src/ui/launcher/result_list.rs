@@ -707,6 +707,324 @@ impl LauncherView {
             )
             .into_any_element()
     }
+
+    pub(super) fn render_onboarding_panel(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use crate::settings::DisplayPosition;
+        use crate::ui::browse_views::{border_subtle, surface_muted, surface_overlay_low};
+        use crate::ui::lucide_icons::{render_lucide_icon, LucideIcon};
+        use crate::ui::theme::{colors, launcher_background, type_scale};
+
+        let current_position = self.settings.display_position;
+        let current_hotkey = self.settings.hotkey.clone();
+        let hotkey_enabled = self.settings.hotkey_enabled;
+
+        div()
+            .id("onboarding-panel")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .size_full()
+            .bg(launcher_background(self.settings.backdrop_blur_enabled))
+            .overflow_y_scroll()
+            .p(px(24.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .text_center()
+                    .mb(px(20.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .w(px(52.))
+                            .h(px(52.))
+                            .rounded_full()
+                            .bg(surface_overlay_low())
+                            .border_1()
+                            .border_color(border_subtle())
+                            .mb(px(12.))
+                            .child(render_lucide_icon(
+                                LucideIcon::Zap,
+                                26.,
+                                colors::accent(),
+                                false,
+                            )),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(type_scale::TITLE_LG))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(colors::text_primary())
+                            .child("Welcome to Core Launcher"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(type_scale::BODY_LG))
+                            .text_color(colors::text_muted())
+                            .mt(px(4.))
+                            .child("Customize your screen position, global reveal hotkey, and defaults"),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .p(px(16.))
+                    .mb(px(16.))
+                    .bg(surface_overlay_low())
+                    .border_1()
+                    .border_color(border_subtle())
+                    .rounded(px(12.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .mb(px(8.))
+                            .child(render_lucide_icon(
+                                LucideIcon::Monitor,
+                                18.,
+                                colors::accent(),
+                                false,
+                            ))
+                            .child(
+                                div()
+                                    .text_size(px(type_scale::TITLE))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(colors::text_primary())
+                                    .child("1. Launcher Screen Position"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(type_scale::CAPTION))
+                            .text_color(colors::text_muted())
+                            .mb(px(12.))
+                            .child("Choose where Core Launcher anchors on your screen (moves live)"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(8.))
+                            .children([
+                                (DisplayPosition::Center, "Center"),
+                                (DisplayPosition::Top, "Top Screen"),
+                                (DisplayPosition::Bottom, "Bottom Dock"),
+                                (DisplayPosition::Left, "Left Sidebar"),
+                                (DisplayPosition::Right, "Right Sidebar"),
+                            ].into_iter().map(|(pos, label)| {
+                                let is_selected = current_position == pos;
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .px(px(14.))
+                                    .py(px(8.))
+                                    .rounded(px(8.))
+                                    .cursor_pointer()
+                                    .bg(if is_selected { result_row_background(true) } else { surface_muted() })
+                                    .border_1()
+                                    .border_color(if is_selected { colors::accent() } else { border_subtle() })
+                                    .text_color(if is_selected { colors::text_primary() } else { colors::text_muted() })
+                                    .on_mouse_up(MouseButton::Left, cx.listener(move |this, _, window, cx| {
+                                        this.select_display_position(pos, window, cx);
+                                    }))
+                                    .child(
+                                        div()
+                                            .text_size(px(type_scale::BODY_LG))
+                                            .font_weight(if is_selected { gpui::FontWeight::SEMIBOLD } else { gpui::FontWeight::NORMAL })
+                                            .child(label)
+                                    )
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .p(px(16.))
+                    .mb(px(16.))
+                    .bg(surface_overlay_low())
+                    .border_1()
+                    .border_color(border_subtle())
+                    .rounded(px(12.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .mb(px(8.))
+                            .child(render_lucide_icon(
+                                LucideIcon::Keyboard,
+                                18.,
+                                colors::accent(),
+                                false,
+                            ))
+                            .child(
+                                div()
+                                    .text_size(px(type_scale::TITLE))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(colors::text_primary())
+                                    .child("2. Global Reveal Shortcut"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(type_scale::CAPTION))
+                            .text_color(colors::text_muted())
+                            .mb(px(12.))
+                            .child("Press this key shortcut anywhere to open or hide Core Launcher"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(8.))
+                            .children(["Alt+Space", "Ctrl+Space", "Ctrl+Shift+Space", "Super+Space"].into_iter().map(|preset| {
+                                let is_selected = hotkey_enabled && current_hotkey.eq_ignore_ascii_case(preset);
+                                let preset_str = preset.to_string();
+
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .px(px(12.))
+                                    .py(px(6.))
+                                    .rounded(px(6.))
+                                    .cursor_pointer()
+                                    .bg(if is_selected { result_row_background(true) } else { surface_muted() })
+                                    .border_1()
+                                    .border_color(if is_selected { colors::accent() } else { border_subtle() })
+                                    .text_color(if is_selected { colors::text_primary() } else { colors::text_muted() })
+                                    .on_mouse_up(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                                        this.settings.hotkey = preset_str.clone();
+                                        this.settings.hotkey_enabled = true;
+                                        this.save_settings();
+                                        #[cfg(target_os = "windows")]
+                                        {
+                                            this.registered_hotkeys = super::register_global_hotkeys(&this.settings);
+                                        }
+                                        cx.notify();
+                                    }))
+                                    .child(
+                                        div()
+                                            .text_size(px(type_scale::CAPTION))
+                                            .font_weight(if is_selected { gpui::FontWeight::SEMIBOLD } else { gpui::FontWeight::NORMAL })
+                                            .child(preset)
+                                    )
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .p(px(16.))
+                    .mb(px(20.))
+                    .bg(surface_overlay_low())
+                    .border_1()
+                    .border_color(border_subtle())
+                    .rounded(px(12.))
+                    .child(
+                        div()
+                            .text_size(px(type_scale::TITLE))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(colors::text_primary())
+                            .mb(px(12.))
+                            .child("Core Launcher Features"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(10.))
+                            .child(render_onboarding_feature_row(LucideIcon::Search, "Instant Search", "Search applications, files, settings, and web shortcuts"))
+                            .child(render_onboarding_feature_row(LucideIcon::Calculator, "Smart Math & Unit Conversion", "Evaluates calculations, currency rates, relative dates, and hex"))
+                            .child(render_onboarding_feature_row(LucideIcon::Clipboard, "Local Storage Clipboard History", "Searchable local history for text, color codes, and image captures"))
+                            .child(render_onboarding_feature_row(LucideIcon::Terminal, "Embedded Terminal & Dev Tools", "PowerShell terminal sessions, git commands, JSON formatters, and QR codes"))
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .items_center()
+                    .pt(px(16.))
+                    .border_t_1()
+                    .border_color(border_subtle())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .px(px(24.))
+                            .py(px(10.))
+                            .rounded(px(8.))
+                            .bg(colors::accent())
+                            .text_color(colors::text_primary())
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .cursor_pointer()
+                            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                this.settings.onboarding_completed = true;
+                                this.save_settings();
+                                this.is_onboarding_open = false;
+                                cx.notify();
+                            }))
+                            .child("Get Started →"),
+                    ),
+            )
+    }
+}
+
+fn render_onboarding_feature_row(
+    icon: LucideIcon,
+    title: &'static str,
+    description: &'static str,
+) -> impl IntoElement {
+    use crate::ui::browse_views::surface_muted;
+    use crate::ui::lucide_icons::render_lucide_icon;
+    use crate::ui::theme::{colors, type_scale};
+
+    div()
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(32.))
+                .h(px(32.))
+                .rounded(px(8.))
+                .bg(surface_muted())
+                .child(render_lucide_icon(icon, 16., colors::accent(), false)),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .text_size(px(type_scale::BODY_LG))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(colors::text_primary())
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .text_size(px(type_scale::CAPTION))
+                        .text_color(colors::text_muted())
+                        .child(description),
+                ),
+        )
 }
 
 fn category_icon_theme(category: &CommandCategory) -> (gpui::Rgba, gpui::Rgba, gpui::Rgba) {

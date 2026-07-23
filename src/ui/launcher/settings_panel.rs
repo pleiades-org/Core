@@ -732,6 +732,21 @@ impl LauncherView {
                     ))
                 },
             )
+            .when(
+                self.settings_row_matches_search("Welcome & setup", "onboarding screen"),
+                |section| {
+                    section.child(setting_toggle_row(
+                        "Welcome & setup screen",
+                        "Replay onboarding walkthrough and screen position setup",
+                        false,
+                        cx.listener(|this, _, _, cx| {
+                            this.is_onboarding_open = true;
+                            this.is_settings_open = false;
+                            cx.notify();
+                        }),
+                    ))
+                },
+            )
             .into_any_element()
     }
 

@@ -327,6 +327,20 @@ impl CommandRouter {
             ));
         }
 
+        if "onboarding".contains(&normalized_query)
+            || "welcome".contains(&normalized_query)
+            || "setup".contains(&normalized_query)
+            || normalized_query.contains("onboard")
+            || normalized_query.contains("whats new")
+        {
+            results.push(CommandResult::built_in(
+                "Welcome & Setup",
+                "Configure launcher position, hotkeys, and onboarding",
+                BuiltInAction::OpenOnboarding,
+                85,
+            ));
+        }
+
         if "reload apps".contains(&normalized_query) || normalized_query.contains("reload") {
             results.push(CommandResult::built_in(
                 "Reload applications",

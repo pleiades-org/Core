@@ -31,6 +31,7 @@ pub enum CommandCategory {
 pub enum BuiltInAction {
     Quit,
     OpenSettings,
+    OpenOnboarding,
     ReloadApplications,
 }
 
