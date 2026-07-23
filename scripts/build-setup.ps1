@@ -315,10 +315,40 @@ public static class SetupIconHelper {
     Add-Type -TypeDefinition $iconUpdaterSource -Language CSharp
     $applied = [SetupIconHelper]::ApplyIcon($SetupExecutablePath, $IconPath)
     if ($applied) {
+        (Get-Item -LiteralPath $SetupExecutablePath).LastWriteTime = Get-Date
+        Notify-ShellIconChange -Path $SetupExecutablePath
         Write-Host "Applied Core Launcher icon to setup executable."
     } else {
         Write-Warning "Could not update setup executable icon."
     }
+}
+
+function Notify-ShellIconChange {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $shellNotifierSource = @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class ShellNotifier {
+    [DllImport("shell32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern void SHChangeNotify(uint wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
+
+    public static void Notify(string path) {
+        try {
+            IntPtr pPath = Marshal.StringToHGlobalUni(path);
+            SHChangeNotify(0x00002000, 0x0005, pPath, IntPtr.Zero);
+            Marshal.FreeHGlobal(pPath);
+            SHChangeNotify(0x08000000, 0x0000, IntPtr.Zero, IntPtr.Zero);
+        } catch {}
+    }
+}
+"@
+    Add-Type -TypeDefinition $shellNotifierSource -Language CSharp
+    [ShellNotifier]::Notify($Path)
 }
 
 function Build-CoreLauncherSetup {
