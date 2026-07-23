@@ -2692,49 +2692,72 @@ fn start_global_hotkey_poll(
     cx: &mut Context<LauncherView>,
 ) {
     use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
+    use std::collections::HashSet;
 
     window
         .spawn(cx, async move |async_window_cx: &mut AsyncWindowContext| {
+            let mut pressed_hotkeys = HashSet::new();
+            let mut last_toggle_at: Option<Instant> = None;
+            const TOGGLE_COOLDOWN: Duration = Duration::from_millis(200);
+
             loop {
                 async_window_cx
                     .background_executor()
-                    .timer(Duration::from_millis(80))
+                    .timer(Duration::from_millis(40))
                     .await;
 
                 while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
-                    if event.state == HotKeyState::Pressed {
-                        let _ = window_handle.update(async_window_cx, |launcher, window, cx| {
-                            if launcher
-                                .registered_hotkeys
-                                .launcher
-                                .as_ref()
-                                .is_some_and(|hotkey| hotkey.id == event.id)
-                            {
-                                if launcher.is_launcher_visible {
-                                    launcher.hide_launcher(window, cx);
-                                } else {
-                                    launcher.show_launcher(window, cx);
-                                }
-                                return;
+                    match event.state {
+                        HotKeyState::Pressed => {
+                            if !pressed_hotkeys.insert(event.id) {
+                                continue;
                             }
 
-                            if let Some(command_hotkey) = launcher
-                                .registered_hotkeys
-                                .command_hotkeys
-                                .iter()
-                                .find(|hotkey| hotkey.id == event.id)
-                                .cloned()
-                            {
-                                let target_window_handle =
-                                    window_management::active_window_handle();
-                                launcher.accept_hotkey_query(
-                                    &command_hotkey.query,
-                                    target_window_handle,
-                                    window,
-                                    cx,
-                                );
+                            let now = Instant::now();
+                            if let Some(last_time) = last_toggle_at {
+                                if now.duration_since(last_time) < TOGGLE_COOLDOWN {
+                                    continue;
+                                }
                             }
-                        });
+
+                            let _ = window_handle.update(async_window_cx, |launcher, window, cx| {
+                                if launcher
+                                    .registered_hotkeys
+                                    .launcher
+                                    .as_ref()
+                                    .is_some_and(|hotkey| hotkey.id == event.id)
+                                {
+                                    last_toggle_at = Some(now);
+                                    if launcher.is_launcher_visible {
+                                        launcher.hide_launcher(window, cx);
+                                    } else {
+                                        launcher.show_launcher(window, cx);
+                                    }
+                                    return;
+                                }
+
+                                if let Some(command_hotkey) = launcher
+                                    .registered_hotkeys
+                                    .command_hotkeys
+                                    .iter()
+                                    .find(|hotkey| hotkey.id == event.id)
+                                    .cloned()
+                                {
+                                    last_toggle_at = Some(now);
+                                    let target_window_handle =
+                                        window_management::active_window_handle();
+                                    launcher.accept_hotkey_query(
+                                        &command_hotkey.query,
+                                        target_window_handle,
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            });
+                        }
+                        HotKeyState::Released => {
+                            pressed_hotkeys.remove(&event.id);
+                        }
                     }
                 }
             }

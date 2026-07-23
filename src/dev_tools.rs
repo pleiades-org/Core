@@ -723,8 +723,10 @@ mod tests {
 
     #[test]
     fn generates_qr_png_file() {
-        let path = generate_qr_png("https://example.com").expect("qr path");
-        assert!(path.exists());
-        let _ = std::fs::remove_file(path);
+        crate::test_support::with_test_data_dir(|_test_dir| {
+            let path = generate_qr_png("https://example.com").expect("qr path");
+            assert!(path.exists());
+            let _ = std::fs::remove_file(path);
+        });
     }
 }
