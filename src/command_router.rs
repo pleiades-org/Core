@@ -9,7 +9,7 @@ use crate::{
         BuiltInAction, CommandAction, CommandCategory, CommandResult, FeatureAction,
         FileOperationKind,
     },
-    custom_commands, destiny, dev_tools, emoji_picker,
+    custom_commands, dev_tools, emoji_picker,
     file_index::{scope_from_tag, FileIndex, FileSearchScope},
     focus, git_commands, github_tools, lookup_tools, media_tools, network_tools, notes,
     package_manager, process_manager, quicklinks, screenshot_tools,
@@ -264,7 +264,6 @@ impl CommandRouter {
             QueryScope::System => system_controls::search_system_controls(search_text),
             QueryScope::Context => context_actions::search_context_actions(search_text, &self.settings),
             QueryScope::Emoji => emoji_picker::search_emojis(search_text),
-            QueryScope::Destiny => destiny::search_d2(search_text),
             QueryScope::CustomCommands => {
                 custom_commands::search_custom_commands(search_text, &self.settings)
             }
@@ -357,20 +356,68 @@ impl CommandRouter {
     }
 
     fn file_results(&self, search_text: &str, file_scope: FileSearchScope) -> Vec<CommandResult> {
-        if search_text.is_empty() {
-            return self
+        if !self.settings.index_user_files {
+            return vec![CommandResult::informational(
+                "File indexing is disabled",
+                "Enable User files in Settings → Search, then reload",
+            )];
+        }
+
+        if self.file_index.file_count() == 0 {
+            return vec![CommandResult::informational(
+                "No files indexed yet",
+                "Open Settings → Search and toggle User files off/on to rebuild the index",
+            )];
+        }
+
+        let trimmed = search_text.trim();
+
+        // Idle scoped query (`@files`, `@mp4`, …): do not scan/sort the index until the user types.
+        if trimmed.is_empty() {
+            let scope_label = file_scope.label();
+            let count = self.file_index.scoped_file_count(&file_scope);
+            if count == 0 {
+                return vec![CommandResult::informational(
+                    format!("No {scope_label} indexed"),
+                    "Nothing in the index matches this file scope yet",
+                )];
+            }
+
+            return vec![CommandResult::informational(
+                format!("Search {scope_label}"),
+                format!(
+                    "{count} indexed · type a name to search · \"recent\" for latest files"
+                ),
+            )];
+        }
+
+        if trimmed.eq_ignore_ascii_case("recent") {
+            let recent = self
                 .file_index
-                .recent_files_for_scope(file_scope, MAX_FILE_RESULTS);
+                .recent_files_for_scope(file_scope.clone(), MAX_FILE_RESULTS);
+            if recent.is_empty() {
+                return vec![CommandResult::informational(
+                    format!("No {} found", file_scope.label()),
+                    "Nothing in the index matches this file scope yet",
+                )];
+            }
+            return recent;
         }
 
-        if search_text.eq_ignore_ascii_case("recent") {
-            return self.file_index.recent_files(MAX_FILE_RESULTS);
-        }
-
-        let (file_operation, file_query) = parse_file_operation_query(search_text);
+        let (file_operation, file_query) = parse_file_operation_query(trimmed);
         let results = self
             .file_index
-            .search(file_query, file_scope, MAX_FILE_RESULTS);
+            .search(file_query, file_scope.clone(), MAX_FILE_RESULTS);
+
+        if results.is_empty() {
+            return vec![CommandResult::informational(
+                format!("No matches in {}", file_scope.label()),
+                format!(
+                    "Try a different name, or browse with @files / @{}",
+                    scope_extension_hint(&file_scope)
+                ),
+            )];
+        }
 
         if let Some(file_operation) = file_operation {
             return results
@@ -380,6 +427,16 @@ impl CommandRouter {
         }
 
         results
+    }
+}
+
+fn scope_extension_hint(scope: &FileSearchScope) -> String {
+    match scope {
+        FileSearchScope::AllFiles => "files".to_string(),
+        FileSearchScope::Content => "file:content".to_string(),
+        FileSearchScope::Videos => "videos".to_string(),
+        FileSearchScope::Images => "images".to_string(),
+        FileSearchScope::Extension(extension) => extension.clone(),
     }
 }
 
@@ -432,6 +489,10 @@ pub fn is_implicit_file_browse_query(query: &str) -> bool {
         return false;
     }
 
+    if is_calculation_query(trimmed_query) {
+        return false;
+    }
+
     trimmed_query.contains('\\')
         || trimmed_query.contains('/')
         || trimmed_query
@@ -441,6 +502,29 @@ pub fn is_implicit_file_browse_query(query: &str) -> bool {
                     && extension.len() <= 8
                     && extension.chars().all(|character| character.is_ascii_alphanumeric())
             })
+}
+
+fn is_calculation_query(query: &str) -> bool {
+    let context = CalculationContext::from_settings(LauncherSettings::default());
+    if !calculator::evaluate_calculation(query, &context).is_empty() {
+        return true;
+    }
+
+    is_pure_numeric_math_expression(query)
+}
+
+fn is_pure_numeric_math_expression(query: &str) -> bool {
+    let has_digit = query.chars().any(|c| c.is_ascii_digit());
+    let has_math_op = query
+        .chars()
+        .any(|c| matches!(c, '+' | '-' | '*' | '/' | '%' | '^' | '(' | ')'));
+    let only_numeric_math_chars = query.chars().all(|c| {
+        c.is_ascii_digit()
+            || c.is_ascii_whitespace()
+            || matches!(c, '+' | '-' | '*' | '/' | '%' | '^' | '(' | ')' | '.' | ',')
+    });
+
+    has_digit && has_math_op && only_numeric_math_chars
 }
 
 fn clipboard_query_from_text(query: &str) -> Option<&str> {
@@ -523,7 +607,6 @@ enum QueryScope {
     Calendar,
     System,
     Emoji,
-    Destiny,
     CustomCommands,
     Aliases,
     Hotkeys,
@@ -609,7 +692,6 @@ fn query_scope_from_tag(scope_tag: &str) -> Option<QueryScope> {
         "github" | "gh" => Some(QueryScope::GitHub),
         "network" | "net" | "ip" => Some(QueryScope::Network),
         "emoji" | "emojis" | "e" => Some(QueryScope::Emoji),
-        "d2" | "destiny" | "destiny2" | "weapon" | "weapons" => Some(QueryScope::Destiny),
         "custom" | "customs" | "customcommand" | "customcommands" | "command" | "commands" => {
             Some(QueryScope::CustomCommands)
         }
@@ -630,7 +712,14 @@ fn file_scope_from_extension_tag(tag: &str) -> Option<FileSearchScope> {
     let file_scope = scope_from_tag(tag)?;
     match &file_scope {
         FileSearchScope::Extension(extension) => {
-            if extension.len() < 2 || is_command_scope_prefix(tag) {
+            if extension.len() == 1 {
+                // Only well-known single-letter extensions become scopes.
+                // Letters that are command prefixes (@d → @dev, @a → @app) stay free for typing.
+                if !SINGLE_LETTER_FILE_EXTENSIONS.contains(&extension.as_str()) {
+                    return None;
+                }
+            } else if is_command_scope_prefix(tag) {
+                // While typing @cal…, do not treat the partial tag as an extension.
                 return None;
             }
         }
@@ -638,6 +727,10 @@ fn file_scope_from_extension_tag(tag: &str) -> Option<FileSearchScope> {
     }
     Some(file_scope)
 }
+
+/// Single-letter extensions that are useful as `@x` scopes and do not collide with
+/// one-letter command shortcuts or common partial command prefixes.
+const SINGLE_LETTER_FILE_EXTENSIONS: &[&str] = &["c", "h", "r", "s", "o", "m"];
 
 fn is_command_scope_prefix(tag: &str) -> bool {
     if tag.is_empty() {
@@ -658,7 +751,7 @@ const COMMAND_SCOPE_TAGS: &[&str] = &[
     "sys", "control", "controls", "context", "ctx", "now", "media", "spotify", "screenshot",
     "ocr", "capture", "define", "dict", "translate", "weather", "github", "gh", "network", "net",
     "ip", "scoop", "choco", "chocolatey", "colorclip", "emoji", "emojis", "e",
-    "d2", "destiny", "destiny2", "weapon", "weapons", "custom", "customs", "customcommand",
+    "custom", "customs", "customcommand",
     "customcommands", "command", "commands", "alias", "aliases", "hotkey", "hotkeys", "shortcut",
     "shortcuts", "cmd", "terminal", "term", "shell", "dev", "util", "devtools", "dev-tools",
     "git", "repo", "repository", "winget", "pkg", "package", "packages", "install", "kill",
@@ -717,7 +810,6 @@ const SCOPE_HINTS: &[(&str, &str, &str)] = &[
     ("github", "GitHub", "Search issues, PRs, and repos"),
     ("now", "Now playing", "Current media session"),
     ("network", "Network", "IP, ping, and DNS tools"),
-    ("d2", "Destiny 2", "Search weapons and perks"),
     ("files", "Files", "Search indexed user files"),
     ("web", "Web", "Open a web search"),
     ("note", "Notes", "Create and manage Markdown notes"),
@@ -733,7 +825,10 @@ const SCOPE_HINTS: &[(&str, &str, &str)] = &[
     ("alias", "Aliases", "First-word query expansions"),
     ("hotkey", "Hotkeys", "Configured query shortcuts"),
     ("pdf", "PDF files", "Search indexed PDF files"),
-    ("mp4", "MP4 files", "Search indexed video files"),
+    ("mp4", "MP4 files", "Search indexed .mp4 videos"),
+    ("mkv", "MKV files", "Search indexed .mkv videos"),
+    ("videos", "Videos", "Search indexed video files"),
+    ("images", "Images", "Search indexed image files"),
 ];
 
 fn parse_file_operation_query(search_text: &str) -> (Option<FileOperationKind>, &str) {
@@ -1131,6 +1226,27 @@ mod tests {
             file_search_scope_from_query("@pdf invoice"),
             Some(FileSearchScope::Extension("pdf".to_string()))
         );
+        assert_eq!(
+            parse_scoped_query("@mkv show").unwrap().scope,
+            QueryScope::Files(FileSearchScope::Extension("mkv".to_string()))
+        );
+        assert_eq!(
+            parse_scoped_query("@c main").unwrap().scope,
+            QueryScope::Files(FileSearchScope::Extension("c".to_string()))
+        );
+        assert_eq!(
+            parse_scoped_query("@h stdio").unwrap().scope,
+            QueryScope::Files(FileSearchScope::Extension("h".to_string()))
+        );
+        // Single-letter command shortcuts stay commands, not extensions.
+        assert_eq!(
+            parse_scoped_query("@e rocket").unwrap().scope,
+            QueryScope::Emoji
+        );
+        // Partial command tags should not fall through to extension scopes.
+        assert_eq!(file_search_scope_from_query("@d"), None);
+        assert_eq!(file_search_scope_from_query("@ca"), None);
+        assert_eq!(file_search_scope_from_query("@cal"), None);
     }
 
     #[test]
@@ -1186,13 +1302,6 @@ mod tests {
             file_search_scope_from_query("@pdf invoice"),
             Some(FileSearchScope::Extension("pdf".to_string()))
         );
-    }
-
-    #[test]
-    fn destiny_scope_does_not_fall_through_to_files() {
-        let scoped_query = parse_scoped_query("@d2 hammer").unwrap();
-        assert_eq!(scoped_query.scope, QueryScope::Destiny);
-        assert_eq!(scoped_query.search_text, "hammer");
     }
 
     #[test]
@@ -1292,6 +1401,32 @@ mod tests {
         assert_eq!(typed_url_from_query("2 + 2"), None);
         assert_eq!(is_implicit_file_browse_query("report.pdf"), true);
         assert_eq!(is_implicit_file_browse_query("x.com"), false);
+    }
+
+    #[test]
+    fn division_math_is_not_file_browse() {
+        assert!(!is_implicit_file_browse_query("12/3"));
+        assert!(!is_implicit_file_browse_query("12 / 3"));
+        assert!(!is_implicit_file_browse_query("100/5"));
+        assert!(!is_implicit_file_browse_query("(10 + 20) / 5"));
+        assert!(!is_implicit_file_browse_query("12/"));
+        assert!(is_implicit_file_browse_query("report.pdf"));
+        assert!(is_implicit_file_browse_query("src/main.rs"));
+        assert!(is_implicit_file_browse_query("C:/Users"));
+        assert!(is_implicit_file_browse_query("C:\\Users"));
+    }
+
+    #[test]
+    fn search_evaluates_division_math() {
+        let router = CommandRouter::new(
+            LauncherSettings::default(),
+            ApplicationIndex::default(),
+            FileIndex::default(),
+        );
+        let results = router.search("12/3");
+        assert!(!results.is_empty());
+        assert_eq!(results[0].category, CommandCategory::Calculation);
+        assert_eq!(results[0].title, "4");
     }
 
     #[test]

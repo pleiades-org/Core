@@ -19,14 +19,6 @@ pub fn data_subdirectory(name: &str) -> PathBuf {
     data_root().join(name)
 }
 
-pub fn d2_data_dir() -> PathBuf {
-    data_subdirectory("d2")
-}
-
-pub fn d2_debug_log() -> PathBuf {
-    data_root().join("d2_debug.log")
-}
-
 pub fn notes_dir() -> PathBuf {
     data_subdirectory("notes")
 }

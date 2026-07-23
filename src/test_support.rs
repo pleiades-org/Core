@@ -23,6 +23,9 @@ pub fn with_test_data_dir<F, R>(callback: F) -> R
 where
     F: FnOnce(&Path) -> R,
 {
+    static TEST_RUNNER_MUTEX: Mutex<()> = Mutex::new(());
+    let _runner_guard = TEST_RUNNER_MUTEX.lock().expect("test runner lock");
+
     let temp_dir = std::env::temp_dir().join(format!(
         "core-test-{}-{}",
         std::process::id(),

@@ -43,8 +43,18 @@
 ### Built-in Terminal
 Run commands in PowerShell, CMD, Git Bash, WSL, Zsh, or Fish directly inside the launcher with streaming output.
 
-### Customization
-Configure aliases, custom shell commands, and command hotkeys in `%APPDATA%\Core Launcher\config.toml`:
+### Settings
+Open the settings gear in the search bar (or run the built-in Open Settings action) to manage:
+
+- General behavior (hotkey, startup, clipboard, web fallback)
+- Search indexing (apps and files)
+- Appearance (backdrop blur, display position)
+- Shortcuts, expansions (aliases / snippets / quicklinks), and custom commands
+- Advanced locale defaults (timezone, home currency)
+
+You can also edit `%APPDATA%\Core Launcher\config.toml` directly:
+
+
 
 ```toml
 hotkey = "Alt+Space"

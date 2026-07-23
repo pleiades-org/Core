@@ -1,11 +1,10 @@
 //! Windows Credential Manager storage for launcher secrets.
 
-const BUNGIE_API_KEY_TARGET: &str = "CoreLauncher/BungieApiKey";
 const GITHUB_TOKEN_TARGET: &str = "CoreLauncher/GitHubToken";
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use super::{BUNGIE_API_KEY_TARGET, GITHUB_TOKEN_TARGET};
+    use super::GITHUB_TOKEN_TARGET;
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use windows::core::{PCWSTR, PWSTR};
@@ -108,18 +107,6 @@ mod windows_impl {
         }
     }
 
-    pub fn store_bungie_api_key(api_key: &str) -> bool {
-        store_secret(BUNGIE_API_KEY_TARGET, api_key)
-    }
-
-    pub fn load_bungie_api_key() -> Option<String> {
-        load_secret(BUNGIE_API_KEY_TARGET)
-    }
-
-    pub fn delete_bungie_api_key() -> bool {
-        delete_secret(BUNGIE_API_KEY_TARGET)
-    }
-
     pub fn store_github_token(token: &str) -> bool {
         store_secret(GITHUB_TOKEN_TARGET, token)
     }
@@ -134,25 +121,7 @@ mod windows_impl {
 }
 
 #[cfg(target_os = "windows")]
-pub use windows_impl::{
-    delete_bungie_api_key, delete_github_token, load_bungie_api_key, load_github_token,
-    store_bungie_api_key, store_github_token,
-};
-
-#[cfg(not(target_os = "windows"))]
-pub fn store_bungie_api_key(_api_key: &str) -> bool {
-    false
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn load_bungie_api_key() -> Option<String> {
-    None
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn delete_bungie_api_key() -> bool {
-    true
-}
+pub use windows_impl::{delete_github_token, load_github_token, store_github_token};
 
 #[cfg(not(target_os = "windows"))]
 pub fn store_github_token(_token: &str) -> bool {

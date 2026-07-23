@@ -174,7 +174,7 @@ impl TextInput {
         cx.notify();
     }
 
-    /// Replace the entire content (used for committing DIM-style filter "blocks" in @d2).
+    /// Replace the entire content.
     pub fn set_content(&mut self, new_content: impl Into<SharedString>, cx: &mut Context<Self>) {
         let s: SharedString = new_content.into();
         self.content = s.clone();

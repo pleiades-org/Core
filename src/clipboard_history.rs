@@ -36,7 +36,7 @@ pub struct ClipboardHistoryItem {
     pub last_used_at: i64,
 }
 
-#[derive(Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct ClipboardHistoryStore {
     items: Vec<ClipboardHistoryItem>,
 }
@@ -170,11 +170,22 @@ pub fn pin_clipboard_item(item_id: &str) -> io::Result<()> {
 
 pub fn delete_clipboard_item(item_id: &str) -> io::Result<()> {
     let mut store = load_clipboard_history_store();
-    store.items.retain(|item| item.id != item_id);
+    if let Some(position) = store.items.iter().position(|item| item.id == item_id) {
+        let removed_item = store.items.remove(position);
+        if let Some(image_path) = removed_item.image_path {
+            let _ = fs::remove_file(image_path);
+        }
+    }
     save_clipboard_history_store(&store)
 }
 
 pub fn clear_clipboard_history() -> io::Result<()> {
+    let store = load_clipboard_history_store();
+    for item in &store.items {
+        if let Some(image_path) = &item.image_path {
+            let _ = fs::remove_file(image_path);
+        }
+    }
     save_clipboard_history_store(&ClipboardHistoryStore::default())
 }
 
@@ -257,25 +268,37 @@ fn clipboard_home_results(items: Vec<ClipboardHistoryItem>) -> Vec<CommandResult
 }
 
 fn clipboard_result(item: ClipboardHistoryItem) -> CommandResult {
-    let pin_label = if item.is_pinned { "Pinned " } else { "" };
+    let pin_label = if item.is_pinned { "Pinned · " } else { "" };
+    let relative_time = clipboard_item_relative_time(item.last_used_at);
+    let confidence = if item.is_pinned { 92 } else { 84 };
+
     if item.kind == ClipboardItemKind::Image {
         if let Some(image_path) = item.image_path {
-            return CommandResult::feature(
-                preview_text(&item.text),
-                format!("{pin_label}Image clipboard item"),
-                CommandCategory::Clipboard,
-                FeatureAction::CopyClipboardImage { image_path },
-                if item.is_pinned { 92 } else { 84 },
-            );
+            return CommandResult {
+                title: preview_text(&item.text),
+                subtitle: format!("{pin_label}Image · {relative_time}"),
+                copy_text: item.text,
+                explanation: None,
+                icon_path: Some(image_path.clone()),
+                calculation_display: None,
+                category: CommandCategory::Clipboard,
+                action: crate::command::CommandAction::Feature(
+                    FeatureAction::CopyClipboardImage { image_path },
+                ),
+                confidence,
+            };
         }
     }
 
     CommandResult::copyable_feature(
         preview_text(&item.text),
-        format!("{pin_label}{} clipboard item", kind_label(&item.kind)),
+        format!(
+            "{pin_label}{} · {relative_time}",
+            kind_label(&item.kind)
+        ),
         item.text,
         CommandCategory::Clipboard,
-        if item.is_pinned { 92 } else { 84 },
+        confidence,
     )
 }
 
@@ -355,22 +378,37 @@ fn parse_clipboard_operation(search_text: &str) -> Option<ClipboardOperation> {
 
 fn prune_clipboard_history(store: &mut ClipboardHistoryStore) {
     let retention_cutoff = Local::now().timestamp() - FREE_RETENTION_DAYS * 24 * 60 * 60;
-    store
-        .items
-        .retain(|item| item.is_pinned || item.created_at >= retention_cutoff);
-    store
-        .items
-        .sort_by_key(|item| (std::cmp::Reverse(item.is_pinned), -item.last_used_at));
+
+    let mut retained_items = Vec::new();
+    let mut removed_items = Vec::new();
+
+    for item in store.items.drain(..) {
+        if item.is_pinned || item.created_at >= retention_cutoff {
+            retained_items.push(item);
+        } else {
+            removed_items.push(item);
+        }
+    }
+
+    retained_items.sort_by_key(|item| (std::cmp::Reverse(item.is_pinned), -item.last_used_at));
 
     let mut unpinned_item_count = 0;
-    store.items.retain(|item| {
+    for item in retained_items {
         if item.is_pinned {
-            return true;
+            store.items.push(item);
+        } else if unpinned_item_count < MAX_FREE_ITEMS {
+            unpinned_item_count += 1;
+            store.items.push(item);
+        } else {
+            removed_items.push(item);
         }
+    }
 
-        unpinned_item_count += 1;
-        unpinned_item_count <= MAX_FREE_ITEMS
-    });
+    for item in removed_items {
+        if let Some(image_path) = item.image_path {
+            let _ = fs::remove_file(image_path);
+        }
+    }
 }
 
 fn classify_clipboard_text(clipboard_text: &str) -> ClipboardItemKind {
@@ -474,25 +512,41 @@ fn normalize_image_extension(extension: &str) -> String {
     }
 }
 
-fn clipboard_store_cache() -> &'static Mutex<Option<ClipboardHistoryStore>> {
-    static CLIPBOARD_STORE_CACHE: OnceLock<Mutex<Option<ClipboardHistoryStore>>> = OnceLock::new();
+#[derive(Clone, Debug)]
+struct CachedStore {
+    path: PathBuf,
+    mtime: Option<std::time::SystemTime>,
+    store: ClipboardHistoryStore,
+}
+
+fn clipboard_store_cache() -> &'static Mutex<Option<CachedStore>> {
+    static CLIPBOARD_STORE_CACHE: OnceLock<Mutex<Option<CachedStore>>> = OnceLock::new();
     CLIPBOARD_STORE_CACHE.get_or_init(|| Mutex::new(None))
 }
 
 fn load_clipboard_history_store() -> ClipboardHistoryStore {
+    let path = clipboard_history_file_path();
+    let current_mtime = fs::metadata(&path).and_then(|m| m.modified()).ok();
+
     if let Ok(cache) = clipboard_store_cache().lock() {
-        if let Some(store) = cache.as_ref() {
-            return store.clone();
+        if let Some(cached) = cache.as_ref() {
+            if cached.path == path && cached.mtime == current_mtime {
+                return cached.store.clone();
+            }
         }
     }
 
-    let store: ClipboardHistoryStore = fs::read_to_string(clipboard_history_file_path())
+    let store: ClipboardHistoryStore = fs::read_to_string(&path)
         .ok()
         .and_then(|store_text| toml::from_str(&store_text).ok())
         .unwrap_or_default();
 
     if let Ok(mut cache) = clipboard_store_cache().lock() {
-        *cache = Some(store.clone());
+        *cache = Some(CachedStore {
+            path,
+            mtime: current_mtime,
+            store: store.clone(),
+        });
     }
 
     store
@@ -505,13 +559,26 @@ fn save_clipboard_history_store(store: &ClipboardHistoryStore) -> io::Result<()>
     }
 
     let clipboard_history_text = toml::to_string_pretty(store).unwrap_or_default();
-    fs::write(clipboard_history_path, clipboard_history_text)?;
+    fs::write(&clipboard_history_path, clipboard_history_text)?;
+    let new_mtime = fs::metadata(&clipboard_history_path).and_then(|m| m.modified()).ok();
 
     if let Ok(mut cache) = clipboard_store_cache().lock() {
-        *cache = Some(store.clone());
+        *cache = Some(CachedStore {
+            path: clipboard_history_path,
+            mtime: new_mtime,
+            store: store.clone(),
+        });
     }
 
     Ok(())
+}
+
+pub fn clipboard_storage_file_path() -> PathBuf {
+    clipboard_history_file_path()
+}
+
+pub fn clipboard_storage_images_dir() -> PathBuf {
+    crate::paths::clipboard_images_dir()
 }
 
 fn clipboard_history_file_path() -> PathBuf {
@@ -521,6 +588,7 @@ fn clipboard_history_file_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::with_test_data_dir;
 
     #[test]
     fn ignores_secret_like_clipboard_text() {
@@ -530,5 +598,64 @@ mod tests {
     #[test]
     fn classifies_color_clipboard_text() {
         assert_eq!(classify_clipboard_text("#ff00aa"), ClipboardItemKind::Color);
+    }
+
+    #[test]
+    fn records_and_persists_text_to_user_storage() {
+        with_test_data_dir(|test_dir| {
+            invalidate_clipboard_store_cache();
+            let recorded = record_clipboard_text("Hello User Storage Persistence")
+                .expect("record clipboard text");
+            assert!(recorded);
+
+            let storage_file = test_dir.join(CLIPBOARD_HISTORY_FILE_NAME);
+            assert!(storage_file.exists());
+
+            let content = fs::read_to_string(&storage_file).expect("read clipboard storage file");
+            assert!(content.contains("Hello User Storage Persistence"));
+
+            let items = list_clipboard_items("");
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].text, "Hello User Storage Persistence");
+        });
+    }
+
+    #[test]
+    fn records_image_and_deletes_image_file_on_delete() {
+        with_test_data_dir(|_test_dir| {
+            invalidate_clipboard_store_cache();
+            let fake_image_bytes = vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+            let recorded = record_clipboard_image(&fake_image_bytes, "png")
+                .expect("record clipboard image");
+            assert!(recorded);
+
+            let items = list_clipboard_items("");
+            assert_eq!(items.len(), 1);
+            let image_path = items[0].image_path.clone().expect("image path");
+            assert!(image_path.exists());
+
+            delete_clipboard_item(&items[0].id).expect("delete item");
+            assert!(!image_path.exists());
+            assert!(list_clipboard_items("").is_empty());
+        });
+    }
+
+    #[test]
+    fn clears_clipboard_history_and_deletes_stored_images() {
+        with_test_data_dir(|_test_dir| {
+            invalidate_clipboard_store_cache();
+            let fake_image_bytes = vec![0xff, 0xd8, 0xff, 0xe0];
+            record_clipboard_image(&fake_image_bytes, "jpg").expect("record image");
+            record_clipboard_text("sample text").expect("record text");
+
+            let items = list_clipboard_items("");
+            assert_eq!(items.len(), 2);
+            let image_path = items.iter().find_map(|item| item.image_path.clone()).expect("image path");
+            assert!(image_path.exists());
+
+            clear_clipboard_history().expect("clear history");
+            assert!(!image_path.exists());
+            assert!(list_clipboard_items("").is_empty());
+        });
     }
 }

@@ -211,14 +211,6 @@ fn execute_feature_action(
             system_controls::execute_system_control(system_command).map_err(action_io_error)?;
             Ok(ExecutedAction::Nothing)
         }
-        FeatureAction::OpenDestinyWeapon { .. } => {
-            // Panel switch is handled directly in LauncherView::accept_result before reaching the executor.
-            Ok(ExecutedAction::Nothing)
-        }
-        FeatureAction::CommitD2Suggestion { .. } => {
-            // Handled specially in LauncherView accept to mutate the search input (creates visual "block")
-            Ok(ExecutedAction::Nothing)
-        }
     }
 }
 

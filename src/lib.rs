@@ -10,7 +10,6 @@ pub mod command_router;
 pub mod context_actions;
 pub mod color_tools;
 pub mod custom_commands;
-pub mod destiny;
 pub mod dev_tools;
 pub mod emoji_picker;
 pub mod file_index;

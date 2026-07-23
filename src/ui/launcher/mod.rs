@@ -5,10 +5,11 @@ use crate::{
     app_index::ApplicationIndex,
     clipboard_history,
     command::{BuiltInAction, CommandAction, CommandCategory, CommandResult, FeatureAction},
-    destiny,
-
     ui_flow::{track_accept_result, track_execute_result},
-    command_router::{file_search_scope_from_query, CommandRouter},
+    command_router::{
+        clipboard_browse_filter_from_query, file_search_scope_from_query,
+        is_clipboard_browse_query, CommandRouter,
+    },
     launcher_services::{DefaultLauncherServices, LauncherServices},
     custom_commands,
     file_index::FileIndex,
@@ -30,10 +31,10 @@ use crate::{
 };
 use chrono::{DateTime, Local};
 use gpui::{
-    actions, div, prelude::*, px, rgb, rgba, size, App, AssetSource, AsyncWindowContext,
+    actions, div, img, prelude::*, px, rgb, rgba, size, App, AssetSource, AsyncWindowContext,
     Bounds, ClipboardEntry, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding,
-    MouseButton, MouseUpEvent, ScrollHandle, SharedString, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions,
+    MouseButton, MouseUpEvent, ObjectFit, ScrollHandle, SharedString, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
 };
 use std::{
     borrow::Cow,
@@ -45,32 +46,32 @@ use std::{
 
 const FOCUS_LOSS_HIDE_GRACE_PERIOD: Duration = Duration::from_millis(350);
 const SEARCH_DEBOUNCE_DEFAULT_MS: u64 = 28;
-const SEARCH_DEBOUNCE_D2_MS: u64 = 48;
-const D2_ICON_REFRESH_POLL_MS: u64 = 280;
+/// File scopes scan a large index — wait for typing to settle before searching.
+const SEARCH_DEBOUNCE_FILE_MS: u64 = 160;
+/// Fixed browse row height so lists scroll instead of compressing every item into the viewport.
+const BROWSE_ROW_HEIGHT: f32 = 52.;
+const BROWSE_THUMB_SIZE: f32 = 36.;
 const HOME_INPUT_PLACEHOLDER: &str = "";
 pub(super) const SETTINGS_INPUT_PLACEHOLDER: &str = "Filter settings...";
 const TERMINAL_INPUT_PLACEHOLDER: &str = "Terminal command...";
 const MAX_TERMINAL_OUTPUT_LINES: usize = 1_000;
 const MAX_RECENT_RESULTS: usize = 8;
-const APP_ICON_PURPLE: u32 = 0x7c3aed;
 
 enum LauncherPanel {
     Home,
     TerminalShellPicker { command_text: String },
     TerminalSession(TerminalSession),
-    D2WeaponDetail { weapon_hash: u32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(super) enum SettingsSection {
     #[default]
     General,
-    Indexing,
-    Hotkeys,
-    Aliases,
-    CustomCommands,
-    Quicklinks,
-    Snippets,
+    Search,
+    Appearance,
+    Shortcuts,
+    Expansions,
+    Commands,
     Advanced,
 }
 
@@ -78,12 +79,11 @@ impl SettingsSection {
     fn label(self) -> &'static str {
         match self {
             SettingsSection::General => "General",
-            SettingsSection::Indexing => "Indexing",
-            SettingsSection::Hotkeys => "Hotkeys",
-            SettingsSection::Aliases => "Aliases",
-            SettingsSection::CustomCommands => "Commands",
-            SettingsSection::Quicklinks => "Quicklinks",
-            SettingsSection::Snippets => "Snippets",
+            SettingsSection::Search => "Search",
+            SettingsSection::Appearance => "Appearance",
+            SettingsSection::Shortcuts => "Shortcuts",
+            SettingsSection::Expansions => "Expansions",
+            SettingsSection::Commands => "Commands",
             SettingsSection::Advanced => "Advanced",
         }
     }
@@ -92,25 +92,54 @@ impl SettingsSection {
         use crate::ui::lucide_icons::LucideIcon;
         match self {
             SettingsSection::General => LucideIcon::Settings,
-            SettingsSection::Indexing => LucideIcon::Search,
-            SettingsSection::Hotkeys => LucideIcon::Keyboard,
-            SettingsSection::Aliases => LucideIcon::TextQuote,
-            SettingsSection::CustomCommands => LucideIcon::Terminal,
-            SettingsSection::Quicklinks => LucideIcon::Link,
-            SettingsSection::Snippets => LucideIcon::StickyNote,
+            SettingsSection::Search => LucideIcon::Search,
+            SettingsSection::Appearance => LucideIcon::Monitor,
+            SettingsSection::Shortcuts => LucideIcon::Keyboard,
+            SettingsSection::Expansions => LucideIcon::TextQuote,
+            SettingsSection::Commands => LucideIcon::Terminal,
             SettingsSection::Advanced => LucideIcon::FileCog,
+        }
+    }
+
+    fn keywords(self) -> &'static [&'static str] {
+        match self {
+            SettingsSection::General => &[
+                "general",
+                "hotkey",
+                "startup",
+                "clipboard",
+                "web",
+                "launch",
+            ],
+            SettingsSection::Search => &["search", "index", "apps", "files", "start menu"],
+            SettingsSection::Appearance => &["appearance", "blur", "position", "display", "theme"],
+            SettingsSection::Shortcuts => &["shortcuts", "hotkeys", "keyboard", "bindings"],
+            SettingsSection::Expansions => &[
+                "expansions",
+                "aliases",
+                "snippets",
+                "quicklinks",
+                "links",
+            ],
+            SettingsSection::Commands => &["commands", "shell", "custom", "terminal"],
+            SettingsSection::Advanced => &[
+                "advanced",
+                "timezone",
+                "currency",
+                "config",
+                "diagnostics",
+            ],
         }
     }
 
     fn all() -> &'static [SettingsSection] {
         &[
             SettingsSection::General,
-            SettingsSection::Indexing,
-            SettingsSection::Hotkeys,
-            SettingsSection::Aliases,
-            SettingsSection::CustomCommands,
-            SettingsSection::Quicklinks,
-            SettingsSection::Snippets,
+            SettingsSection::Search,
+            SettingsSection::Appearance,
+            SettingsSection::Shortcuts,
+            SettingsSection::Expansions,
+            SettingsSection::Commands,
             SettingsSection::Advanced,
         ]
     }
@@ -153,11 +182,6 @@ struct TerminalOutputLine {
     text: String,
 }
 
-struct SettingsEditorRow {
-    title: String,
-    subtitle: String,
-}
-
 actions!(
     launcher,
     [
@@ -171,8 +195,6 @@ actions!(
         MoveSelectionLast,
         DismissLauncher,
         QuitApplication,
-        StartD2WeaponCompare,
-        ClearD2WeaponCompare,
     ]
 );
 
@@ -184,6 +206,12 @@ pub struct LauncherView {
     alias_expands_to_input: Entity<TextInput>,
     snippet_keyword_input: Entity<TextInput>,
     snippet_body_input: Entity<TextInput>,
+    hotkey_binding_input: Entity<TextInput>,
+    hotkey_query_input: Entity<TextInput>,
+    custom_name_input: Entity<TextInput>,
+    custom_command_input: Entity<TextInput>,
+    timezone_input: Entity<TextInput>,
+    currency_input: Entity<TextInput>,
     focus_handle: FocusHandle,
     services: DefaultLauncherServices,
     settings: LauncherSettings,
@@ -193,6 +221,8 @@ pub struct LauncherView {
     recent_results: Vec<CommandResult>,
     selected_index: usize,
     is_file_search_view: bool,
+    is_clipboard_browse_view: bool,
+    browse_results_scroll_handle: ScrollHandle,
     registered_hotkeys: RegisteredHotkeys,
     is_settings_open: bool,
     settings_section: SettingsSection,
@@ -200,9 +230,6 @@ pub struct LauncherView {
     last_visibility_change_at: Instant,
     last_recorded_clipboard_text: Option<String>,
     last_external_foreground_window: Option<isize>,
-    compare_weapon_hash: Option<u32>,
-    d2_compare_picking: bool,
-    d2_compare_primary_hash: Option<u32>,
     settings_search_query: String,
     search_debounce_generation: u64,
     pending_search_query: Option<String>,
@@ -215,7 +242,6 @@ pub struct LauncherView {
     pub window_handle: Option<WindowHandle<LauncherView>>,
 }
 
-mod destiny_detail;
 mod result_list;
 mod settings_panel;
 
@@ -273,6 +299,22 @@ impl LauncherView {
         let alias_expands_to_input = cx.new(|cx| TextInput::new_compact("Expands to", cx));
         let snippet_keyword_input = cx.new(|cx| TextInput::new_compact("Keyword", cx));
         let snippet_body_input = cx.new(|cx| TextInput::new_compact("Snippet text", cx));
+        let hotkey_binding_input = cx.new(|cx| TextInput::new_compact("Ctrl+Alt+N", cx));
+        let hotkey_query_input = cx.new(|cx| TextInput::new_compact("@note Scratch", cx));
+        let custom_name_input = cx.new(|cx| TextInput::new_compact("Name", cx));
+        let custom_command_input = cx.new(|cx| TextInput::new_compact("Shell command", cx));
+        let timezone_seed = settings.local_timezone.clone();
+        let timezone_input = cx.new(|cx| {
+            let mut input = TextInput::new_compact("Europe/London", cx);
+            input.set_content(timezone_seed, cx);
+            input
+        });
+        let currency_seed = settings.home_currency.clone().unwrap_or_default();
+        let currency_input = cx.new(|cx| {
+            let mut input = TextInput::new_compact("USD", cx);
+            input.set_content(currency_seed, cx);
+            input
+        });
 
         let services = DefaultLauncherServices::new(CommandRouter::new(
             settings.clone(),
@@ -293,6 +335,12 @@ impl LauncherView {
             alias_expands_to_input,
             snippet_keyword_input,
             snippet_body_input,
+            hotkey_binding_input,
+            hotkey_query_input,
+            custom_name_input,
+            custom_command_input,
+            timezone_input,
+            currency_input,
             focus_handle: cx.focus_handle(),
             services,
             settings,
@@ -302,6 +350,8 @@ impl LauncherView {
             recent_results: Vec::new(),
             selected_index: 0,
             is_file_search_view: false,
+            is_clipboard_browse_view: false,
+            browse_results_scroll_handle: ScrollHandle::new(),
             registered_hotkeys,
             is_settings_open: false,
             settings_section: SettingsSection::default(),
@@ -309,9 +359,6 @@ impl LauncherView {
             last_visibility_change_at: Instant::now(),
             last_recorded_clipboard_text: None,
             last_external_foreground_window: None,
-            compare_weapon_hash: None,
-            d2_compare_picking: false,
-            d2_compare_primary_hash: None,
             settings_search_query: String::new(),
             search_debounce_generation: 0,
             pending_search_query: None,
@@ -380,20 +427,41 @@ impl LauncherView {
             return;
         }
 
-        self.pending_search_query = Some(query);
+        // Enter browse chrome immediately for files/clipboard. File index search is debounced.
+        let is_file_query = is_file_search_query(&query);
+        let is_clipboard_query = is_clipboard_browse_query(&query);
+        if is_file_query || is_clipboard_query {
+            self.is_file_search_view = is_file_query;
+            self.is_clipboard_browse_view = is_clipboard_query && !is_file_query;
+            self.panel = LauncherPanel::Home;
+            if is_file_query && file_scope_search_text(&query).is_empty() {
+                self.rebuild_results(&query);
+                self.pending_search_query = None;
+                cx.notify();
+                return;
+            }
+            if is_clipboard_query && !is_file_query {
+                // Clipboard history is small — refresh immediately.
+                self.rebuild_results(&query);
+                self.pending_search_query = None;
+                cx.notify();
+                return;
+            }
+            // Keep previous file results visible while the debounced search settles.
+            cx.notify();
+        } else {
+            self.is_file_search_view = false;
+            self.is_clipboard_browse_view = false;
+        }
+
+        self.pending_search_query = Some(query.clone());
         self.search_debounce_generation = self.search_debounce_generation.wrapping_add(1);
         let generation = self.search_debounce_generation;
-        let delay_ms = self
-            .pending_search_query
-            .as_ref()
-            .map(|pending| {
-                if is_d2_scoped_query(pending) {
-                    SEARCH_DEBOUNCE_D2_MS
-                } else {
-                    SEARCH_DEBOUNCE_DEFAULT_MS
-                }
-            })
-            .unwrap_or(SEARCH_DEBOUNCE_DEFAULT_MS);
+        let delay_ms = if is_file_query {
+            SEARCH_DEBOUNCE_FILE_MS
+        } else {
+            SEARCH_DEBOUNCE_DEFAULT_MS
+        };
 
         cx.spawn(async move |this, cx| {
             cx.background_executor()
@@ -416,26 +484,38 @@ impl LauncherView {
     }
 
     fn apply_search_query(&mut self, query: &str) {
-        self.is_file_search_view = false;
         self.panel = LauncherPanel::Home;
         self.is_file_search_view = is_file_search_query(query);
+        self.is_clipboard_browse_view =
+            is_clipboard_browse_query(query) && !self.is_file_search_view;
         self.rebuild_results(query);
     }
 
-    fn refresh_visible_d2_icons(&mut self, cx: &mut Context<Self>) {
-        let showing_d2 = is_d2_scoped_query(&self.last_built_query)
-            || matches!(self.panel, LauncherPanel::D2WeaponDetail { .. });
-        if !showing_d2 {
+    fn is_browse_view(&self) -> bool {
+        self.is_file_search_view || self.is_clipboard_browse_view
+    }
+
+    /// Keep the selected file/clipboard row in view during keyboard navigation.
+    pub(super) fn ensure_browse_selection_visible(&self) {
+        if !self.is_browse_view() {
             return;
         }
-        if is_d2_scoped_query(&self.last_built_query)
-            && destiny::refresh_result_icons(&mut self.results)
-        {
-            cx.notify();
-            return;
-        }
-        if matches!(self.panel, LauncherPanel::D2WeaponDetail { .. }) {
-            cx.notify();
+
+        let visual_index = self
+            .results
+            .iter()
+            .enumerate()
+            .filter(|(_, result)| {
+                if self.is_file_search_view {
+                    matches!(result.category, CommandCategory::File)
+                } else {
+                    matches!(result.category, CommandCategory::Clipboard)
+                }
+            })
+            .position(|(result_index, _)| result_index == self.selected_index);
+
+        if let Some(visual_index) = visual_index {
+            self.browse_results_scroll_handle.scroll_to_item(visual_index);
         }
     }
 
@@ -594,6 +674,7 @@ impl LauncherView {
         } else {
             self.selected_index = self.selected_index.min(self.results.len() - 1);
         }
+        self.ensure_browse_selection_visible();
     }
 
     fn home_results(&self) -> Vec<CommandResult> {
@@ -607,7 +688,6 @@ impl LauncherView {
     fn accept_action(&mut self, _: &AcceptResult, window: &mut Window, cx: &mut Context<Self>) {
         match &self.panel {
             LauncherPanel::Home => self.accept_selected_result(window, cx),
-            LauncherPanel::D2WeaponDetail { .. } => {}
             LauncherPanel::TerminalShellPicker { .. } => self.accept_selected_shell(cx),
             LauncherPanel::TerminalSession(_) => self.accept_terminal_input(cx),
         }
@@ -673,32 +753,7 @@ impl LauncherView {
         track_accept_result(&selected_result);
         self.record_recent_usage(&selected_result);
 
-        if self.d2_compare_picking {
-            if let CommandAction::Feature(FeatureAction::OpenDestinyWeapon { weapon_hash }) =
-                &selected_result.action
-            {
-                if self.d2_compare_primary_hash != Some(*weapon_hash) {
-                    self.compare_weapon_hash = Some(*weapon_hash);
-                    self.d2_compare_picking = false;
-                    if let Some(primary) = self.d2_compare_primary_hash {
-                        self.panel = LauncherPanel::D2WeaponDetail {
-                            weapon_hash: primary,
-                        };
-                    }
-                    cx.notify();
-                    return;
-                }
-            }
-        }
-
         match &selected_result.action {
-            CommandAction::Feature(FeatureAction::OpenDestinyWeapon { weapon_hash }) => {
-                self.panel = LauncherPanel::D2WeaponDetail {
-                    weapon_hash: *weapon_hash,
-                };
-                cx.notify();
-                return;
-            }
             CommandAction::CopyToClipboard(text) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
                 self.hide_launcher(window, cx);
@@ -869,6 +924,7 @@ impl LauncherView {
         self.settings_search_query.clear();
         self.panel = LauncherPanel::Home;
         self.is_file_search_view = false;
+        self.is_clipboard_browse_view = false;
         self.text_input.update(cx, |text_input, cx| {
             text_input.set_placeholder(HOME_INPUT_PLACEHOLDER, cx);
             text_input.reset(cx);
@@ -1032,13 +1088,11 @@ impl Render for LauncherView {
             .on_action(cx.listener(Self::move_selection_page_down))
             .on_action(cx.listener(Self::move_selection_first))
             .on_action(cx.listener(Self::move_selection_last))
-            .on_action(cx.listener(Self::start_d2_weapon_compare))
-            .on_action(cx.listener(Self::clear_d2_weapon_compare))
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::quit_application))
             .size_full()
-            .bg(rgba(0xa78bfa15)) // border color
-            .p(px(1.))            // 1px padding acts as border thickness
+            .bg(crate::ui::theme::colors::border_glow())
+            .p(px(1.))
             .overflow_hidden()
             .rounded_tl(tl_out)
             .rounded_tr(tr_out)
@@ -1050,7 +1104,7 @@ impl Render for LauncherView {
                     .flex_col()
                     .size_full()
                     .bg(launcher_background_color(&self.settings))
-                    .text_color(rgb(0xffffff))
+                    .text_color(crate::ui::theme::colors::text_primary())
                     .overflow_hidden()
                     .rounded_tl(tl_in)
                     .rounded_tr(tr_in)
@@ -1073,24 +1127,30 @@ impl Render for LauncherView {
                             .child(self.render_search_container(false, cx))
                             .child(self.render_settings_menu(cx))
                             .into_any_element()
-                    } else if self.is_file_search_view && matches!(&self.panel, LauncherPanel::Home) {
+                    } else if self.is_browse_view() && matches!(&self.panel, LauncherPanel::Home) {
+                        let browse_body = if self.is_file_search_view {
+                            self.render_file_results(cx).into_any_element()
+                        } else {
+                            self.render_clipboard_results(cx).into_any_element()
+                        };
                         div()
                             .flex()
                             .flex_col()
-                            .child(self.render_file_results(cx))
-                            .child(self.render_search_container(true, cx))
+                            .flex_1()
+                            .min_h(px(0.))
+                            .child(self.render_search_container(false, cx))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .min_h(px(0.))
+                                    .child(browse_body),
+                            )
                             .into_any_element()
                     } else {
                         let panel = match &self.panel {
                             LauncherPanel::Home => self.render_home_panel(cx).into_any_element(),
-                            LauncherPanel::D2WeaponDetail { weapon_hash } => div()
-                                .key_context("D2WeaponDetail")
-                                .flex()
-                                .flex_col()
-                                .flex_1()
-                                .min_h(px(0.))
-                                .child(self.render_d2_weapon_detail(*weapon_hash, cx))
-                                .into_any_element(),
                             LauncherPanel::TerminalShellPicker { command_text } => self
                                 .render_terminal_shell_picker(command_text, cx)
                                 .into_any_element(),
@@ -1123,43 +1183,45 @@ impl LauncherView {
     fn render_search_container(&self, at_bottom: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let hovered = self.search_bar_hovered;
 
-        let settings_button = if hovered {
-            Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(px(26.))
-                    .rounded_md()
-                    .hover(|style| style.bg(rgba(0xffffff15)).cursor_pointer())
-                    .child(lucide_icons::render_lucide_icon(
-                        LucideIcon::Settings,
-                        14.,
-                        rgb(0x9ca3af),
-                        false,
-                    ))
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(move |launcher, _: &MouseUpEvent, _window, cx| {
-                            if launcher.is_settings_open {
-                                launcher.is_settings_open = false;
-                                launcher.text_input.update(cx, |text_input, cx| {
-                                    text_input.set_placeholder(HOME_INPUT_PLACEHOLDER, cx);
-                                    text_input.reset(cx);
-                                });
-                                launcher.rebuild_results("");
-                                cx.notify();
-                            } else {
-                                launcher.enter_settings_mode(cx);
-                            }
-                        }),
-                    ),
-            )
-        } else {
-            None
-        };
+        let settings_button = div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(26.))
+            .rounded_md()
+            .hover(|style| {
+                style
+                    .bg(crate::ui::theme::surface_overlay_mid())
+                    .cursor_pointer()
+            })
+            .child(lucide_icons::render_lucide_icon(
+                LucideIcon::Settings,
+                14.,
+                if self.is_settings_open {
+                    crate::ui::theme::colors::accent_soft()
+                } else {
+                    crate::ui::theme::colors::text_muted()
+                },
+                false,
+            ))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(move |launcher, _: &MouseUpEvent, _window, cx| {
+                    if launcher.is_settings_open {
+                        launcher.is_settings_open = false;
+                        launcher.text_input.update(cx, |text_input, cx| {
+                            text_input.set_placeholder(HOME_INPUT_PLACEHOLDER, cx);
+                            text_input.reset(cx);
+                        });
+                        launcher.rebuild_results("");
+                        cx.notify();
+                    } else {
+                        launcher.enter_settings_mode(cx);
+                    }
+                }),
+            );
 
-        let hotkey_badge = if !hovered {
+        let hotkey_badge = if !hovered && !self.is_settings_open {
             let hotkey_text = self
                 .registered_hotkeys
                 .launcher
@@ -1175,9 +1237,9 @@ impl LauncherView {
                             .px(px(6.))
                             .py(px(2.))
                             .rounded(px(4.))
-                            .bg(rgba(0xffffff0d))
+                            .bg(crate::ui::theme::surface_overlay_low())
                             .text_size(px(10.))
-                            .text_color(rgb(0x9ca3af))
+                            .text_color(crate::ui::theme::colors::text_muted())
                             .child(hotkey_text),
                     ),
             )
@@ -1213,11 +1275,36 @@ impl LauncherView {
                     .items_center()
                     .gap(px(8.))
                     .children(hotkey_badge)
-                    .children(settings_button),
+                    .child(settings_button),
             )
     }
 
     fn render_file_results(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::ui::theme::{self, colors, type_scale};
+
+        let query = self.text_input.read(cx).content().to_string();
+        let scope = file_search_scope_from_query(&query);
+        let scope_title = scope
+            .as_ref()
+            .map(|scope| scope.short_label())
+            .unwrap_or_else(|| "Files".to_string());
+        let scope_filter = scope
+            .as_ref()
+            .map(|scope| scope.label())
+            .unwrap_or_else(|| "Browse".to_string());
+
+        let file_results = self
+            .results
+            .iter()
+            .enumerate()
+            .filter(|(_, result)| matches!(result.category, CommandCategory::File))
+            .collect::<Vec<_>>();
+        let info_message = self
+            .results
+            .iter()
+            .find(|result| matches!(result.category, CommandCategory::Help))
+            .map(|result| (result.title.clone(), result.subtitle.clone()));
+
         let selected_file_result = self
             .results
             .get(self.selected_index)
@@ -1225,53 +1312,214 @@ impl LauncherView {
 
         div()
             .flex()
-            .gap(px(0.))
-            .px(px(8.))
-            .pt(px(10.))
-            .h(px(360.))
+            .flex_1()
+            .min_h(px(0.))
+            .w_full()
+            .overflow_hidden()
             .child(
                 div()
-                    .w(px(318.))
+                    .w(px(320.))
+                    .flex_none()
                     .h_full()
                     .flex()
                     .flex_col()
-                    .gap(px(6.))
-                    .pr(px(8.))
+                    .min_h(px(0.))
+                    .overflow_hidden()
+                    .border_r_1()
+                    .border_color(theme::border_subtle())
                     .child(
                         div()
-                            .px(px(8.))
-                            .text_size(px(13.))
-                            .text_color(rgb(0xd9d9d9))
-                            .child("Files"),
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .justify_between()
+                            .px(px(14.))
+                            .py(px(10.))
+                            .child(
+                                div()
+                                    .text_size(px(type_scale::BODY_SM))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(colors::text_secondary())
+                                    .child(scope_title),
+                            )
+                            .child(
+                                div()
+                                    .px(px(8.))
+                                    .py(px(3.))
+                                    .rounded_md()
+                                    .bg(theme::surface_overlay_low())
+                                    .text_size(px(type_scale::LABEL))
+                                    .text_color(colors::text_muted())
+                                    .child(scope_filter),
+                            ),
                     )
                     .child(
                         div()
                             .id("file-results-list")
                             .flex()
                             .flex_col()
-                            .gap(px(4.))
-                            .h_full()
+                            .flex_1()
+                            .min_h(px(0.))
+                            .gap(px(2.))
+                            .px(px(8.))
+                            .pb(px(10.))
+                            .overflow_hidden()
                             .overflow_y_scroll()
-                            .children(
-                                self.results
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(_, result)| {
-                                        matches!(result.category, CommandCategory::File)
-                                    })
-                                    .map(|(result_index, result)| {
-                                        self.render_file_result_row(
-                                            result,
-                                            result_index,
-                                            result_index == self.selected_index,
-                                            cx,
-                                        )
-                                    }),
-                            ),
+                            .track_scroll(&self.browse_results_scroll_handle)
+                            .when(file_results.is_empty(), |list| {
+                                let (title, subtitle) = info_message.unwrap_or_else(|| {
+                                    (
+                                        "No files found".to_string(),
+                                        "Try @files, @pdf, @images, or another extension"
+                                            .to_string(),
+                                    )
+                                });
+                                list.child(crate::ui::browse_views::browse_empty_state(
+                                    Some(LucideIcon::FolderOpen),
+                                    title,
+                                    subtitle,
+                                ))
+                            })
+                            .children(file_results.into_iter().map(|(result_index, result)| {
+                                self.render_file_result_row(
+                                    result,
+                                    result_index,
+                                    result_index == self.selected_index,
+                                    cx,
+                                )
+                            })),
                     ),
             )
-            .child(div().w(px(1.)).h_full().bg(rgb(0x171717)))
-            .child(self.render_file_preview(selected_file_result))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .min_h(px(0.))
+                    .h_full()
+                    .overflow_hidden()
+                    .child(self.render_file_preview(selected_file_result)),
+            )
+    }
+
+    fn render_clipboard_results(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::ui::theme::{self, colors, type_scale};
+
+        let query = self.text_input.read(cx).content().to_string();
+        let filter = clipboard_browse_filter_from_query(&query);
+        let filter_label = if filter.trim().is_empty() {
+            "All items".to_string()
+        } else {
+            compact_display_text(&filter, 28)
+        };
+
+        let clipboard_results = self
+            .results
+            .iter()
+            .enumerate()
+            .filter(|(_, result)| matches!(result.category, CommandCategory::Clipboard))
+            .collect::<Vec<_>>();
+        let info_message = self
+            .results
+            .iter()
+            .find(|result| matches!(result.category, CommandCategory::Help))
+            .map(|result| (result.title.clone(), result.subtitle.clone()));
+
+        let selected = self
+            .results
+            .get(self.selected_index)
+            .filter(|result| matches!(result.category, CommandCategory::Clipboard));
+
+        div()
+            .flex()
+            .flex_1()
+            .min_h(px(0.))
+            .w_full()
+            .overflow_hidden()
+            .child(
+                div()
+                    .w(px(320.))
+                    .flex_none()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .min_h(px(0.))
+                    .overflow_hidden()
+                    .border_r_1()
+                    .border_color(theme::border_subtle())
+                    .child(
+                        div()
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .justify_between()
+                            .px(px(14.))
+                            .py(px(10.))
+                            .child(
+                                div()
+                                    .text_size(px(type_scale::BODY_SM))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(colors::text_secondary())
+                                    .child("Clipboard"),
+                            )
+                            .child(
+                                div()
+                                    .px(px(8.))
+                                    .py(px(3.))
+                                    .rounded_md()
+                                    .bg(theme::surface_overlay_low())
+                                    .text_size(px(type_scale::LABEL))
+                                    .text_color(colors::text_muted())
+                                    .child(filter_label),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("clipboard-results-list")
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h(px(0.))
+                            .gap(px(2.))
+                            .px(px(8.))
+                            .pb(px(10.))
+                            .overflow_hidden()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.browse_results_scroll_handle)
+                            .when(clipboard_results.is_empty(), |list| {
+                                let (title, subtitle) = info_message.unwrap_or_else(|| {
+                                    (
+                                        "Clipboard is empty".to_string(),
+                                        "Copy text, links, colors, or images to populate history"
+                                            .to_string(),
+                                    )
+                                });
+                                list.child(crate::ui::browse_views::browse_empty_state(
+                                    Some(LucideIcon::Clipboard),
+                                    title,
+                                    subtitle,
+                                ))
+                            })
+                            .children(clipboard_results.into_iter().map(
+                                |(result_index, result)| {
+                                    self.render_clipboard_result_row(
+                                        result,
+                                        result_index,
+                                        result_index == self.selected_index,
+                                        cx,
+                                    )
+                                },
+                            )),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .min_h(px(0.))
+                    .h_full()
+                    .overflow_hidden()
+                    .child(self.render_clipboard_preview(selected)),
+            )
     }
 
     fn render_file_result_row(
@@ -1281,23 +1529,34 @@ impl LauncherView {
         is_selected: bool,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let title = result.title.clone();
+        use crate::ui::theme::{colors, type_scale};
 
+        let title = result.title.clone();
+        let subtitle = file_path_from_result(result)
+            .and_then(|path| path.parent())
+            .map(format_display_path)
+            .unwrap_or_else(|| result.subtitle.clone());
+
+        // flex_none keeps rows at natural height so the list scrolls instead of compressing items.
         div()
             .id(("file-result-row", result_index))
+            .w_full()
             .flex()
+            .flex_none()
+            .flex_shrink_0()
             .items_center()
-            .gap(px(12.))
+            .gap(px(10.))
+            .h(px(BROWSE_ROW_HEIGHT))
             .px(px(10.))
-            .py(px(9.))
-            .rounded_sm()
+            .rounded_md()
+            .overflow_hidden()
             .bg(result_row_background(is_selected))
             .hover(|style| {
                 let style = style.cursor_pointer();
                 if is_selected {
                     style
                 } else {
-                    style.bg(rgb(0x010101))
+                    style.bg(crate::ui::theme::result_row_hover_background())
                 }
             })
             .on_mouse_up(
@@ -1306,29 +1565,79 @@ impl LauncherView {
                     launcher.accept_mouse_result(result_index, window, cx);
                 }),
             )
-            .child(file_icon_for_result(result, px(28.)))
-            .child(
-                div()
-                    .w_full()
-                    .text_size(px(15.))
-                    .text_color(rgb(0xffffff))
-                    .child(title),
-            )
+            .child(file_thumbnail_for_result(result, BROWSE_THUMB_SIZE))
+            .child(browse_row_text(title, subtitle, type_scale::BODY_LG, colors::text_primary()))
             .into_any_element()
+    }
+
+    fn render_clipboard_result_row(
+        &self,
+        result: &CommandResult,
+        result_index: usize,
+        is_selected: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        use crate::ui::theme::{colors, type_scale};
+
+        let title = result.title.clone();
+        let subtitle = result.subtitle.clone();
+        let leading = clipboard_leading_for_result(result, BROWSE_THUMB_SIZE);
+
+        let mut row = div()
+            .id(("clipboard-result-row", result_index))
+            .w_full()
+            .flex()
+            .flex_none()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(10.))
+            .h(px(BROWSE_ROW_HEIGHT))
+            .px(px(10.))
+            .rounded_md()
+            .overflow_hidden()
+            .bg(result_row_background(is_selected))
+            .hover(|style| {
+                let style = style.cursor_pointer();
+                if is_selected {
+                    style
+                } else {
+                    style.bg(crate::ui::theme::result_row_hover_background())
+                }
+            })
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(move |launcher, _: &MouseUpEvent, window, cx| {
+                    launcher.accept_mouse_result(result_index, window, cx);
+                }),
+            );
+
+        if let Some(leading) = leading {
+            row = row.child(leading);
+        }
+
+        row.child(browse_row_text(
+            title,
+            subtitle,
+            type_scale::BODY_LG,
+            colors::text_primary(),
+        ))
+        .into_any_element()
     }
 
     fn render_file_preview(
         &self,
         selected_file_result: Option<&CommandResult>,
     ) -> gpui::AnyElement {
+        use crate::ui::theme::{self, colors, type_scale};
+
         let Some(selected_file_result) = selected_file_result else {
             return div()
                 .flex()
+                .flex_1()
                 .items_center()
                 .justify_center()
                 .h_full()
-                .w_full()
-                .text_color(rgb(0x9ca3af))
+                .text_color(colors::text_muted())
                 .child("No file selected")
                 .into_any_element();
         };
@@ -1361,31 +1670,37 @@ impl LauncherView {
         div()
             .flex()
             .flex_col()
-            .gap(px(16.))
+            .flex_1()
+            .min_w(px(0.))
             .h_full()
-            .w_full()
             .px(px(16.))
-            .py(px(8.))
-            .rounded_sm()
-            .bg(rgb(0x050505))
-            .border_1()
-            .border_color(rgb(0x171717))
+            .py(px(12.))
+            .gap(px(14.))
             .child(
                 div()
                     .flex()
+                    .flex_none()
+                    .items_center()
                     .justify_center()
-                    .pt(px(4.))
-                    .child(large_file_preview_icon(selected_file_result)),
+                    .w_full()
+                    .h(px(180.))
+                    .rounded_md()
+                    .bg(theme::elevated_surface_background())
+                    .border_1()
+                    .border_color(theme::card_border())
+                    .overflow_hidden()
+                    .child(large_file_preview(selected_file_result)),
             )
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(8.))
+                    .gap(px(4.))
                     .child(
                         div()
-                            .text_size(px(13.))
-                            .text_color(rgb(0xd9d9d9))
+                            .text_size(px(type_scale::BODY_SM))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(colors::text_muted())
                             .child("Metadata"),
                     )
                     .child(file_metadata_row("Name", file_name))
@@ -1394,6 +1709,114 @@ impl LauncherView {
                     .child(file_metadata_row("Size", file_size))
                     .child(file_metadata_row("Created", created_at))
                     .child(file_metadata_row("Modified", modified_at)),
+            )
+            .into_any_element()
+    }
+
+    fn render_clipboard_preview(
+        &self,
+        selected: Option<&CommandResult>,
+    ) -> gpui::AnyElement {
+        use crate::ui::theme::{self, colors, type_scale};
+
+        let Some(selected) = selected else {
+            return div()
+                .flex()
+                .flex_1()
+                .items_center()
+                .justify_center()
+                .h_full()
+                .text_color(colors::text_muted())
+                .child("No item selected")
+                .into_any_element();
+        };
+
+        let image_path = clipboard_image_path(selected);
+        let has_image = image_path.is_some();
+        let color = clipboard_history::parse_clipboard_color(&selected.copy_text)
+            .or_else(|| clipboard_history::parse_clipboard_color(&selected.title));
+
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w(px(0.))
+            .h_full()
+            .px(px(16.))
+            .py(px(12.))
+            .gap(px(14.))
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .w_full()
+                    .h(px(180.))
+                    .rounded_md()
+                    .bg(theme::elevated_surface_background())
+                    .border_1()
+                    .border_color(theme::card_border())
+                    .overflow_hidden()
+                    .child(if let Some(path) = image_path {
+                        img(path)
+                            .w_full()
+                            .h_full()
+                            .object_fit(ObjectFit::Contain)
+                            .with_fallback(|| {
+                                extension_badge("IMG", 120., 44.).into_any_element()
+                            })
+                            .into_any_element()
+                    } else if let Some(color_value) = color {
+                        div()
+                            .size_full()
+                            .bg(rgb(color_value))
+                            .into_any_element()
+                    } else {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(8.))
+                            .size_full()
+                            .px(px(16.))
+                            .child(lucide_icons::render_lucide_icon(
+                                LucideIcon::Clipboard,
+                                28.,
+                                colors::text_faint(),
+                                false,
+                            ))
+                            .child(
+                                div()
+                                    .text_size(px(type_scale::BODY_SM))
+                                    .text_color(colors::text_muted())
+                                    .text_center()
+                                    .child(compact_display_text(&selected.title, 72)),
+                            )
+                            .into_any_element()
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .text_size(px(type_scale::BODY_SM))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(colors::text_muted())
+                            .child("Details"),
+                    )
+                    .child(file_metadata_row("Preview", selected.title.clone()))
+                    .child(file_metadata_row("Kind", selected.subtitle.clone()))
+                    .when(!selected.copy_text.is_empty() && !has_image, |details| {
+                        details.child(file_metadata_row(
+                            "Content",
+                            compact_display_text(&selected.copy_text, 96),
+                        ))
+                    }),
             )
             .into_any_element()
     }
@@ -1608,11 +2031,7 @@ fn window_background_appearance(settings: &LauncherSettings) -> WindowBackground
 }
 
 fn launcher_background_color(settings: &LauncherSettings) -> gpui::Rgba {
-    if settings.backdrop_blur_enabled {
-        rgba(0x000000dd)
-    } else {
-        rgb(0x000000)
-    }
+    crate::ui::theme::launcher_background(settings.backdrop_blur_enabled)
 }
 
 fn image_format_extension(image_format: gpui::ImageFormat) -> &'static str {
@@ -1640,8 +2059,6 @@ pub fn run() {
             start_tray_icon_event_loop(tray_event_sender);
 
             let settings = LauncherSettings::load_or_create();
-            let bungie_api_key = settings.bungie_api_key.clone();
-            std::thread::spawn(move || destiny::preload_runtime_data(bungie_api_key));
             let _ = set_launch_at_startup(settings.launch_at_startup);
             let application_index = if settings.index_start_menu {
                 ApplicationIndex::load_from_windows_start_menu()
@@ -1702,7 +2119,6 @@ pub fn run() {
                     start_focus_loss_poll(window_handle, window, cx);
                     start_terminal_event_poll(window_handle, window, cx);
                     start_productivity_event_poll(window_handle, window, cx);
-                    start_d2_icon_refresh_poll(window_handle, window, cx);
                 })
                 .ok();
 
@@ -1710,51 +2126,172 @@ pub fn run() {
         });
 }
 
-fn file_icon_for_result(result: &CommandResult, icon_size: gpui::Pixels) -> gpui::AnyElement {
-    let extension_label = file_path_from_result(result)
-        .and_then(|path| path.extension())
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.to_uppercase())
-        .filter(|extension| !extension.is_empty())
-        .unwrap_or_else(|| "FILE".to_string());
+fn browse_row_text(
+    title: String,
+    subtitle: String,
+    title_size: f32,
+    title_color: gpui::Rgba,
+) -> gpui::Div {
+    use crate::ui::theme::{colors, type_scale};
 
     div()
-        .size(icon_size)
+        .flex()
+        .flex_col()
+        .justify_center()
+        .gap(px(2.))
+        .min_w(px(0.))
+        .flex_1()
+        .overflow_hidden()
+        .child(
+            div()
+                .w_full()
+                .min_w(px(0.))
+                .overflow_hidden()
+                .truncate()
+                .text_size(px(title_size))
+                .text_color(title_color)
+                .child(title),
+        )
+        .child(
+            div()
+                .w_full()
+                .min_w(px(0.))
+                .overflow_hidden()
+                .truncate()
+                .text_size(px(type_scale::LABEL))
+                .text_color(colors::text_faint())
+                .child(subtitle),
+        )
+}
+
+fn clipped_thumbnail(size: f32, child: gpui::AnyElement) -> gpui::AnyElement {
+    div()
+        .size(px(size))
+        .flex_none()
+        .rounded_md()
+        .overflow_hidden()
+        .child(child)
+        .into_any_element()
+}
+
+fn file_thumbnail_for_result(result: &CommandResult, size: f32) -> gpui::AnyElement {
+    if let Some(path) = file_path_from_result(result).filter(|path| path_is_image(path)) {
+        let fallback_label = extension_label_for_path(path);
+        return clipped_thumbnail(
+            size,
+            img(path.clone())
+                .size(px(size))
+                .object_fit(ObjectFit::Cover)
+                .with_fallback(move || {
+                    extension_badge(&fallback_label, size, 9.).into_any_element()
+                })
+                .into_any_element(),
+        );
+    }
+
+    let label = file_path_from_result(result)
+        .map(|path| extension_label_for_path(path))
+        .unwrap_or_else(|| "FILE".to_string());
+    extension_badge(&label, size, if label.len() > 3 { 8. } else { 10. }).into_any_element()
+}
+
+fn large_file_preview(result: &CommandResult) -> gpui::AnyElement {
+    if let Some(path) = file_path_from_result(result).filter(|path| path_is_image(path)) {
+        let fallback_label = extension_label_for_path(path);
+        return img(path.clone())
+            .w_full()
+            .h_full()
+            .object_fit(ObjectFit::Contain)
+            .with_fallback(move || extension_badge(&fallback_label, 120., 36.).into_any_element())
+            .into_any_element();
+    }
+
+    let label = file_path_from_result(result)
+        .map(|path| extension_label_for_path(path))
+        .unwrap_or_else(|| "FILE".to_string());
+    extension_badge(&label, 120., if label.len() > 4 { 28. } else { 36. }).into_any_element()
+}
+
+/// Leading media for clipboard rows. Text/link items intentionally have no icon.
+fn clipboard_leading_for_result(result: &CommandResult, size: f32) -> Option<gpui::AnyElement> {
+    if let Some(path) = clipboard_image_path(result) {
+        return Some(clipped_thumbnail(
+            size,
+            img(path)
+                .size(px(size))
+                .object_fit(ObjectFit::Cover)
+                .with_fallback(move || extension_badge("IMG", size, 9.).into_any_element())
+                .into_any_element(),
+        ));
+    }
+
+    if let Some(color_value) = clipboard_history::parse_clipboard_color(&result.copy_text)
+        .or_else(|| clipboard_history::parse_clipboard_color(&result.title))
+    {
+        return Some(
+            div()
+                .size(px(size))
+                .flex_none()
+                .rounded_md()
+                .border_1()
+                .border_color(crate::ui::theme::border_subtle())
+                .bg(rgb(color_value))
+                .into_any_element(),
+        );
+    }
+
+    None
+}
+
+fn extension_badge(label: &str, size: f32, text_size: f32) -> gpui::Div {
+    div()
+        .size(px(size))
         .flex_none()
         .flex()
         .items_center()
         .justify_center()
-        .rounded_sm()
+        .rounded_md()
         .bg(rgb(0xf4f4f5))
         .text_color(rgb(0x155e75))
-        .text_size(px(if extension_label.len() > 3 { 8. } else { 10. }))
-        .child(extension_label)
-        .into_any_element()
+        .text_size(px(text_size))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .child(label.to_string())
 }
 
-fn large_file_preview_icon(result: &CommandResult) -> gpui::AnyElement {
-    let extension_label = file_path_from_result(result)
-        .and_then(|path| path.extension())
+fn extension_label_for_path(path: &Path) -> String {
+    path.extension()
         .and_then(|extension| extension.to_str())
         .map(|extension| extension.to_uppercase())
         .filter(|extension| !extension.is_empty())
-        .unwrap_or_else(|| "FILE".to_string());
+        .unwrap_or_else(|| "FILE".to_string())
+}
 
-    div()
-        .w(px(138.))
-        .h(px(158.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_sm()
-        .bg(rgb(0xf4f4f5))
-        .text_color(rgb(0x155e75))
-        .text_size(px(if extension_label.len() > 4 { 34. } else { 44. }))
-        .child(extension_label)
-        .into_any_element()
+fn path_is_image(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "ico" | "tif" | "tiff" | "heic"
+                    | "avif"
+            )
+        })
+}
+
+fn clipboard_image_path(result: &CommandResult) -> Option<PathBuf> {
+    if let Some(path) = result.icon_path.clone() {
+        return Some(path);
+    }
+    match &result.action {
+        CommandAction::Feature(FeatureAction::CopyClipboardImage { image_path }) => {
+            Some(image_path.clone())
+        }
+        _ => None,
+    }
 }
 
 fn file_metadata_row(label: &'static str, value: String) -> gpui::Div {
+    use crate::ui::theme::{colors, type_scale};
     let compact_value = compact_display_text(&value, 48);
 
     div()
@@ -1762,17 +2299,18 @@ fn file_metadata_row(label: &'static str, value: String) -> gpui::Div {
         .justify_between()
         .items_center()
         .gap(px(12.))
-        .py(px(6.))
+        .py(px(5.))
         .child(
             div()
-                .text_size(px(12.))
-                .text_color(rgb(0xd9d9d9))
+                .text_size(px(type_scale::BODY_SM))
+                .text_color(colors::text_faint())
                 .child(label),
         )
         .child(
             div()
-                .text_size(px(13.))
-                .text_color(rgb(0xffffff))
+                .text_size(px(type_scale::BODY_SM))
+                .text_color(colors::text_secondary())
+                .text_align(gpui::TextAlign::Right)
                 .child(compact_value),
         )
 }
@@ -1831,6 +2369,17 @@ fn format_system_time(system_time: SystemTime) -> String {
 
 fn is_file_search_query(query: &str) -> bool {
     file_search_scope_from_query(query).is_some()
+        || crate::command_router::is_implicit_file_browse_query(query)
+}
+
+/// Text after an `@files` / `@mp4` / … scope tag. Empty means "idle, waiting for input".
+fn file_scope_search_text(query: &str) -> String {
+    let Some(scope_query) = query.trim().strip_prefix('@') else {
+        return query.trim().to_string();
+    };
+    let mut parts = scope_query.split_whitespace();
+    let _scope_tag = parts.next();
+    parts.collect::<Vec<_>>().join(" ")
 }
 
 fn fallback_icon(label: &'static str, color: gpui::Rgba) -> gpui::Div {
@@ -1863,8 +2412,6 @@ fn bind_launcher_keys(cx: &mut App) {
         KeyBinding::new("pagedown", MoveSelectionPageDown, None),
         KeyBinding::new("ctrl-home", MoveSelectionFirst, None),
         KeyBinding::new("ctrl-end", MoveSelectionLast, None),
-        KeyBinding::new("c", StartD2WeaponCompare, Some("D2WeaponDetail")),
-        KeyBinding::new("x", ClearD2WeaponCompare, Some("D2WeaponDetail")),
         KeyBinding::new("escape", DismissLauncher, None),
         KeyBinding::new("ctrl-q", QuitApplication, None),
         KeyBinding::new("cmd-q", QuitApplication, None),
@@ -2070,32 +2617,6 @@ fn start_terminal_event_poll(
 
                 let _ = window_handle.update(async_window_cx, |launcher, _window, cx| {
                     launcher.poll_terminal_events(cx);
-                });
-            }
-        })
-        .detach();
-}
-
-fn is_d2_scoped_query(query: &str) -> bool {
-    let trimmed = query.trim();
-    trimmed.eq_ignore_ascii_case("@d2") || trimmed.to_ascii_lowercase().starts_with("@d2 ")
-}
-
-fn start_d2_icon_refresh_poll(
-    window_handle: WindowHandle<LauncherView>,
-    window: &mut Window,
-    cx: &mut Context<LauncherView>,
-) {
-    window
-        .spawn(cx, async move |async_window_cx: &mut AsyncWindowContext| {
-            loop {
-                async_window_cx
-                    .background_executor()
-                    .timer(Duration::from_millis(D2_ICON_REFRESH_POLL_MS))
-                    .await;
-
-                let _ = window_handle.update(async_window_cx, |launcher, _window, cx| {
-                    launcher.refresh_visible_d2_icons(cx);
                 });
             }
         })

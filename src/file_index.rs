@@ -2,7 +2,13 @@ use crate::{
     command::CommandResult,
     search_text::{normalize_file_search_text, take_top_scored},
 };
-use std::{collections::HashSet, env, fs, path::{Component, Path, PathBuf}};
+use std::{
+    collections::{BinaryHeap, HashMap, HashSet},
+    cmp::Ordering,
+    env, fs,
+    path::{Component, Path, PathBuf},
+    time::SystemTime,
+};
 use walkdir::WalkDir;
 
 const MAX_INDEX_DEPTH: usize = 16;
@@ -21,13 +27,17 @@ pub struct FileEntry {
     pub name: String,
     pub normalized_name: String,
     pub normalized_stem: String,
+    pub normalized_path: String,
     pub path: PathBuf,
     pub extension: Option<String>,
+    pub modified_at: Option<SystemTime>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct FileIndex {
     files: Vec<FileEntry>,
+    /// Extension → indices into `files` for fast `@mp4` / `@pdf` style scopes.
+    by_extension: HashMap<String, Vec<usize>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,12 +49,34 @@ pub enum FileSearchScope {
     Extension(String),
 }
 
+impl FileSearchScope {
+    pub fn label(&self) -> String {
+        match self {
+            FileSearchScope::AllFiles => "All files".to_string(),
+            FileSearchScope::Content => "File contents".to_string(),
+            FileSearchScope::Videos => "Videos".to_string(),
+            FileSearchScope::Images => "Images".to_string(),
+            FileSearchScope::Extension(extension) => format!(".{extension}"),
+        }
+    }
+
+    pub fn short_label(&self) -> String {
+        match self {
+            FileSearchScope::AllFiles => "Files".to_string(),
+            FileSearchScope::Content => "Content".to_string(),
+            FileSearchScope::Videos => "Videos".to_string(),
+            FileSearchScope::Images => "Images".to_string(),
+            FileSearchScope::Extension(extension) => format!(".{extension}"),
+        }
+    }
+}
+
 impl FileIndex {
     pub fn load_from_user_directories() -> Self {
         let mut files = Vec::new();
         let mut seen_paths = HashSet::new();
 
-        for search_directory in user_search_directories() {
+        'outer: for search_directory in user_search_directories() {
             if !search_directory.exists() {
                 continue;
             }
@@ -57,7 +89,7 @@ impl FileIndex {
                 .filter(|entry| entry.file_type().is_file())
             {
                 if files.len() >= MAX_INDEXED_FILES {
-                    break;
+                    break 'outer;
                 }
 
                 let path = directory_entry.path().to_path_buf();
@@ -65,33 +97,14 @@ impl FileIndex {
                     continue;
                 }
 
-                let Some(name) = path
-                    .file_name()
-                    .and_then(|file_name| file_name.to_str())
-                    .map(ToOwned::to_owned)
-                else {
-                    continue;
-                };
-
-                let extension = normalized_extension(&path);
-                let normalized_name = normalize_file_search_text(&name);
-                let normalized_stem = path
-                    .file_stem()
-                    .and_then(|file_stem| file_stem.to_str())
-                    .map(normalize_file_search_text)
-                    .unwrap_or_else(|| normalized_name.clone());
-                files.push(FileEntry {
-                    name,
-                    normalized_name,
-                    normalized_stem,
-                    path,
-                    extension,
-                });
+                if let Some(entry) = file_entry_from_path(path) {
+                    files.push(entry);
+                }
             }
         }
 
         files.sort_by_key(|file| file.name.to_lowercase());
-        Self { files }
+        Self::from_entries(files)
     }
 
     pub fn search(
@@ -111,9 +124,10 @@ impl FileIndex {
         let first_word = query_words.first().copied();
 
         take_top_scored(
-            self.files.iter().filter(|file| {
-                file_matches_scope(file, &scope)
-                    && first_word.is_none_or(|word| file.normalized_name.contains(word))
+            self.candidates_for_scope(&scope).filter(|file| {
+                first_word.is_none_or(|word| {
+                    file.normalized_name.contains(word) || file.normalized_path.contains(word)
+                })
             }),
             |file| score_file(file, &normalized_query, &scope, &query_words),
             max_results,
@@ -135,9 +149,55 @@ impl FileIndex {
         self.files.len()
     }
 
+    pub fn scoped_file_count(&self, scope: &FileSearchScope) -> usize {
+        match scope {
+            FileSearchScope::AllFiles => self.files.len(),
+            FileSearchScope::Extension(extension) => self
+                .by_extension
+                .get(extension.as_str())
+                .map(|indices| indices.len())
+                .unwrap_or(0),
+            FileSearchScope::Videos => VIDEO_EXTENSIONS
+                .iter()
+                .map(|extension| {
+                    self.by_extension
+                        .get(*extension)
+                        .map(|indices| indices.len())
+                        .unwrap_or(0)
+                })
+                .sum(),
+            FileSearchScope::Images => IMAGE_EXTENSIONS
+                .iter()
+                .map(|extension| {
+                    self.by_extension
+                        .get(*extension)
+                        .map(|indices| indices.len())
+                        .unwrap_or(0)
+                })
+                .sum(),
+            FileSearchScope::Content => self
+                .files
+                .iter()
+                .filter(|file| file_matches_scope(file, scope))
+                .count(),
+        }
+    }
+
     #[doc(hidden)]
     pub fn from_entries(files: Vec<FileEntry>) -> Self {
-        Self { files }
+        let mut by_extension: HashMap<String, Vec<usize>> = HashMap::new();
+        for (index, file) in files.iter().enumerate() {
+            if let Some(extension) = file.extension.as_ref() {
+                by_extension
+                    .entry(extension.clone())
+                    .or_default()
+                    .push(index);
+            }
+        }
+        Self {
+            files,
+            by_extension,
+        }
     }
 
     pub fn recent_files(&self, max_results: usize) -> Vec<CommandResult> {
@@ -149,32 +209,109 @@ impl FileIndex {
         scope: FileSearchScope,
         max_results: usize,
     ) -> Vec<CommandResult> {
-        let mut files_with_modified_times = self
-            .files
-            .iter()
-            .filter(|file| file_matches_scope(file, &scope))
-            .filter_map(|file| {
-                let modified_at = fs::metadata(&file.path).ok()?.modified().ok()?;
-                Some((modified_at, file))
-            })
-            .collect::<Vec<_>>();
+        if max_results == 0 {
+            return Vec::new();
+        }
 
-        files_with_modified_times.sort_by_key(|(modified_at, file)| {
-            (std::cmp::Reverse(*modified_at), file.name.to_lowercase())
-        });
+        // Min-heap (via Reverse) of the current top-N most recent files.
+        // Top of the heap is the oldest member of the top-N and is the eviction candidate.
+        let mut heap: BinaryHeap<std::cmp::Reverse<RecentHeapItem<'_>>> = BinaryHeap::new();
+        for file in self.candidates_for_scope(&scope) {
+            let item = RecentHeapItem { file };
+            if heap.len() < max_results {
+                heap.push(std::cmp::Reverse(item));
+                continue;
+            }
+            if let Some(std::cmp::Reverse(oldest)) = heap.peek() {
+                if item.cmp(oldest) == Ordering::Greater {
+                    heap.pop();
+                    heap.push(std::cmp::Reverse(item));
+                }
+            }
+        }
 
-        files_with_modified_times
+        let mut files = heap
             .into_iter()
-            .take(max_results)
-            .map(|(_, file)| {
+            .map(|std::cmp::Reverse(item)| item)
+            .collect::<Vec<_>>();
+        files.sort_by(|left, right| right.cmp(left));
+        files
+            .into_iter()
+            .map(|item| {
                 CommandResult::file(
-                    file.name.clone(),
-                    file.path.display().to_string(),
-                    file.path.clone(),
+                    item.file.name.clone(),
+                    item.file.path.display().to_string(),
+                    item.file.path.clone(),
                     82,
                 )
             })
             .collect()
+    }
+
+    fn candidates_for_scope<'a>(
+        &'a self,
+        scope: &FileSearchScope,
+    ) -> Box<dyn Iterator<Item = &'a FileEntry> + 'a> {
+        match scope {
+            FileSearchScope::AllFiles => Box::new(self.files.iter()),
+            FileSearchScope::Extension(extension) => {
+                let indices = self
+                    .by_extension
+                    .get(extension.as_str())
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                Box::new(indices.iter().filter_map(|&index| self.files.get(index)))
+            }
+            FileSearchScope::Videos => Box::new(VIDEO_EXTENSIONS.iter().flat_map(|extension| {
+                self.by_extension
+                    .get(*extension)
+                    .into_iter()
+                    .flat_map(|indices| indices.iter().filter_map(|&index| self.files.get(index)))
+            })),
+            FileSearchScope::Images => Box::new(IMAGE_EXTENSIONS.iter().flat_map(|extension| {
+                self.by_extension
+                    .get(*extension)
+                    .into_iter()
+                    .flat_map(|indices| indices.iter().filter_map(|&index| self.files.get(index)))
+            })),
+            FileSearchScope::Content => Box::new(
+                self.files
+                    .iter()
+                    .filter(|file| file_matches_scope(file, &FileSearchScope::Content)),
+            ),
+        }
+    }
+}
+
+/// Orders files by recency: newer > older. Used with `Reverse` for a min-heap of top-N.
+#[derive(Clone, Copy)]
+struct RecentHeapItem<'a> {
+    file: &'a FileEntry,
+}
+
+impl PartialEq for RecentHeapItem<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.file.modified_at == other.file.modified_at && self.file.name == other.file.name
+    }
+}
+
+impl Eq for RecentHeapItem<'_> {}
+
+impl PartialOrd for RecentHeapItem<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RecentHeapItem<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self.file.modified_at, other.file.modified_at) {
+            (Some(left), Some(right)) => left.cmp(&right),
+            (Some(_), None) => Ordering::Greater,
+            (None, Some(_)) => Ordering::Less,
+            (None, None) => Ordering::Equal,
+        }
+        .then_with(|| self.file.name.cmp(&other.file.name))
     }
 }
 
@@ -189,9 +326,16 @@ pub fn scope_from_tag(tag: &str) -> Option<FileSearchScope> {
         return normalized_tag.split('/').find_map(scope_from_tag);
     }
 
+    // Support @file:content and tags that keep an internal colon.
+    if let Some((prefix, suffix)) = normalized_tag.split_once(':') {
+        if matches!(prefix, "file" | "files") && matches!(suffix, "content" | "contents") {
+            return Some(FileSearchScope::Content);
+        }
+    }
+
     match normalized_tag.as_str() {
         "file" | "files" => Some(FileSearchScope::AllFiles),
-        "file:content" | "files:content" | "content" => Some(FileSearchScope::Content),
+        "file:content" | "files:content" | "content" | "contents" => Some(FileSearchScope::Content),
         "video" | "videos" | "vid" | "vids" => Some(FileSearchScope::Videos),
         "image" | "images" | "picture" | "pictures" | "pic" | "pics" => {
             Some(FileSearchScope::Images)
@@ -203,6 +347,35 @@ pub fn scope_from_tag(tag: &str) -> Option<FileSearchScope> {
     }
 }
 
+fn file_entry_from_path(path: PathBuf) -> Option<FileEntry> {
+    let name = path
+        .file_name()
+        .and_then(|file_name| file_name.to_str())
+        .map(ToOwned::to_owned)?;
+
+    let extension = normalized_extension(&path);
+    let normalized_name = normalize_file_search_text(&name);
+    let normalized_stem = path
+        .file_stem()
+        .and_then(|file_stem| file_stem.to_str())
+        .map(normalize_file_search_text)
+        .unwrap_or_else(|| normalized_name.clone());
+    let normalized_path = normalize_file_search_text(&path.display().to_string());
+    let modified_at = fs::metadata(&path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok());
+
+    Some(FileEntry {
+        name,
+        normalized_name,
+        normalized_stem,
+        normalized_path,
+        path,
+        extension,
+        modified_at,
+    })
+}
+
 fn user_search_directories() -> Vec<PathBuf> {
     let user_profile = env::var_os("USERPROFILE").map(PathBuf::from);
     let system_drive = env::var_os("SystemDrive").map(PathBuf::from);
@@ -210,11 +383,7 @@ fn user_search_directories() -> Vec<PathBuf> {
     let mut seen_directories = HashSet::new();
 
     if let Some(user_profile) = user_profile.as_ref() {
-        push_unique_directory(
-            &mut directories,
-            &mut seen_directories,
-            user_profile.clone(),
-        );
+        // Prefer known user folders first so common files index early and rank more usefully.
         for directory_name in [
             "Desktop",
             "Documents",
@@ -229,6 +398,11 @@ fn user_search_directories() -> Vec<PathBuf> {
                 user_profile.join(directory_name),
             );
         }
+        push_unique_directory(
+            &mut directories,
+            &mut seen_directories,
+            user_profile.clone(),
+        );
     }
 
     for drive_root in existing_drive_roots() {
@@ -330,24 +504,29 @@ fn score_file(
 
     let searchable_name = &file.normalized_name;
     let searchable_stem = &file.normalized_stem;
+    let searchable_path = &file.normalized_path;
 
     if searchable_stem == normalized_query || searchable_name == normalized_query {
-        return Some(92);
+        return Some(94);
     }
 
     if searchable_stem.starts_with(normalized_query)
         || searchable_name.starts_with(normalized_query)
     {
-        return Some(84);
+        return Some(88);
     }
 
     if searchable_stem.contains(normalized_query) || searchable_name.contains(normalized_query) {
-        return Some(76);
+        return Some(80);
     }
 
-    let all_words_match = query_words
-        .iter()
-        .all(|query_word| searchable_name.contains(query_word));
+    if searchable_path.contains(normalized_query) {
+        return Some(74);
+    }
+
+    let all_words_match = query_words.iter().all(|query_word| {
+        searchable_name.contains(query_word) || searchable_path.contains(query_word)
+    });
 
     all_words_match.then_some(68)
 }
@@ -428,6 +607,25 @@ fn is_probable_file_extension(tag: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    fn sample_entry(name: &str, extension: Option<&str>, modified_secs: u64) -> FileEntry {
+        let path = PathBuf::from(format!("C:\\docs\\{name}"));
+        FileEntry {
+            name: name.to_string(),
+            normalized_name: normalize_file_search_text(name),
+            normalized_stem: normalize_file_search_text(
+                Path::new(name)
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or(name),
+            ),
+            normalized_path: normalize_file_search_text(&path.display().to_string()),
+            path,
+            extension: extension.map(str::to_string),
+            modified_at: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(modified_secs)),
+        }
+    }
 
     #[test]
     fn parses_common_file_scope_aliases() {
@@ -445,6 +643,60 @@ mod tests {
         assert_eq!(
             scope_from_tag("@c"),
             Some(FileSearchScope::Extension("c".to_string()))
+        );
+        assert_eq!(
+            scope_from_tag("file:content"),
+            Some(FileSearchScope::Content)
+        );
+        assert_eq!(scope_from_tag("files"), Some(FileSearchScope::AllFiles));
+    }
+
+    #[test]
+    fn extension_scope_filters_results() {
+        let index = FileIndex::from_entries(vec![
+            sample_entry("notes.pdf", Some("pdf"), 30),
+            sample_entry("photo.png", Some("png"), 20),
+            sample_entry("report.pdf", Some("pdf"), 10),
+        ]);
+
+        let results = index.search("note", FileSearchScope::Extension("pdf".to_string()), 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "notes.pdf");
+    }
+
+    #[test]
+    fn empty_extension_scope_returns_recent_for_that_extension() {
+        let index = FileIndex::from_entries(vec![
+            sample_entry("old.pdf", Some("pdf"), 10),
+            sample_entry("new.pdf", Some("pdf"), 40),
+            sample_entry("photo.png", Some("png"), 50),
+        ]);
+
+        let results =
+            index.recent_files_for_scope(FileSearchScope::Extension("pdf".to_string()), 10);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "new.pdf");
+        assert_eq!(results[1].title, "old.pdf");
+    }
+
+    #[test]
+    fn search_matches_path_fragments() {
+        let index = FileIndex::from_entries(vec![sample_entry("budget.xlsx", Some("xlsx"), 10)]);
+        let results = index.search("docs budget", FileSearchScope::AllFiles, 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "budget.xlsx");
+    }
+
+    #[test]
+    fn scoped_file_count_respects_extension() {
+        let index = FileIndex::from_entries(vec![
+            sample_entry("a.pdf", Some("pdf"), 1),
+            sample_entry("b.pdf", Some("pdf"), 2),
+            sample_entry("c.txt", Some("txt"), 3),
+        ]);
+        assert_eq!(
+            index.scoped_file_count(&FileSearchScope::Extension("pdf".to_string())),
+            2
         );
     }
 }

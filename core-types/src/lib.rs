@@ -18,7 +18,6 @@ pub enum CommandCategory {
     Calendar,
     System,
     Emoji,
-    Destiny,
     Context,
     DevTools,
     Git,
@@ -173,14 +172,6 @@ pub enum FeatureAction {
     },
     WindowManagement(WindowManagementCommand),
     SystemControl(SystemControlCommand),
-    /// Open the rich Destiny 2 weapon detail view (perks, Clarity, favoriting + roles)
-    OpenDestinyWeapon {
-        weapon_hash: u32,
-    },
-    /// Commit a completed DIM-style filter token into the @d2 search bar (for pill/block behavior)
-    CommitD2Suggestion {
-        suggestion: String,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

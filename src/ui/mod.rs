@@ -8,3 +8,4 @@ pub mod text_area;
 pub mod text_editing;
 pub mod text_input;
 pub mod text_widget;
+pub mod theme;
