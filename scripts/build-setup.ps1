@@ -89,12 +89,21 @@ function Copy-SetupPayload {
     Copy-Item -LiteralPath $uninstallScriptPath -Destination (Join-Path $StagingDirectory 'uninstall-core-launcher.ps1') -Force
     Copy-Item -LiteralPath $appIconPath -Destination (Join-Path $StagingDirectory 'app_icon.ico') -Force
 
+    # Interactive install: hidden PowerShell window, then launch the app.
     $vbsRunnerPath = Join-Path $StagingDirectory 'run-installer.vbs'
     $vbsContent = @"
 Set WshShell = CreateObject("WScript.Shell")
 WshShell.Run "powershell.exe -WindowStyle Hidden -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""install-core-launcher.ps1""", 0, True
 "@
     Set-Content -LiteralPath $vbsRunnerPath -Value $vbsContent -Encoding ASCII
+
+    # Silent install: same install path, but skip launching Core after install.
+    $vbsSilentRunnerPath = Join-Path $StagingDirectory 'run-installer-silent.vbs'
+    $vbsSilentContent = @"
+Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run "powershell.exe -WindowStyle Hidden -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""install-core-launcher.ps1"" -Silent", 0, True
+"@
+    Set-Content -LiteralPath $vbsSilentRunnerPath -Value $vbsSilentContent -Encoding ASCII
 }
 
 function New-IExpressSedFile {
@@ -145,13 +154,14 @@ TargetName=$setupExecutableFullPath
 FriendlyName=Core Launcher Setup
 AppLaunched=wscript.exe run-installer.vbs
 PostInstallCmd=<None>
-AdminQuietInstCmd=
-UserQuietInstCmd=
+AdminQuietInstCmd=wscript.exe run-installer-silent.vbs
+UserQuietInstCmd=wscript.exe run-installer-silent.vbs
 FILE0="core.exe"
 FILE1="install-core-launcher.ps1"
 FILE2="uninstall-core-launcher.ps1"
 FILE3="app_icon.ico"
 FILE4="run-installer.vbs"
+FILE5="run-installer-silent.vbs"
 
 [SourceFiles]
 SourceFiles0=$stagingDirectoryForSed
@@ -162,6 +172,7 @@ SourceFiles0=$stagingDirectoryForSed
 %FILE2%=
 %FILE3%=
 %FILE4%=
+%FILE5%=
 "@
 
     Set-Content -LiteralPath $SedPath -Value $sedText -Encoding ASCII

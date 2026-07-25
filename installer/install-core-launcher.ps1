@@ -1,3 +1,9 @@
+[CmdletBinding()]
+param(
+    # Quiet mode for unattended installs: no app launch after install.
+    [switch]$Silent
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -71,6 +77,10 @@ function New-LauncherShortcut {
 }
 
 function Install-CoreLauncher {
+    param(
+        [switch]$Silent
+    )
+
     $localAppDataPath = Get-RequiredEnvironmentPath -VariableName 'LOCALAPPDATA'
     $roamingAppDataPath = Get-RequiredEnvironmentPath -VariableName 'APPDATA'
     $sourceExecutablePath = Join-Path $PSScriptRoot 'core.exe'
@@ -111,7 +121,9 @@ function Install-CoreLauncher {
         -Description 'Start Core Launcher when Windows signs in' `
         -IconPath $shortcutIconPath
 
-    Start-Process -FilePath $installedExecutablePath -WorkingDirectory $installDirectory
+    if (-not $Silent) {
+        Start-Process -FilePath $installedExecutablePath -WorkingDirectory $installDirectory
+    }
 }
 
-Install-CoreLauncher
+Install-CoreLauncher -Silent:$Silent

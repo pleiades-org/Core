@@ -98,6 +98,16 @@ powershell -ExecutionPolicy Bypass -File scripts\build-setup.ps1
 ```
 Then run `dist\CoreLauncherSetup.exe` to install for the current user with automatic startup.
 
+#### Silent install
+Unattended install (no success dialog, does not launch Core after install):
+```powershell
+.\dist\CoreLauncherSetup.exe /Q:U
+```
+Admin quiet mode:
+```powershell
+.\dist\CoreLauncherSetup.exe /Q:A
+```
+
 ---
 
 ## Usage
