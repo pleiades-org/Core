@@ -38,7 +38,10 @@ mod footer;
 mod output;
 mod paint;
 mod power;
+mod preference_changes;
 mod settings_bridge;
+
+use preference_changes::PreferenceChanges;
 
 pub use footer::CLOCK_TIMER;
 pub use output::OUTPUT_ID;
@@ -113,17 +116,19 @@ pub struct View {
     dpi: Cell<u32>,
     width: Cell<i32>,
     height: Cell<i32>,
+    /// The window's screen rectangle from the last layout, which corner clipping needs.
+    bounds: Cell<RECT>,
     layout_key: Cell<LayoutKey>,
     rows: RefCell<Vec<DisplayRow>>,
 }
 
 impl View {
-    pub fn create(parent: HWND, instance: HINSTANCE) -> windows::core::Result<Self> {
-        let screen = window_placement::screen_area(parent)?;
-        let background = unsafe { CreateSolidBrush(theme::BACKGROUND) };
-        if background.0.is_null() {
-            return Err(windows::core::Error::from_win32());
-        }
+    /// Starts with the saved preferences, so the first appearance is applied and laid out once.
+    pub fn create(
+        parent: HWND,
+        instance: HINSTANCE,
+        preferences: Preferences,
+    ) -> windows::core::Result<Self> {
         let console = console::ConsoleView::create(parent, instance, OUTPUT_ID)?;
         let mut view = Self {
             input: HWND::default(),
@@ -142,11 +147,11 @@ impl View {
             power_menu: OnceCell::new(),
             parent,
             settings_button: HWND::default(),
-            background: Cell::new(background),
+            background: Cell::new(HBRUSH::default()),
             selected_brush: Cell::new(HBRUSH::default()),
             palette: Cell::new(Palette::default()),
-            preferences: Cell::new(Preferences::default()),
-            screen: Cell::new(screen),
+            preferences: Cell::new(preferences),
+            screen: Cell::new(window_placement::ScreenArea::default()),
             monitor_reference: Cell::new(parent),
             settings_page: OnceCell::new(),
             settings_open: Cell::new(false),
@@ -154,6 +159,7 @@ impl View {
             dpi: Cell::new(96),
             width: Cell::new(0),
             height: Cell::new(0),
+            bounds: Cell::new(RECT::default()),
             layout_key: Cell::new(LayoutKey::STALE),
             rows: RefCell::new(Vec::new()),
         };
@@ -233,12 +239,22 @@ impl View {
                 Some(LPARAM(cue.as_ptr() as isize)),
             );
         }
-        view.set_dpi(unsafe { GetDpiForWindow(parent) })?;
-        view.apply_preferences(Preferences::default())?;
+        view.set_fonts(unsafe { GetDpiForWindow(parent) })?;
+        // Saved preferences that cannot be applied (a display that cannot be read) must not
+        // stop Core from starting; it opens with the defaults instead.
+        if let Err(error) = view.apply(preferences, PreferenceChanges::ALL) {
+            eprintln!("Could not apply saved appearance: {error}");
+            view.apply(Preferences::default(), PreferenceChanges::ALL)?;
+        }
         Ok(view)
     }
 
     pub fn set_dpi(&self, dpi: u32) -> windows::core::Result<()> {
+        self.set_fonts(dpi)?;
+        self.layout()
+    }
+
+    fn set_fonts(&self, dpi: u32) -> windows::core::Result<()> {
         let fonts = Fonts::create(dpi)?;
         let previous = self.fonts.replace(fonts);
         self.dpi.set(dpi);
@@ -267,7 +283,7 @@ impl View {
             );
         }
         previous.delete();
-        self.layout()
+        Ok(())
     }
 
     fn layout(&self) -> windows::core::Result<()> {
@@ -346,6 +362,7 @@ impl View {
         let client_height = bounds.bottom - bounds.top;
         self.width.set(client_width);
         self.height.set(client_height);
+        self.bounds.set(bounds);
         let search = SearchLayout::new(client_width, client_height, dpi);
         unsafe {
             SendMessageW(
@@ -363,12 +380,7 @@ impl View {
                 bounds.bottom - bounds.top,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             )?;
-            window_placement::clip_to_edges(
-                self.parent,
-                bounds,
-                self.screen.get().edges(spacing),
-                scale(preferences.corner_radius.logical(), dpi),
-            )?;
+            self.clip()?;
             if settings_open {
                 self.settings_page
                     .get()
@@ -419,75 +431,102 @@ impl View {
         }
     }
 
+    /// Updates only what differs from the current preferences.
     pub fn apply_preferences(&self, preferences: Preferences) -> windows::core::Result<()> {
-        let palette = Palette::for_background(preferences.background);
-        let background = unsafe { CreateSolidBrush(palette.background) };
-        if background.0.is_null() {
-            return Err(windows::core::Error::from_win32());
-        }
-        let selected = unsafe { CreateSolidBrush(palette.selected) };
-        if selected.0.is_null() {
-            unsafe {
-                let _ = DeleteObject(background.into());
+        self.apply(
+            preferences,
+            PreferenceChanges::between(self.preferences.get(), preferences),
+        )
+    }
+
+    fn apply(
+        &self,
+        preferences: Preferences,
+        changes: PreferenceChanges,
+    ) -> windows::core::Result<()> {
+        if changes.palette {
+            let palette = Palette::for_background(preferences.background);
+            let background = unsafe { CreateSolidBrush(palette.background) };
+            if background.0.is_null() {
+                return Err(windows::core::Error::from_win32());
             }
-            return Err(windows::core::Error::from_win32());
-        }
-        for old in [
-            self.background.replace(background),
-            self.selected_brush.replace(selected),
-        ] {
-            if !old.0.is_null() {
+            let selected = unsafe { CreateSolidBrush(palette.selected) };
+            if selected.0.is_null() {
                 unsafe {
-                    let _ = DeleteObject(old.into());
+                    let _ = DeleteObject(background.into());
+                }
+                return Err(windows::core::Error::from_win32());
+            }
+            for old in [
+                self.background.replace(background),
+                self.selected_brush.replace(selected),
+            ] {
+                if !old.0.is_null() {
+                    unsafe {
+                        let _ = DeleteObject(old.into());
+                    }
                 }
             }
+            self.palette.set(palette);
+            self.console.set_palette(palette);
         }
-        self.palette.set(palette);
-        self.console.set_palette(palette);
         self.preferences.set(preferences);
-        // Dark scroll bars for the command output on dark backgrounds.
-        let theme = if palette.is_dark() {
-            w!("DarkMode_Explorer")
-        } else {
-            w!("Explorer")
-        };
-        unsafe {
-            let _ = SetWindowTheme(self.output, theme, PCWSTR::null());
+        if changes.theme {
+            let palette = self.palette.get();
+            // Dark scroll bars for the command output on dark backgrounds.
+            let theme = if palette.is_dark() {
+                w!("DarkMode_Explorer")
+            } else {
+                w!("Explorer")
+            };
+            unsafe {
+                let _ = SetWindowTheme(self.output, theme, PCWSTR::null());
+            }
+            if let Some(page) = self.settings_page.get() {
+                page.apply_theme(palette);
+            }
         }
-        if let Some(page) = self.settings_page.get() {
-            page.apply_theme(palette);
+        if changes.screen {
+            self.screen.set(super::displays::screen_area(
+                preferences.display,
+                self.monitor_reference.get(),
+            )?);
         }
-        self.screen.set(super::displays::screen_area(
-            preferences.display,
-            self.monitor_reference.get(),
-        )?);
-        self.invalidate_layout();
-        self.layout()?;
-        unsafe {
-            let _ = RedrawWindow(
-                Some(self.parent),
-                None,
-                None,
-                RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE,
-            );
+        if changes.layout {
+            self.invalidate_layout();
+            self.layout()?;
+        } else if changes.corners {
+            // Rounding changes neither the window's size nor any control's position.
+            self.clip()?;
+            unsafe {
+                let _ = InvalidateRect(Some(self.parent), None, false);
+            }
+        }
+        if changes.palette {
+            // Controls take their colors from the brushes, so every one repaints.
+            unsafe {
+                let _ = RedrawWindow(
+                    Some(self.parent),
+                    None,
+                    None,
+                    RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE,
+                );
+            }
         }
         Ok(())
     }
 
-    pub fn preview_preferences(&self, preferences: Preferences) -> windows::core::Result<()> {
-        if self.preferences.get() != preferences {
-            return self.apply_preferences(preferences);
-        }
-        // Table edits only need repainting; avoid recreating brushes and repositioning every control.
-        unsafe {
-            let _ = RedrawWindow(
-                Some(self.parent),
-                None,
-                None,
-                RDW_INVALIDATE | RDW_ALLCHILDREN,
-            );
-        }
-        Ok(())
+    /// Rounds the corners that float; corners touching a screen edge stay square.
+    fn clip(&self) -> windows::core::Result<()> {
+        let dpi = self.dpi.get();
+        let preferences = self.preferences.get();
+        let spacing = scale(preferences.edge_spacing.logical(), dpi);
+        window_placement::clip_to_edges(
+            self.parent,
+            self.bounds.get(),
+            self.screen.get().edges(spacing),
+            scale(preferences.corner_radius.logical(), dpi),
+        )
     }
 
     /// Runs each time Core is shown. Everything is repainted: controls that were moved or

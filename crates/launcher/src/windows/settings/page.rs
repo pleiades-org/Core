@@ -1,7 +1,7 @@
 use super::{
     control_style::{self, Look},
     layout::{self, *},
-    quicklink_table::QuicklinkTable,
+    quicklink_table::{QuicklinkTable, TableEdit},
     slider::{self, SlideStage},
     BackgroundColor, CornerRadius, DisplayChoice, EdgeSpacing, Preferences, ScreenPosition,
     SettingsDocument, Shortcut,
@@ -97,6 +97,8 @@ enum Section {
 
 pub enum SettingsAction {
     Edit,
+    /// Typing in the quicklink table, with the check of the edited row alone.
+    EditQuicklink(Result<(), String>),
     Change,
     Retry,
     Done,
@@ -424,11 +426,10 @@ impl SettingsPage {
         if matches!(identifier, RADIUS_ID | SPACING_ID) {
             return self.slide(identifier, SlideStage::from_code(notification));
         }
-        if let Some(typing) = self.quicklinks.edit(identifier, notification) {
-            return if typing {
-                SettingsAction::Edit
-            } else {
-                SettingsAction::Change
+        if let Some(edit) = self.quicklinks.edit(identifier, notification) {
+            return match edit {
+                TableEdit::Typed(row) => SettingsAction::EditQuicklink(row),
+                TableEdit::Removed => SettingsAction::Change,
             };
         }
         if matches!(identifier, COLOR_ID | SHORTCUT_ID) && notification == EN_CHANGE {
@@ -695,8 +696,12 @@ impl SettingsPage {
         }
     }
 
+    /// Unchanged text is not set again, so typing does not repaint or re-announce the status.
     pub fn status(&self, message: &str) {
-        self.set_text(self.control(STATUS_ID), message);
+        let control = self.control(STATUS_ID);
+        if control_text(control) != message {
+            self.set_text(control, message);
+        }
     }
 
     fn set_text(&self, control: HWND, text: &str) {
@@ -724,14 +729,15 @@ impl SettingsPage {
             self.dpi.set(dpi);
             Some(self.fonts.replace(fonts))
         };
-        let placed = self.place_controls(dpi);
+        let placed = self.place_controls(dpi, retired.is_some());
         if let Some(fonts) = retired {
             fonts.delete();
         }
         placed
     }
 
-    fn place_controls(&self, dpi: u32) -> windows::core::Result<()> {
+    /// Fonts are sent only when they were recreated for a new DPI; the controls then repaint.
+    fn place_controls(&self, dpi: u32, new_fonts: bool) -> windows::core::Result<()> {
         let fonts = self.fonts.get();
         let content_left = layout::CONTENT_LEFT;
         let content_width = layout::CONTENT_RIGHT - content_left;
@@ -823,30 +829,32 @@ impl SettingsPage {
                 }
             };
             unsafe {
-                let font = if matches!(
-                    *identifier,
-                    COLOR_ID
-                        | COLOR_LABEL_ID
-                        | POSITION_LABEL_ID
-                        | SHORTCUT_ID
-                        | SHORTCUT_LABEL_ID
-                        | DISPLAY_LABEL_ID
-                        | COMMANDS_LABEL_ID
-                        | DISPLAY_ID
-                        | SHELL_ID
-                        | RADIUS_LABEL_ID
-                        | SPACING_LABEL_ID
-                ) {
-                    fonts.title
-                } else {
-                    fonts.detail
-                };
-                SendMessageW(
-                    *control,
-                    WM_SETFONT,
-                    Some(WPARAM(font.0 as usize)),
-                    Some(LPARAM(0)),
-                );
+                if new_fonts {
+                    let font = if matches!(
+                        *identifier,
+                        COLOR_ID
+                            | COLOR_LABEL_ID
+                            | POSITION_LABEL_ID
+                            | SHORTCUT_ID
+                            | SHORTCUT_LABEL_ID
+                            | DISPLAY_LABEL_ID
+                            | COMMANDS_LABEL_ID
+                            | DISPLAY_ID
+                            | SHELL_ID
+                            | RADIUS_LABEL_ID
+                            | SPACING_LABEL_ID
+                    ) {
+                        fonts.title
+                    } else {
+                        fonts.detail
+                    };
+                    SendMessageW(
+                        *control,
+                        WM_SETFONT,
+                        Some(WPARAM(font.0 as usize)),
+                        Some(LPARAM(0)),
+                    );
+                }
                 SetWindowPos(
                     *control,
                     None,
@@ -856,9 +864,12 @@ impl SettingsPage {
                     scale(height, dpi),
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 )?;
+                if new_fonts {
+                    let _ = InvalidateRect(Some(*control), None, true);
+                }
             }
         }
-        self.quicklinks.layout(dpi, fonts)?;
+        self.quicklinks.layout(dpi, fonts, new_fonts)?;
         Ok(())
     }
 

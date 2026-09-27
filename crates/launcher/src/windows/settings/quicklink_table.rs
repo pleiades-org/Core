@@ -27,6 +27,9 @@ pub const FIRST_CELL_ID: usize = 300;
 pub const SCROLL_ID: usize = 320;
 const VISIBLE_ROWS: usize = 4;
 const ROW_HEIGHT: i32 = 48;
+/// Top-left of the first row's field backgrounds, in 96-DPI pixels.
+const TABLE_LEFT: i32 = 208;
+const TABLE_TOP: i32 = 136;
 
 #[derive(Clone, Default)]
 struct DraftRow {
@@ -34,12 +37,34 @@ struct DraftRow {
     name: String,
 }
 
+impl DraftRow {
+    fn is_blank(&self) -> bool {
+        self.link.trim().is_empty() && self.name.trim().is_empty()
+    }
+
+    /// Whether the row shows its remove button.
+    fn has_text(&self) -> bool {
+        !self.name.is_empty() || !self.link.is_empty()
+    }
+}
+
+/// What an edit in the table did.
+pub enum TableEdit {
+    /// A field's text changed. Only the edited row is checked; the whole table is checked
+    /// when the typing pause saves it.
+    Typed(Result<(), String>),
+    Removed,
+}
+
 pub struct QuicklinkTable {
+    parent: HWND,
     rows: RefCell<Vec<DraftRow>>,
     controls: Vec<[HWND; 3]>,
     scrollbar: HWND,
     offset: Cell<usize>,
     visible: Cell<bool>,
+    /// The settings page's DPI from its last layout.
+    dpi: Cell<u32>,
 }
 
 pub fn is_edit(identifier: usize) -> bool {
@@ -50,11 +75,13 @@ pub fn is_edit(identifier: usize) -> bool {
 impl QuicklinkTable {
     pub fn create(parent: HWND, instance: HINSTANCE) -> windows::core::Result<Self> {
         let mut table = Self {
+            parent,
             rows: RefCell::new(vec![DraftRow::default()]),
             controls: Vec::new(),
             scrollbar: HWND::default(),
             offset: Cell::new(0),
             visible: Cell::new(false),
+            dpi: Cell::new(96),
         };
         for row in 0..VISIBLE_ROWS {
             let mut controls = [HWND::default(); 3];
@@ -132,26 +159,10 @@ impl QuicklinkTable {
     }
 
     pub fn draft(&self) -> Result<Arc<[Quicklink]>, String> {
-        let mut entries = Vec::new();
-        let mut names = HashSet::new();
-        for (index, row) in self.rows.borrow().iter().enumerate() {
-            if row.link.trim().is_empty() && row.name.trim().is_empty() {
-                continue;
-            }
-            let entry = Quicklink::new(&row.name, &row.link)
-                .map_err(|error| format!("Row {}: {error}", index + 1))?;
-            if !names.insert(entry.name.to_lowercase()) {
-                return Err(format!("Row {}: choose a unique name.", index + 1));
-            }
-            if entries.len() == MAX_QUICKLINKS {
-                return Err("You can save up to 1000 quicklinks.".into());
-            }
-            entries.push(entry);
-        }
-        Ok(entries.into())
+        draft_rows(&self.rows.borrow())
     }
 
-    pub fn edit(&self, identifier: usize, notification: u32) -> Option<bool> {
+    pub fn edit(&self, identifier: usize, notification: u32) -> Option<TableEdit> {
         let slot = identifier.checked_sub(FIRST_CELL_ID)?;
         if slot >= VISIBLE_ROWS * 3 {
             return None;
@@ -162,6 +173,8 @@ impl QuicklinkTable {
         if row_index >= rows.len() {
             return None;
         }
+        let count = rows.len();
+        let had_text = rows[row_index].has_text();
         if column == 2 && notification == BN_CLICKED {
             rows.remove(row_index);
         } else if column != 2 && notification == EN_CHANGE {
@@ -180,6 +193,13 @@ impl QuicklinkTable {
         {
             rows.push(DraftRow::default());
         }
+        let edit = if column == 2 {
+            TableEdit::Removed
+        } else {
+            TableEdit::Typed(check_row(&rows, row_index))
+        };
+        // Typing that adds no row and shows or hides no remove button changes nothing drawn.
+        let redraw = column == 2 || rows.len() != count || rows[row_index].has_text() != had_text;
         drop(rows);
         if column == 2 {
             self.offset
@@ -188,10 +208,32 @@ impl QuicklinkTable {
             unsafe {
                 let _ = SetFocus(Some(self.controls[0][0]));
             }
-        } else {
+        } else if redraw {
             self.show(self.visible.get());
         }
-        Some(column != 2)
+        if redraw {
+            self.invalidate();
+        }
+        Some(edit)
+    }
+
+    /// Repaints the rows, their remove buttons and the scrollbar, and nothing else.
+    fn invalidate(&self) {
+        let area = super::layout::area(
+            TABLE_LEFT,
+            TABLE_TOP,
+            super::layout::CONTENT_RIGHT - TABLE_LEFT,
+            VISIBLE_ROWS as i32 * ROW_HEIGHT,
+            self.dpi.get(),
+        );
+        unsafe {
+            let _ = RedrawWindow(
+                Some(self.parent),
+                Some(&area),
+                None,
+                RDW_INVALIDATE | RDW_ALLCHILDREN,
+            );
+        }
     }
 
     fn maximum_offset(&self) -> usize {
@@ -316,17 +358,21 @@ impl QuicklinkTable {
         self.controls[0][0]
     }
 
-    pub fn layout(&self, dpi: u32, fonts: Fonts) -> windows::core::Result<()> {
+    /// `new_fonts`: the fonts were recreated for a new DPI, so the fields take and draw them.
+    pub fn layout(&self, dpi: u32, fonts: Fonts, new_fonts: bool) -> windows::core::Result<()> {
+        self.dpi.set(dpi);
         for (slot, controls) in self.controls.iter().enumerate() {
             for (column, control) in controls.iter().enumerate() {
                 let (left, width) = [(216, 292), (536, 216), (766, 28)][column];
                 unsafe {
-                    SendMessageW(
-                        *control,
-                        WM_SETFONT,
-                        Some(WPARAM(fonts.detail.0 as usize)),
-                        Some(LPARAM(0)),
-                    );
+                    if new_fonts {
+                        SendMessageW(
+                            *control,
+                            WM_SETFONT,
+                            Some(WPARAM(fonts.detail.0 as usize)),
+                            Some(LPARAM(0)),
+                        );
+                    }
                     SetWindowPos(
                         *control,
                         None,
@@ -336,6 +382,9 @@ impl QuicklinkTable {
                         scale(28, dpi),
                         SWP_NOZORDER | SWP_NOACTIVATE,
                     )?;
+                    if new_fonts {
+                        let _ = InvalidateRect(Some(*control), None, true);
+                    }
                 }
             }
         }
@@ -401,6 +450,53 @@ impl QuicklinkTable {
     }
 }
 
+/// Every completed row, in order; the first problem is reported by its row number.
+fn draft_rows(rows: &[DraftRow]) -> Result<Arc<[Quicklink]>, String> {
+    let mut entries = Vec::new();
+    let mut names = HashSet::new();
+    for (index, row) in rows.iter().enumerate() {
+        if row.is_blank() {
+            continue;
+        }
+        let entry = entry(rows, index)?;
+        if !names.insert(entry.name.to_lowercase()) {
+            return Err(format!("Row {}: choose a unique name.", index + 1));
+        }
+        if entries.len() == MAX_QUICKLINKS {
+            return Err("You can save up to 1000 quicklinks.".into());
+        }
+        entries.push(entry);
+    }
+    Ok(entries.into())
+}
+
+fn entry(rows: &[DraftRow], index: usize) -> Result<Quicklink, String> {
+    let row = &rows[index];
+    Quicklink::new(&row.name, &row.link).map_err(|error| format!("Row {}: {error}", index + 1))
+}
+
+/// The edited row's own problem, with the message `draft_rows` gives for it: an invalid link or
+/// name, or a name another row already uses (reported on the second row with that name).
+fn check_row(rows: &[DraftRow], index: usize) -> Result<(), String> {
+    if rows[index].is_blank() {
+        return Ok(());
+    }
+    let name = entry(rows, index)?.name.to_lowercase();
+    let mut same_name = rows.iter().enumerate().filter(|(_, row)| {
+        let other = row.name.trim();
+        !row.is_blank()
+            && if other.is_ascii() && name.is_ascii() {
+                other.eq_ignore_ascii_case(&name)
+            } else {
+                other.to_lowercase() == name
+            }
+    });
+    if let (Some(_), Some((second, _))) = (same_name.next(), same_name.next()) {
+        return Err(format!("Row {}: choose a unique name.", second + 1));
+    }
+    Ok(())
+}
+
 impl Drop for QuicklinkTable {
     fn drop(&mut self) {
         for control in self
@@ -416,5 +512,85 @@ impl Drop for QuicklinkTable {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rows(entries: &[(&str, &str)]) -> Vec<DraftRow> {
+        entries
+            .iter()
+            .map(|(link, name)| DraftRow {
+                link: (*link).into(),
+                name: (*name).into(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_edited_row_is_checked_alone_with_the_message_the_full_draft_gives() {
+        let table = rows(&[
+            ("https://example.com", "Docs"),
+            ("not a link", "Broken"),
+            ("https://example.com/b", ""),
+            ("", ""),
+        ]);
+        assert_eq!(check_row(&table, 0), Ok(()));
+        // Blank rows are skipped, as when saving.
+        assert_eq!(check_row(&table, 3), Ok(()));
+        let broken = check_row(&table, 1).unwrap_err();
+        assert!(broken.starts_with("Row 2: "), "{broken}");
+        assert_eq!(draft_rows(&table).unwrap_err(), broken);
+        assert!(check_row(&table, 2).unwrap_err().starts_with("Row 3: "));
+    }
+
+    #[test]
+    fn a_name_used_twice_is_reported_on_the_second_row_whichever_is_edited() {
+        let table = rows(&[
+            ("https://example.com/a", "Docs"),
+            ("https://example.com/b", "Other"),
+            ("https://example.com/c", " DOCS "),
+            ("", ""),
+        ]);
+        let expected = Err("Row 3: choose a unique name.".to_owned());
+        assert_eq!(check_row(&table, 0), expected);
+        assert_eq!(check_row(&table, 2), expected);
+        assert_eq!(check_row(&table, 1), Ok(()));
+        assert_eq!(draft_rows(&table).map(|_| ()), expected);
+    }
+
+    #[test]
+    fn names_compare_like_the_full_draft_including_non_ascii() {
+        let table = rows(&[
+            ("https://example.com/a", "Référence"),
+            ("https://example.com/b", "RÉFÉRENCE"),
+        ]);
+        assert_eq!(
+            check_row(&table, 0),
+            Err("Row 2: choose a unique name.".to_owned())
+        );
+        assert!(draft_rows(&table).is_err());
+        // Final sigma: String::to_lowercase keeps these distinct, so the draft accepts both.
+        let sigma = rows(&[
+            ("https://example.com/a", "ΟΔΟΣ"),
+            ("https://example.com/b", "οδοσ"),
+        ]);
+        assert_eq!(draft_rows(&sigma).map(|entries| entries.len()), Ok(2));
+        assert_eq!(check_row(&sigma, 0), Ok(()));
+        assert_eq!(check_row(&sigma, 1), Ok(()));
+    }
+
+    #[test]
+    fn remove_buttons_follow_any_text_and_blank_rows_ignore_spaces() {
+        let row = |link: &str, name: &str| DraftRow {
+            link: link.into(),
+            name: name.into(),
+        };
+        assert!(!row("", "").has_text());
+        assert!(row(" ", "").has_text());
+        assert!(row(" ", " ").is_blank());
+        assert!(!row("", "x").is_blank());
     }
 }
