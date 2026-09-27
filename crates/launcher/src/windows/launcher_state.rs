@@ -11,7 +11,7 @@ use super::{
     foreground_observer::ForegroundObserver,
     icon_worker::{IconRequest, IconSource, IconWorker, MissingIcons},
     motion::{MotionPreference, VisibilityTransition},
-    recent_applications::{self, ApplicationAliases},
+    recent_applications::{self, ApplicationAliases, WindowsRecent},
     recent_list::{RecentKind, RecentList},
     search_worker::SearchWorker,
     settings::{AutoSave, SettingsStore},
@@ -138,6 +138,8 @@ pub struct LauncherState {
     aliases: ApplicationAliases,
     /// Shown when nothing is typed: Core's launches, then Windows' record.
     recent_applications: Arc<[Arc<str>]>,
+    /// Windows' record of the apps a person starts, read again only after Windows changes it.
+    windows_recent: WindowsRecent,
     recall: Option<command_flow::Recall>,
     /// Where commands start; follows `cd` from one command to the next.
     working_directory: PathBuf,
@@ -200,6 +202,7 @@ impl LauncherState {
             ),
             aliases: ApplicationAliases::default(),
             recent_applications: Arc::from([]),
+            windows_recent: WindowsRecent::default(),
             recall: None,
             working_directory: super::commands::home(),
             accept_mode: RunMode::Capture,
@@ -345,6 +348,8 @@ impl LauncherState {
         self.targets = discovery.targets;
         self.aliases = discovery.aliases;
         self.catalog_ready = true;
+        // New aliases, so Windows' record is resolved again.
+        self.windows_recent.invalidate();
         self.refresh_recent_applications();
         self.queue_search();
         if accepting_current {
@@ -577,23 +582,34 @@ impl LauncherState {
         self.accept_mode = mode;
     }
 
-    /// Windows' usage record changes as the person works, so it is read again each time Core
-    /// is shown. Probes use fixture apps and skip it.
+    /// Windows' usage record changes as the person works, so each time Core is shown it is
+    /// read again if Windows has changed it since. Probes use fixture apps and skip it.
     fn refresh_recent_applications(&mut self) {
-        let windows = if self.options.probe || !self.catalog_ready {
-            Vec::new()
-        } else {
-            recent_applications::windows_recent(&self.aliases)
-        };
-        self.recent_applications =
-            recent_applications::merge(&self.launched_applications.entries(), windows);
+        if !self.options.probe && self.catalog_ready {
+            self.windows_recent.refresh(&self.aliases);
+        }
+        self.merge_recent_applications();
     }
 
+    fn merge_recent_applications(&mut self) {
+        self.recent_applications = recent_applications::merge(
+            &self.launched_applications.entries(),
+            self.windows_recent.identifiers(),
+        );
+    }
+
+    /// Only Core's own list changes, so Windows' record is not read again. The file is written
+    /// by `save_launches` once the app has been started.
     fn remember_launch(&mut self, identifier: &str) {
-        if let Err(error) = self.launched_applications.record(identifier) {
+        self.launched_applications.record_unsaved(identifier);
+        self.merge_recent_applications();
+    }
+
+    /// Runs after each action, so a launch never waits for the disk.
+    pub fn save_launches(&mut self) {
+        if let Err(error) = self.launched_applications.save_pending() {
             eprintln!("{error}");
         }
-        self.refresh_recent_applications();
     }
 
     pub fn choose_power(&mut self, action: core_engine::search::PowerAction) {

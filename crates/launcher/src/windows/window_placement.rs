@@ -2,7 +2,7 @@ use super::settings::ScreenPosition;
 use windows::Win32::{Foundation::*, Graphics::Gdi::*};
 
 /// A display's full bounds and its taskbar-free work area, in physical pixels.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScreenArea {
     pub monitor: RECT,
     pub work: RECT,

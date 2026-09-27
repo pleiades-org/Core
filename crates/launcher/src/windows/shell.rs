@@ -732,6 +732,8 @@ unsafe extern "system" fn window_proc(
                 }
             }
         }
+        // An app launch is recorded before it starts but written only now.
+        cell.borrow_mut().save_launches();
     }
     result
 }

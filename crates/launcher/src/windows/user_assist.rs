@@ -5,12 +5,14 @@ use std::{collections::HashMap, path::PathBuf};
 use windows::{
     core::{GUID, PWSTR},
     Win32::{
-        Foundation::ERROR_SUCCESS,
+        Foundation::{CloseHandle, ERROR_SUCCESS, HANDLE, WAIT_OBJECT_0},
         System::{
             Com::CoTaskMemFree,
             Registry::{
-                RegCloseKey, RegEnumValueW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
+                RegCloseKey, RegEnumValueW, RegNotifyChangeKeyValue, RegOpenKeyExW, HKEY,
+                HKEY_CURRENT_USER, KEY_NOTIFY, KEY_READ, REG_NOTIFY_CHANGE_LAST_SET,
             },
+            Threading::{CreateEventW, WaitForSingleObject},
         },
         UI::Shell::{SHGetKnownFolderPath, KF_FLAG_DEFAULT},
     },
@@ -94,6 +96,118 @@ fn read_key(path: &str) -> Vec<Usage> {
         let _ = RegCloseKey(key);
     }
     usage
+}
+
+/// Tells whether Windows may have changed its record since the last check, so Core reads it
+/// again only then. Windows signals each key's event at the next change; nothing polls.
+pub struct UsageWatch {
+    /// `None` for a key that cannot be watched, such as one Windows has not created yet.
+    keys: Vec<(&'static str, Option<WatchedKey>)>,
+}
+
+impl UsageWatch {
+    /// Create it before the first read, so no change after that read is missed.
+    pub fn new() -> Self {
+        Self::watching(&KEYS)
+    }
+
+    fn watching(paths: &[&'static str]) -> Self {
+        Self {
+            keys: paths
+                .iter()
+                .map(|path| (*path, WatchedKey::open(path)))
+                .collect(),
+        }
+    }
+
+    /// True if either key changed since the last call, or cannot be watched. A signalled key is
+    /// re-armed before this returns, so a change made while the caller reads is reported next.
+    pub fn changed(&mut self) -> bool {
+        let mut changed = false;
+        for (path, key) in &mut self.keys {
+            match key {
+                Some(watched) if !watched.signalled() => {}
+                Some(watched) => {
+                    changed = true;
+                    if !watched.arm() {
+                        *key = None;
+                    }
+                }
+                // Read every time until the key can be watched.
+                None => {
+                    changed = true;
+                    *key = WatchedKey::open(path);
+                }
+            }
+        }
+        changed
+    }
+}
+
+/// One registry key and the auto-reset event Windows signals when a value in it changes.
+struct WatchedKey {
+    key: HKEY,
+    event: HANDLE,
+}
+
+impl WatchedKey {
+    fn open(path: &str) -> Option<Self> {
+        let path: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
+        let mut key = HKEY::default();
+        let opened = unsafe {
+            RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                windows::core::PCWSTR(path.as_ptr()),
+                None,
+                KEY_NOTIFY,
+                &mut key,
+            )
+        };
+        if opened != ERROR_SUCCESS {
+            return None;
+        }
+        let event = match unsafe { CreateEventW(None, false, false, None) } {
+            Ok(event) => event,
+            Err(_) => {
+                unsafe {
+                    let _ = RegCloseKey(key);
+                }
+                return None;
+            }
+        };
+        // From here, dropping closes both handles.
+        let watched = Self { key, event };
+        watched.arm().then_some(watched)
+    }
+
+    /// Asks Windows to signal the event at the next change; each request fires once.
+    fn arm(&self) -> bool {
+        let status = unsafe {
+            RegNotifyChangeKeyValue(
+                self.key,
+                false,
+                REG_NOTIFY_CHANGE_LAST_SET,
+                Some(self.event),
+                true,
+            )
+        };
+        status == ERROR_SUCCESS
+    }
+
+    /// Takes a pending signal without waiting.
+    fn signalled(&self) -> bool {
+        let status = unsafe { WaitForSingleObject(self.event, 0) };
+        status == WAIT_OBJECT_0
+    }
+}
+
+impl Drop for WatchedKey {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = RegCloseKey(self.key);
+            let _ = CloseHandle(self.event);
+        }
+    }
 }
 
 /// The last run time, if the record has one.
@@ -182,6 +296,135 @@ mod tests {
             folders.expand(r"{00000000-0000-0000-0000-000000000000}\x.lnk"),
             None
         );
+    }
+
+    /// A key path no test creates, unique to this run.
+    fn test_path(name: &str) -> &'static str {
+        Box::leak(
+            format!(
+                r"Software\Pleiades\Core\Tests\{name}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            )
+            .into_boxed_str(),
+        )
+    }
+
+    /// Signals arrive from the kernel; allow them a moment.
+    fn eventually(mut condition: impl FnMut() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            if condition() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        false
+    }
+
+    #[test]
+    fn a_key_that_cannot_be_watched_always_counts_as_changed() {
+        let mut watch = UsageWatch::watching(&[test_path("UsageWatchMissing")]);
+        assert!(watch.changed());
+        assert!(watch.changed());
+    }
+
+    #[test]
+    fn watching_and_dropping_releases_every_handle() {
+        use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessHandleCount};
+        let handles = || {
+            let mut count = 0;
+            unsafe { GetProcessHandleCount(GetCurrentProcess(), &mut count) }.unwrap();
+            count
+        };
+        drop(UsageWatch::new());
+        let baseline = handles();
+        for _ in 0..500 {
+            let mut watch = UsageWatch::new();
+            watch.changed();
+        }
+        // Each watch opens a key and an event per UserAssist key; a leak would add ~2,000.
+        // Other tests running in parallel open and close a few handles of their own.
+        assert!(handles() < baseline + 100, "{} → {}", baseline, handles());
+    }
+
+    /// A writable test key, deleted on drop.
+    struct TestKey {
+        path: Vec<u16>,
+        key: HKEY,
+    }
+
+    impl TestKey {
+        fn create(path: &str) -> Self {
+            use windows::Win32::System::Registry::{
+                RegCreateKeyExW, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE,
+            };
+            let path: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
+            let mut key = HKEY::default();
+            let status = unsafe {
+                RegCreateKeyExW(
+                    HKEY_CURRENT_USER,
+                    windows::core::PCWSTR(path.as_ptr()),
+                    None,
+                    windows::core::PCWSTR::null(),
+                    REG_OPTION_NON_VOLATILE,
+                    KEY_SET_VALUE,
+                    None,
+                    &mut key,
+                    None,
+                )
+            };
+            assert_eq!(status, ERROR_SUCCESS);
+            Self { path, key }
+        }
+
+        fn set(&self, value: u32) {
+            use windows::Win32::System::Registry::{RegSetValueExW, REG_DWORD};
+            let status = unsafe {
+                RegSetValueExW(
+                    self.key,
+                    windows::core::w!("Count"),
+                    None,
+                    REG_DWORD,
+                    Some(&value.to_le_bytes()),
+                )
+            };
+            assert_eq!(status, ERROR_SUCCESS);
+        }
+    }
+
+    impl Drop for TestKey {
+        fn drop(&mut self) {
+            use windows::Win32::System::Registry::RegDeleteKeyW;
+            unsafe {
+                let _ = RegCloseKey(self.key);
+                let status =
+                    RegDeleteKeyW(HKEY_CURRENT_USER, windows::core::PCWSTR(self.path.as_ptr()));
+                if status != ERROR_SUCCESS {
+                    eprintln!("Could not clean up the usage watch test key: {status:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires HKCU write access; run explicitly with --include-ignored"]
+    fn a_change_is_reported_once_and_watching_continues() {
+        let path = test_path("UsageWatch");
+        // Not created yet: read every time, and watched once it exists.
+        let mut watch = UsageWatch::watching(&[path]);
+        assert!(watch.changed());
+        let key = TestKey::create(path);
+        assert!(watch.changed(), "the first check after creation opens it");
+        assert!(!watch.changed(), "nothing changed since");
+        key.set(1);
+        assert!(eventually(|| watch.changed()));
+        assert!(!watch.changed(), "one change is reported once");
+        key.set(2);
+        assert!(eventually(|| watch.changed()), "re-armed after a change");
     }
 
     #[test]
