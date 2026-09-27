@@ -30,6 +30,10 @@ use windows::{
 
 pub const COMMAND_OUTPUT: u32 = WM_APP + 14;
 const READ_CHUNK: usize = 16 * 1024;
+/// Room for output the UI has not read yet, so a fast command is not held up by each read.
+const OUTPUT_BUFFER_BYTES: u32 = 128 * 1024;
+/// Output held for the UI before the reader waits for it to catch up.
+const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
 /// Room for keys the console has not read yet, so typing never blocks Core.
 const INPUT_BUFFER_BYTES: u32 = 64 * 1024;
 /// How long to wait for the console's last output after the command exits.
@@ -53,6 +57,8 @@ pub struct Update {
 #[derive(Default)]
 struct Shared {
     output: Vec<u8>,
+    /// The buffer the UI handed back, swapped in for `output` so its capacity is kept.
+    spare: Vec<u8>,
     outcome: Option<Outcome>,
     directory: Option<PathBuf>,
     stopping: bool,
@@ -133,8 +139,8 @@ impl CommandRun {
         rows: u16,
     ) -> Result<Self, String> {
         let error = |what: &str, error: windows::core::Error| format!("Could not {what}: {error}");
-        let (output_read, output_write) =
-            pipe(0).map_err(|failure| error("create the output pipe", failure))?;
+        let (output_read, output_write) = pipe(OUTPUT_BUFFER_BYTES)
+            .map_err(|failure| error("create the output pipe", failure))?;
         let (input_read, input_write) =
             pipe(INPUT_BUFFER_BYTES).map_err(|failure| error("create the input pipe", failure))?;
         let size = COORD {
@@ -216,14 +222,27 @@ impl CommandRun {
             .is_none()
     }
 
+    /// Hands over the output so far, letting the reader continue if it was waiting for room.
+    /// Pass `Update::output` back with [`Self::recycle`] once it is shown.
     pub fn take_update(&self) -> Update {
-        let mut shared = self.shared.0.lock().expect("command lock");
-        shared.notified = false;
-        Update {
-            output: std::mem::take(&mut shared.output),
-            outcome: shared.outcome.clone(),
-            directory: shared.directory.take(),
-        }
+        let update = {
+            let mut shared = self.shared.0.lock().expect("command lock");
+            shared.notified = false;
+            let spare = std::mem::take(&mut shared.spare);
+            Update {
+                output: std::mem::replace(&mut shared.output, spare),
+                outcome: shared.outcome.clone(),
+                directory: shared.directory.take(),
+            }
+        };
+        self.shared.1.notify_all();
+        update
+    }
+
+    /// Returns a shown update's output buffer, to be filled again without reallocating.
+    pub fn recycle(&self, mut output: Vec<u8>) {
+        output.clear();
+        self.shared.0.lock().expect("command lock").spare = output;
     }
 }
 
@@ -232,6 +251,8 @@ impl Drop for CommandRun {
         // Stopping lets the waiting thread close the console, which ends the output reader.
         self.stop();
         self.shared.0.lock().expect("command lock").detached = true;
+        // A reader waiting for the UI to take output drains the console instead.
+        self.shared.1.notify_all();
     }
 }
 
@@ -353,18 +374,27 @@ fn notify(shared: &mut Shared, address: usize) {
 
 fn read_output(read: OwnedHandle, shared: SharedState, address: usize) {
     let mut buffer = vec![0_u8; READ_CHUNK];
+    let (lock, taken) = &*shared;
     loop {
         let mut count = 0_u32;
         let result = unsafe { ReadFile(read.0, Some(&mut buffer), Some(&mut count), None) };
         if result.is_err() || count == 0 {
             break;
         }
-        let mut state = shared.0.lock().expect("command lock");
+        // While the UI is behind, the reader waits, and the console holds the command back.
+        let mut state = taken
+            .wait_while(lock.lock().expect("command lock"), |state| {
+                state.output.len() >= OUTPUT_LIMIT && !state.detached
+            })
+            .expect("command lock");
+        if state.detached {
+            continue;
+        }
         state.output.extend_from_slice(&buffer[..count as usize]);
         notify(&mut state, address);
     }
-    shared.0.lock().expect("command lock").drained = true;
-    shared.1.notify_all();
+    lock.lock().expect("command lock").drained = true;
+    taken.notify_all();
 }
 
 /// Waits for the command, then closes its console so its last output arrives, and publishes
@@ -519,6 +549,70 @@ mod tests {
         let job = OwnedHandle(unsafe { CreateJobObjectW(None, PCWSTR::null()) }.unwrap());
         unsafe { AssignProcessToJobObject(job.0, process_handle.0) }.unwrap();
         (job, process_handle, thread_handle)
+    }
+
+    #[test]
+    fn output_waits_for_the_ui_past_the_limit_and_reuses_its_buffers() {
+        let _serial = lock();
+        let (read, write) = pipe(OUTPUT_BUFFER_BYTES).unwrap();
+        let shared: SharedState = Arc::default();
+        // Finished already, so dropping the run stops nothing.
+        shared.0.lock().unwrap().outcome = Some(Outcome::Exited(0));
+        let run = CommandRun {
+            job: OwnedHandle(HANDLE::default()),
+            shared: shared.clone(),
+            input: TerminalInput(Arc::new(OwnedHandle(HANDLE::default()))),
+        };
+        let total = OUTPUT_LIMIT + 1024 * 1024;
+        let writer = thread::spawn(move || {
+            let write = write;
+            let chunk = vec![b'x'; 64 * 1024];
+            let mut sent = 0;
+            while sent < total {
+                let mut written = 0_u32;
+                unsafe { WriteFile(write.0, Some(&chunk), Some(&mut written), None) }.unwrap();
+                sent += written as usize;
+            }
+            sent
+        });
+        {
+            let shared = shared.clone();
+            // A null window makes notifications harmless thread messages.
+            thread::spawn(move || read_output(read, shared, 0));
+        }
+        let held = || shared.0.lock().unwrap().output.len();
+        let started = Instant::now();
+        while held() < OUTPUT_LIMIT {
+            assert!(started.elapsed() < Duration::from_secs(20), "{}", held());
+            thread::sleep(Duration::from_millis(5));
+        }
+        thread::sleep(Duration::from_millis(100));
+        assert!(held() < OUTPUT_LIMIT + READ_CHUNK, "{}", held());
+        assert!(
+            !writer.is_finished(),
+            "the writer waits while the UI is behind"
+        );
+
+        let first = run.take_update().output;
+        let (address, capacity) = (first.as_ptr(), first.capacity());
+        let mut received = first.len();
+        run.recycle(first);
+        while received < total {
+            let update = run.take_update();
+            received += update.output.len();
+            if update.output.as_ptr() == address {
+                assert!(update.output.capacity() >= capacity);
+            }
+            run.recycle(update.output);
+            assert!(started.elapsed() < Duration::from_secs(20), "{received}");
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(writer.join().unwrap(), total);
+        assert_eq!(received, total);
+        // The recycled buffer came back rather than a new one being grown.
+        let reused = run.take_update().output;
+        let other = run.take_update().output;
+        assert!([reused.as_ptr(), other.as_ptr()].contains(&address));
     }
 
     #[test]

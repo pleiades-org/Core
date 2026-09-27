@@ -13,12 +13,25 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use windows::Win32::Foundation::HWND;
+use windows::Win32::{
+    Foundation::HWND,
+    UI::WindowsAndMessaging::{KillTimer, SetTimer},
+};
+
+/// Delays taking output that arrives sooner than [`OUTPUT_INTERVAL`] after the last batch.
+pub const COMMAND_OUTPUT_TIMER: usize = 43;
+/// The shortest time between output batches. Each costs a parse, a layout check and a
+/// repaint, so a fast command's small reads are gathered into fewer, larger batches.
+const OUTPUT_INTERVAL: Duration = Duration::from_millis(16);
 
 pub struct CommandSession {
     run: CommandRun,
     started: Instant,
     finished: Option<(Outcome, Duration)>,
+    /// When output was last taken from the run.
+    last_output: Option<Instant>,
+    /// [`COMMAND_OUTPUT_TIMER`] is set to take the output later.
+    output_timer: bool,
 }
 
 /// Progress through the history while ↑ and ↓ are pressed.
@@ -141,6 +154,8 @@ impl LauncherState {
                     run,
                     started: Instant::now(),
                     finished: None,
+                    last_output: None,
+                    output_timer: false,
                 });
                 self.sync_terminal_view();
                 view.relayout();
@@ -150,12 +165,49 @@ impl LauncherState {
         }
     }
 
+    /// The run has output. Output arriving within [`OUTPUT_INTERVAL`] of the last batch waits
+    /// for a timer; the run keeps gathering it meanwhile.
     pub fn receive_command_output(&mut self) {
+        let window = self.window;
+        let Some(session) = self.command.as_mut() else {
+            return;
+        };
+        if session.output_timer {
+            return;
+        }
+        let delay = output_delay(session.last_output, Instant::now());
+        if !delay.is_zero() {
+            let milliseconds = delay.as_millis().try_into().unwrap_or(u32::MAX);
+            session.output_timer =
+                unsafe { SetTimer(Some(window), COMMAND_OUTPUT_TIMER, milliseconds, None) } != 0;
+            // Without a timer the output is taken now rather than left waiting.
+            if session.output_timer {
+                return;
+            }
+        }
+        self.take_command_output();
+    }
+
+    /// [`COMMAND_OUTPUT_TIMER`] fired: the delayed output is taken.
+    pub fn command_output_timer(&mut self) {
+        if let Err(error) = unsafe { KillTimer(Some(self.window), COMMAND_OUTPUT_TIMER) } {
+            eprintln!("Could not stop the command output timer: {error}");
+        }
+        let Some(session) = self.command.as_mut() else {
+            return;
+        };
+        session.output_timer = false;
+        self.take_command_output();
+    }
+
+    fn take_command_output(&mut self) {
         let (Some(view), Some(session)) = (self.view.clone(), self.command.as_mut()) else {
             return;
         };
-        let update = session.run.take_update();
+        session.last_output = Some(Instant::now());
+        let mut update = session.run.take_update();
         view.feed_console(&update.output);
+        session.run.recycle(std::mem::take(&mut update.output));
         if let Some(directory) = update.directory.filter(|directory| directory.is_dir()) {
             self.working_directory = directory;
         }
@@ -333,6 +385,13 @@ fn display_directory(directory: &Path, home: &Path) -> String {
     }
 }
 
+/// How long to wait before taking output, so batches come at least [`OUTPUT_INTERVAL`] apart.
+fn output_delay(last: Option<Instant>, now: Instant) -> Duration {
+    last.map_or(Duration::ZERO, |last| {
+        OUTPUT_INTERVAL.saturating_sub(now.saturating_duration_since(last))
+    })
+}
+
 fn duration(elapsed: Duration) -> String {
     let milliseconds = elapsed.as_millis();
     if milliseconds < 1_000 {
@@ -393,6 +452,28 @@ mod tests {
         assert_eq!(
             display_directory(Path::new(r"C:\Users\Mel"), home),
             r"C:\Users\Mel"
+        );
+    }
+
+    #[test]
+    fn output_batches_come_at_least_an_interval_apart() {
+        let now = Instant::now();
+        assert_eq!(
+            output_delay(None, now),
+            Duration::ZERO,
+            "the first batch is taken at once"
+        );
+        assert_eq!(
+            output_delay(Some(now), now + Duration::from_millis(4)),
+            OUTPUT_INTERVAL - Duration::from_millis(4)
+        );
+        assert_eq!(
+            output_delay(Some(now), now + OUTPUT_INTERVAL),
+            Duration::ZERO
+        );
+        assert_eq!(
+            output_delay(Some(now), now + Duration::from_secs(1)),
+            Duration::ZERO
         );
     }
 

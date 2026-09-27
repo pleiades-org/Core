@@ -245,4 +245,29 @@ mod tests {
         // At the top, a reverse index scrolls the screen down.
         assert_eq!(reversed.text(), " z\r\nx\r\ny");
     }
+
+    /// Throughput of streaming output into a full scrollback. Run with
+    /// `cargo test --release -p core-launcher-v2 a_million_lines -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "timing, not a check"]
+    fn a_million_lines_stream_through_the_screen() {
+        const LINES: usize = 1_000_000;
+        let mut output = Vec::new();
+        for number in 0..LINES {
+            output.extend_from_slice(format!("line {number} of the output\r\n").as_bytes());
+        }
+        let mut terminal = Terminal::new(120, 30);
+        let started = std::time::Instant::now();
+        // Chunks the size the output reader passes on.
+        for chunk in output.chunks(16 * 1024) {
+            terminal.feed(chunk);
+        }
+        let elapsed = started.elapsed();
+        println!(
+            "{LINES} lines, {} MiB, in {elapsed:?} ({:.0} lines/s)",
+            output.len() / (1024 * 1024),
+            LINES as f64 / elapsed.as_secs_f64()
+        );
+        assert_eq!(terminal.dropped(), LINES - 29 - SCROLLBACK_LIMIT);
+    }
 }
