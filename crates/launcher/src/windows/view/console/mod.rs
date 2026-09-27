@@ -102,6 +102,12 @@ pub struct ConsoleView {
     scrollbar: Cell<Option<(usize, usize, usize)>>,
     /// The first half of a character outside the Basic Multilingual Plane, typed as two keys.
     high_surrogate: Cell<Option<u16>>,
+    back_buffer: RefCell<Option<paint::BackBuffer>>,
+    /// Counts changes to the transcript, so accessibility tools reading it repeatedly do not
+    /// rebuild it each time.
+    text_generation: Cell<u64>,
+    /// The transcript as UTF-16 and the generation it was built at.
+    accessible_text: RefCell<(u64, Vec<u16>)>,
 }
 
 impl ConsoleView {
@@ -146,6 +152,9 @@ impl ConsoleView {
             dropped: Cell::new(0),
             scrollbar: Cell::new(None),
             high_surrogate: Cell::new(None),
+            back_buffer: RefCell::new(None),
+            text_generation: Cell::new(1),
+            accessible_text: RefCell::new((0, Vec::new())),
         });
         // The box keeps the view at a fixed address for the window's lifetime.
         unsafe {
@@ -208,6 +217,7 @@ impl ConsoleView {
         self.follow.set(true);
         self.selection.set(None);
         self.dropped.set(0);
+        self.text_changed();
         self.update_scrollbar();
         self.invalidate();
     }
@@ -222,6 +232,7 @@ impl ConsoleView {
     pub fn finish(&self) {
         self.input.replace(None);
         self.terminal.borrow_mut().leave_alternate();
+        self.text_changed();
         self.update_scrollbar();
         self.invalidate();
     }
@@ -246,6 +257,7 @@ impl ConsoleView {
             (terminal.take_responses(), terminal.dropped())
         };
         self.write(&responses);
+        self.text_changed();
         let delta = dropped.saturating_sub(self.dropped.replace(dropped));
         if delta > 0 {
             if !self.follow.get() {
@@ -286,6 +298,23 @@ impl ConsoleView {
         } else {
             format!("{header}\r\n{output}")
         }
+    }
+
+    fn text_changed(&self) {
+        self.text_generation.set(self.text_generation.get() + 1);
+    }
+
+    /// Reads the transcript as UTF-16, building it only when the text changed since the last
+    /// read.
+    fn with_accessible_text<R>(&self, read: impl FnOnce(&[u16]) -> R) -> R {
+        let generation = self.text_generation.get();
+        let mut cache = self.accessible_text.borrow_mut();
+        if cache.0 != generation {
+            cache.1.clear();
+            cache.1.extend(self.transcript().encode_utf16());
+            cache.0 = generation;
+        }
+        read(&cache.1)
     }
 
     /// Characters of a shown line with their columns, without double-width tails.
@@ -637,19 +666,20 @@ unsafe extern "system" fn console_proc(
         WM_CHAR => console.character(word.0 as u16, false),
         WM_SYSCHAR if console.running() => console.character(word.0 as u16, true),
         WM_GETTEXTLENGTH => {
-            return LRESULT(console.transcript().encode_utf16().count() as isize);
+            return LRESULT(console.with_accessible_text(|text| text.len()) as isize);
         }
         WM_GETTEXT => {
             let capacity = word.0;
             if capacity == 0 || long.0 == 0 {
                 return LRESULT(0);
             }
-            let text: Vec<u16> = console.transcript().encode_utf16().collect();
-            let copied = text.len().min(capacity - 1);
-            let destination = long.0 as *mut u16;
-            std::ptr::copy_nonoverlapping(text.as_ptr(), destination, copied);
-            *destination.add(copied) = 0;
-            return LRESULT(copied as isize);
+            return console.with_accessible_text(|text| {
+                let copied = text.len().min(capacity - 1);
+                let destination = long.0 as *mut u16;
+                std::ptr::copy_nonoverlapping(text.as_ptr(), destination, copied);
+                *destination.add(copied) = 0;
+                LRESULT(copied as isize)
+            });
         }
         WM_NCDESTROY => {
             SetWindowLongPtrW(window, GWLP_USERDATA, 0);
@@ -771,6 +801,70 @@ mod tests {
             assert!(!unsafe { GetUpdateRect(console.window, None, false) }.as_bool());
             console.extend_selection(1, 0);
             assert_ne!(console.selection.get().unwrap().head.column, 0);
+        });
+    }
+
+    #[test]
+    fn the_back_buffer_is_kept_between_paints_until_the_size_changes() {
+        with_console(|console| {
+            let paint_at = |width, height| {
+                unsafe {
+                    SetWindowPos(
+                        console.window,
+                        None,
+                        0,
+                        0,
+                        width,
+                        height,
+                        SWP_NOZORDER | SWP_NOACTIVATE,
+                    )
+                }
+                .unwrap();
+                let context = unsafe { GetDC(Some(console.window)) };
+                console.paint(context);
+                unsafe { ReleaseDC(Some(console.window), context) };
+                let buffer = console.back_buffer.borrow();
+                let buffer = buffer.as_ref().expect("a back buffer");
+                (buffer.bitmap, buffer.width, buffer.height)
+            };
+            console.start("prompt", 20, 4);
+            console.feed(b"\x1b[4munderlined\x1b[0m plain");
+            let (bitmap, width, height) = paint_at(80, 40);
+            assert_eq!((width, height), (80, 40));
+            assert_eq!(paint_at(80, 40).0, bitmap, "the same size keeps the bitmap");
+            assert_eq!(paint_at(90, 40).1, 90, "a new size replaces it");
+        });
+    }
+
+    #[test]
+    fn accessible_text_is_rebuilt_only_after_the_output_changes() {
+        with_console(|console| {
+            let read = || {
+                let length =
+                    unsafe { SendMessageW(console.window, WM_GETTEXTLENGTH, None, None) }.0;
+                let mut buffer = vec![0_u16; length as usize + 1];
+                let copied = unsafe {
+                    SendMessageW(
+                        console.window,
+                        WM_GETTEXT,
+                        Some(WPARAM(buffer.len())),
+                        Some(LPARAM(buffer.as_mut_ptr() as isize)),
+                    )
+                };
+                assert_eq!(copied.0, length);
+                String::from_utf16(&buffer[..copied.0 as usize]).unwrap()
+            };
+            console.start("prompt", 20, 4);
+            assert_eq!(read(), "prompt");
+            console.feed(b"hello");
+            assert_eq!(read(), "prompt\r\nhello");
+            // Unchanged output is served from the cache, not rebuilt.
+            console.accessible_text.borrow_mut().1 = "cached".encode_utf16().collect();
+            assert_eq!(read(), "cached");
+            console.feed(b" world");
+            assert_eq!(read(), "prompt\r\nhello world");
+            console.start("next", 20, 4);
+            assert_eq!(read(), "next");
         });
     }
 

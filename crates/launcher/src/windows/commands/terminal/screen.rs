@@ -273,38 +273,52 @@ impl Screen {
 
     /// Lines leaving the top of a full-screen region on the primary screen go to the scrollback.
     pub(super) fn scroll_up(&mut self, count: usize) {
-        let count = count.min(self.bottom + 1 - self.top);
-        for _ in 0..count {
-            let line = self.lines.remove(self.top);
-            self.lines
-                .insert(self.bottom, vec![self.blank(); self.columns]);
-            if self.top == 0 && !self.alternate {
-                self.push_scrollback(line);
+        let (top, bottom) = (self.top, self.bottom);
+        let count = count.min(bottom + 1 - top);
+        // Rows are rotated rather than removed and reinserted, so scrolling allocates nothing.
+        self.lines[top..=bottom].rotate_left(count);
+        if top == 0 && !self.alternate {
+            for row in bottom + 1 - count..=bottom {
+                let line = std::mem::take(&mut self.lines[row]);
+                self.push_scrollback(&line);
+                self.lines[row] = line;
             }
         }
+        self.clear_rows(bottom + 1 - count, count);
     }
 
     pub(super) fn scroll_down(&mut self, count: usize) {
-        let count = count.min(self.bottom + 1 - self.top);
-        for _ in 0..count {
-            self.lines.remove(self.bottom);
-            self.lines
-                .insert(self.top, vec![self.blank(); self.columns]);
+        let (top, bottom) = (self.top, self.bottom);
+        let count = count.min(bottom + 1 - top);
+        self.lines[top..=bottom].rotate_right(count);
+        self.clear_rows(top, count);
+    }
+
+    /// Blanks `count` rows from `first`, which scrolling brought in.
+    fn clear_rows(&mut self, first: usize, count: usize) {
+        let blank = self.blank();
+        for line in &mut self.lines[first..first + count] {
+            line.fill(blank);
         }
     }
 
-    fn push_scrollback(&mut self, mut line: Line) {
+    /// Copies a line's used cells to the scrollback. Once it is full, the oldest line's buffer
+    /// is reused for the copy.
+    fn push_scrollback(&mut self, line: &[Cell]) {
         let used = line
             .iter()
             .rposition(|cell| !cell.is_blank())
             .map_or(0, |column| column + 1);
-        line.truncate(used);
-        line.shrink_to_fit();
-        self.scrollback.push_back(line);
-        if self.scrollback.len() > SCROLLBACK_LIMIT {
-            self.scrollback.pop_front();
-            self.dropped += 1;
+        let line = &line[..used];
+        if self.scrollback.len() < SCROLLBACK_LIMIT {
+            self.scrollback.push_back(line.to_vec());
+            return;
         }
+        let mut oldest = self.scrollback.pop_front().unwrap_or_default();
+        oldest.clear();
+        oldest.extend_from_slice(line);
+        self.scrollback.push_back(oldest);
+        self.dropped += 1;
     }
 
     /// Absolute position, zero-based and clamped to the screen.
@@ -410,10 +424,9 @@ impl Screen {
         if !(self.top..=self.bottom).contains(&row) {
             return;
         }
-        for _ in 0..count.min(self.bottom + 1 - row) {
-            self.lines.remove(self.bottom);
-            self.lines.insert(row, vec![self.blank(); self.columns]);
-        }
+        let count = count.min(self.bottom + 1 - row);
+        self.lines[row..=self.bottom].rotate_right(count);
+        self.clear_rows(row, count);
         self.cursor.column = 0;
         self.cursor.wrap_pending = false;
     }
@@ -424,11 +437,9 @@ impl Screen {
         if !(self.top..=self.bottom).contains(&row) {
             return;
         }
-        for _ in 0..count.min(self.bottom + 1 - row) {
-            self.lines.remove(row);
-            self.lines
-                .insert(self.bottom, vec![self.blank(); self.columns]);
-        }
+        let count = count.min(self.bottom + 1 - row);
+        self.lines[row..=self.bottom].rotate_left(count);
+        self.clear_rows(self.bottom + 1 - count, count);
         self.cursor.column = 0;
         self.cursor.wrap_pending = false;
     }
@@ -539,4 +550,121 @@ pub(super) fn line_text(line: &[Cell]) -> String {
         .map(|cell| cell.character)
         .collect();
     text.trim_end().to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::cell::Color;
+    use super::*;
+
+    const COLUMNS: usize = 6;
+    const ROWS: usize = 8;
+
+    /// A screen whose rows read `row 0`, `row 1`, …, drawing blanks with a coloured
+    /// background so their style can be checked too.
+    fn numbered() -> Screen {
+        let mut screen = Screen::new(COLUMNS, ROWS);
+        for (row, line) in screen.lines.iter_mut().enumerate() {
+            for (cell, character) in line.iter_mut().zip(format!("row {row}").chars()) {
+                cell.character = character;
+            }
+        }
+        screen.cursor.style.background = Color::Indexed(4);
+        screen
+    }
+
+    /// Scrolling as it was done before rotation: one line removed and a blank one inserted
+    /// per scrolled line. Returns the lines removed.
+    fn shift_one_by_one(
+        screen: &Screen,
+        remove_at: usize,
+        insert_at: usize,
+        count: usize,
+    ) -> (Vec<Line>, Vec<Line>) {
+        let mut lines = screen.lines.clone();
+        let mut removed = Vec::new();
+        for _ in 0..count {
+            removed.push(lines.remove(remove_at));
+            lines.insert(insert_at, vec![screen.blank(); screen.columns]);
+        }
+        (lines, removed)
+    }
+
+    #[test]
+    fn rotated_scrolling_matches_line_by_line_scrolling() {
+        // The whole screen, then a region in the middle; counts above one and past the region.
+        for (top, bottom) in [(0, ROWS - 1), (2, 5)] {
+            for count in [1, 2, 3, ROWS + 1] {
+                let context = format!("rows {top}..={bottom}, count {count}");
+                let region = count.min(bottom + 1 - top);
+                let mut screen = numbered();
+                screen.top = top;
+                screen.bottom = bottom;
+                let (expected, removed) = shift_one_by_one(&screen, top, bottom, region);
+                screen.scroll_up(count);
+                assert_eq!(screen.lines, expected, "scroll up, {context}");
+                let scrolled_off: Vec<String> =
+                    removed.iter().map(|line| line_text(line)).collect();
+                let kept: Vec<String> = screen
+                    .scrollback
+                    .iter()
+                    .map(|line| line_text(line))
+                    .collect();
+                if top == 0 {
+                    assert_eq!(kept, scrolled_off, "{context}");
+                } else {
+                    assert!(kept.is_empty(), "{context}");
+                }
+
+                let mut screen = numbered();
+                screen.top = top;
+                screen.bottom = bottom;
+                let (expected, _) = shift_one_by_one(&screen, bottom, top, region);
+                screen.scroll_down(count);
+                assert_eq!(screen.lines, expected, "scroll down, {context}");
+
+                // Inserting and deleting lines at a row inside the region.
+                let row = top + 1;
+                let lines = count.min(bottom + 1 - row);
+                let mut screen = numbered();
+                (screen.top, screen.bottom, screen.cursor.row) = (top, bottom, row);
+                let (expected, _) = shift_one_by_one(&screen, bottom, row, lines);
+                screen.insert_lines(count);
+                assert_eq!(screen.lines, expected, "insert lines, {context}");
+
+                let mut screen = numbered();
+                (screen.top, screen.bottom, screen.cursor.row) = (top, bottom, row);
+                let (expected, _) = shift_one_by_one(&screen, row, bottom, lines);
+                screen.delete_lines(count);
+                assert_eq!(screen.lines, expected, "delete lines, {context}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_full_scrollback_reuses_the_oldest_line_for_the_newest() {
+        let mut screen = numbered();
+        screen.scrollback = (0..SCROLLBACK_LIMIT)
+            .map(|_| Vec::with_capacity(COLUMNS))
+            .collect();
+        let oldest = screen.scrollback[0].as_ptr();
+        let (_, removed) = shift_one_by_one(&screen, 0, ROWS - 1, 3);
+        screen.scroll_up(3);
+        assert_eq!(screen.scrollback.len(), SCROLLBACK_LIMIT);
+        assert_eq!(screen.dropped, 3);
+        let newest: Vec<String> = screen
+            .scrollback
+            .range(SCROLLBACK_LIMIT - 3..)
+            .map(|line| line_text(line))
+            .collect();
+        let expected: Vec<String> = removed.iter().map(|line| line_text(line)).collect();
+        assert_eq!(newest, expected);
+        assert_eq!(
+            screen.scrollback[SCROLLBACK_LIMIT - 3].as_ptr(),
+            oldest,
+            "the dropped line's buffer holds the first new one"
+        );
+        // Scrollback lines keep only their used cells.
+        assert_eq!(screen.scrollback[SCROLLBACK_LIMIT - 1].len(), "row 2".len());
+    }
 }
