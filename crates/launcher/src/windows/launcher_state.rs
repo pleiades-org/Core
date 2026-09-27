@@ -9,7 +9,7 @@ use super::{
     execute_action::NativeAction,
     favicon::WebsiteOrigin,
     foreground_observer::ForegroundObserver,
-    icon_worker::{IconRequest, IconSource, IconWorker},
+    icon_worker::{IconRequest, IconSource, IconWorker, MissingIcons},
     motion::{MotionPreference, VisibilityTransition},
     recent_applications::{self, ApplicationAliases},
     recent_list::{RecentKind, RecentList},
@@ -23,7 +23,7 @@ use core_engine::{
     conversions::ExchangeRates,
     search::{Action, RunMode, SearchBatch, SearchEngine},
 };
-use std::{collections::HashMap, path::PathBuf, rc::Rc, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, rc::Rc, sync::Arc, time::Instant};
 use windows::Win32::UI::Controls::EM_SETSEL;
 use windows::Win32::{
     Foundation::*,
@@ -125,6 +125,8 @@ pub struct LauncherState {
     searched_query: String,
     catalog_ready: bool,
     selected_identifier: Option<Arc<str>>,
+    /// Icons that failed recently; not asked for again until the worker would retry them.
+    missing_icons: MissingIcons,
     exchange_rates: Option<Arc<ExchangeRates>>,
     rate_service: ExchangeRateService,
     /// Core's own window, for background notifications.
@@ -186,6 +188,7 @@ impl LauncherState {
             searched_query: String::new(),
             catalog_ready: options.probe,
             selected_identifier: None,
+            missing_icons: MissingIcons::default(),
             exchange_rates: None,
             rate_service: ExchangeRateService::new(rate_source),
             window: HWND::default(),
@@ -380,12 +383,13 @@ impl LauncherState {
         if view.settings_open() {
             return;
         }
+        let now = Instant::now();
         let requests = self
             .batch
             .results
             .iter()
             .filter_map(|result| {
-                if view.has_icon(&result.id) {
+                if view.has_icon(&result.id) || self.missing_icons.is_missing(&result.id, now) {
                     return None;
                 }
                 let source = match &result.action {
@@ -404,9 +408,10 @@ impl LauncherState {
         worker.submit(requests);
     }
 
-    pub fn receive_icons(&self) {
+    pub fn receive_icons(&mut self) {
         if let (Some(worker), Some(view)) = (&self.icon_worker, &self.view) {
             if let Some(icons) = worker.take_completed() {
+                self.missing_icons.record(&icons, Instant::now());
                 view.set_icons(&icons);
             }
         }

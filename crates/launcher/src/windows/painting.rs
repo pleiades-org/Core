@@ -59,6 +59,12 @@ pub fn rectangle(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
     }
 }
 
+/// Whether two rectangles share any pixel; an empty rectangle shares none.
+pub fn intersects(first: &RECT, second: &RECT) -> bool {
+    first.left.max(second.left) < first.right.min(second.right)
+        && first.top.max(second.top) < first.bottom.min(second.bottom)
+}
+
 pub fn fill(context: HDC, area: &RECT, color: COLORREF) {
     unsafe {
         SetDCBrushColor(context, color);
@@ -363,5 +369,27 @@ fn result_icon(
             fonts.title,
             color,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rectangles_intersect_only_when_they_share_a_pixel() {
+        let tile = rectangle(12, 102, 114, 190);
+        // A hover change invalidates this tile and its neighbour.
+        assert!(intersects(&tile, &rectangle(12, 102, 216, 190)));
+        assert!(intersects(&tile, &rectangle(100, 150, 400, 400)));
+        assert!(intersects(&tile, &tile));
+        // Touching edges share no pixel: right and bottom are exclusive.
+        assert!(!intersects(&tile, &rectangle(114, 102, 216, 190)));
+        assert!(!intersects(&tile, &rectangle(12, 190, 114, 278)));
+        assert!(!intersects(&tile, &rectangle(0, 0, 640, 83)));
+        // Empty and inverted rectangles never intersect.
+        assert!(!intersects(&tile, &rectangle(50, 150, 50, 160)));
+        assert!(!intersects(&tile, &rectangle(60, 160, 50, 150)));
+        assert!(!intersects(&RECT::default(), &RECT::default()));
     }
 }
