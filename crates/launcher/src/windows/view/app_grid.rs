@@ -137,7 +137,7 @@ impl View {
         self.select_tile(next);
     }
 
-    fn invalidate_tile(&self, index: usize) {
+    pub(super) fn invalidate_tile(&self, index: usize) {
         let area = self.tile(index);
         unsafe {
             let _ = InvalidateRect(Some(self.parent), Some(&area), false);
