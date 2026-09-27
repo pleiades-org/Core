@@ -10,5 +10,5 @@ pub use power::PowerAction;
 pub use terminal::{RunMode, ShellKind};
 
 pub use execute_search::{Action, ResultKind, SearchBatch, SearchEngine, SearchResult};
-pub use normalize::normalize;
+pub use normalize::{normalize, normalize_into};
 pub use parse_query::{parse_query, CommandKind, ParsedQuery, QueryError, MAX_QUERY_BYTES};

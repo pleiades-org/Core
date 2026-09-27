@@ -3,7 +3,7 @@
 //! against the catalog, so apps that have been uninstalled simply drop out.
 use super::{Action, ResultKind, SearchBatch, SearchResult};
 use crate::{applications::ApplicationCatalog, RECENT_APPLICATION_LIMIT};
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 const MESSAGE: &str = "Recently used · Enter to open · arrow keys to move · type to search";
 
@@ -12,39 +12,32 @@ pub(super) fn recent_results(
     recent: &[Arc<str>],
     catalog: &ApplicationCatalog,
 ) -> Option<SearchBatch> {
-    let wanted: HashMap<&str, usize> = recent
-        .iter()
-        .enumerate()
-        .map(|(order, identifier)| (&**identifier, order))
-        .collect();
-    let mut found: Vec<(usize, SearchResult)> = catalog
-        .entries()
-        .filter_map(|application| {
-            let order = *wanted.get(&*application.id)?;
-            Some((
-                order,
-                SearchResult {
-                    kind: ResultKind::Recent,
-                    id: application.id.clone(),
-                    title: application.name.clone(),
-                    description: application.description.clone(),
-                    action: Action::LaunchApplication(application.id.clone()),
-                },
-            ))
-        })
-        .collect();
-    if found.is_empty() {
-        return None;
+    let mut results: Vec<SearchResult> = Vec::new();
+    // Only the short recent list is walked; the catalog resolves each identifier to its first
+    // entry, since it can list the same identifier twice (a Start Menu shortcut in two folders).
+    for identifier in recent {
+        if results.len() == RECENT_APPLICATION_LIMIT {
+            break;
+        }
+        let Some(application) = catalog.find(identifier) else {
+            continue;
+        };
+        if results
+            .iter()
+            .any(|result| Arc::ptr_eq(&result.id, &application.id))
+        {
+            continue;
+        }
+        results.push(SearchResult {
+            kind: ResultKind::Recent,
+            id: application.id.clone(),
+            title: application.name.clone(),
+            description: application.description.clone(),
+            action: Action::LaunchApplication(application.id.clone()),
+        });
     }
-    found.sort_unstable_by_key(|(order, _)| *order);
-    // A catalog can list the same identifier twice (a Start Menu shortcut in two folders).
-    found.dedup_by_key(|(order, _)| *order);
-    Some(SearchBatch {
-        results: found
-            .into_iter()
-            .take(RECENT_APPLICATION_LIMIT)
-            .map(|(_, result)| result)
-            .collect(),
+    (!results.is_empty()).then_some(SearchBatch {
+        results,
         message: MESSAGE,
     })
 }
@@ -95,6 +88,37 @@ mod tests {
     fn nothing_recent_in_the_catalog_falls_back() {
         assert!(recent_results(&recent(&["id:Gone"]), &catalog(&["Notepad"])).is_none());
         assert!(recent_results(&[], &catalog(&["Notepad"])).is_none());
+    }
+
+    #[test]
+    fn duplicate_identifiers_resolve_to_the_first_catalog_entry_once() {
+        let application = |identifier: &str, name: &str| Application {
+            id: identifier.into(),
+            name: name.into(),
+            description: format!("{name} shortcut").into(),
+            pinned: false,
+            launches: 0,
+            aliases: Default::default(),
+        };
+        // The catalog sorts by name, so "Game (desktop)" is the first entry for `id:game`.
+        let catalog = ApplicationCatalog::new(vec![
+            application("id:game", "Game (start menu)"),
+            application("id:paint", "Paint"),
+            application("id:game", "Game (desktop)"),
+            application("id:notes", "Notes"),
+        ]);
+        let batch = recent_results(
+            &recent(&["id:notes", "id:game", "id:gone", "id:paint", "id:game"]),
+            &catalog,
+        )
+        .expect("recent apps");
+        let titles: Vec<&str> = batch.results.iter().map(|result| &*result.title).collect();
+        assert_eq!(titles, ["Notes", "Game (desktop)", "Paint"]);
+        assert_eq!(
+            catalog.find("id:game").map(|found| &*found.name),
+            Some("Game (desktop)")
+        );
+        assert!(catalog.find("id:gone").is_none());
     }
 
     #[test]

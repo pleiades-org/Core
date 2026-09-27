@@ -1,6 +1,18 @@
 use super::candidate_index::CandidateIndex;
-use crate::search::normalize;
-use std::{cmp::Reverse, sync::Arc};
+use crate::search::{normalize, normalize_into};
+use std::{
+    cmp::Reverse,
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
+
+/// Distinguishes catalogs so per-catalog caches never outlive the catalog they describe.
+static NEXT_IDENTITY: AtomicU64 = AtomicU64::new(1);
+/// `SearchScratch::slots` value for an application with no candidate in the current search.
+const NO_SLOT: usize = usize::MAX;
 
 #[derive(Clone, Debug)]
 pub struct Application {
@@ -28,6 +40,10 @@ pub struct ApplicationCatalog {
     initials_order: Box<[usize]>,
     /// Normalized alias and the application it belongs to, sorted by alias.
     aliases: Box<[(String, usize)]>,
+    /// Identifier to the first ordinal listing it, for resolving recent apps.
+    ordinals_by_id: HashMap<Arc<str>, usize>,
+    /// Unique per built catalog; `0` only for the empty default catalog.
+    identity: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -50,6 +66,21 @@ struct Candidate {
 #[derive(Default)]
 pub struct SearchScratch {
     candidates: Vec<Candidate>,
+    /// Ordinal to its index in `candidates`, or `NO_SLOT`; only used slots are reset.
+    slots: Vec<usize>,
+    normalized_query: String,
+}
+
+impl SearchScratch {
+    fn reset(&mut self, application_count: usize) {
+        for candidate in &self.candidates {
+            self.slots[candidate.ordinal] = NO_SLOT;
+        }
+        self.candidates.clear();
+        if self.slots.len() < application_count {
+            self.slots.resize(application_count, NO_SLOT);
+        }
+    }
 }
 
 pub struct RankedApplication<'catalog> {
@@ -114,12 +145,32 @@ impl ApplicationCatalog {
             .collect();
         aliases.sort_unstable();
         aliases.dedup();
+        let mut ordinals_by_id = HashMap::with_capacity(applications.len());
+        for (ordinal, prepared) in applications.iter().enumerate() {
+            ordinals_by_id
+                .entry(prepared.application.id.clone())
+                .or_insert(ordinal);
+        }
         Self {
             applications,
             index,
             initials_order: initials_order.into_boxed_slice(),
             aliases: aliases.into_boxed_slice(),
+            ordinals_by_id,
+            identity: NEXT_IDENTITY.fetch_add(1, Ordering::Relaxed),
         }
+    }
+
+    /// The first entry with this identifier: a catalog can list the same identifier twice
+    /// (a Start Menu shortcut in two folders).
+    pub fn find(&self, id: &str) -> Option<&Application> {
+        let ordinal = *self.ordinals_by_id.get(id)?;
+        Some(&self.applications[ordinal].application)
+    }
+
+    /// Equal only for the same built catalog, even if a new one reuses its memory.
+    pub(crate) fn identity(&self) -> u64 {
+        self.identity
     }
 
     pub fn len(&self) -> usize {
@@ -154,23 +205,41 @@ impl ApplicationCatalog {
         scratch: &mut SearchScratch,
         cancelled: &impl Fn() -> bool,
     ) -> Vec<RankedApplication<'catalog>> {
-        scratch.candidates.clear();
+        scratch.reset(self.applications.len());
         if limit == 0 {
             return Vec::new();
         }
-        let normalized = normalize(query);
+        // Ranking needs the scratch mutably, so the reused query storage is lent out meanwhile.
+        let mut buffer = std::mem::take(&mut scratch.normalized_query);
+        let results = self.rank(
+            normalize_into(query, &mut buffer),
+            limit,
+            scratch,
+            cancelled,
+        );
+        scratch.normalized_query = buffer;
+        results
+    }
+
+    fn rank<'catalog>(
+        &'catalog self,
+        normalized: &str,
+        limit: usize,
+        scratch: &mut SearchScratch,
+        cancelled: &impl Fn() -> bool,
+    ) -> Vec<RankedApplication<'catalog>> {
         let candidates = self
             .index
             .as_ref()
-            .and_then(|index| index.candidates(&normalized));
+            .and_then(|index| index.candidates(normalized));
         if let Some(candidates) = candidates {
-            if !self.collect_indexed(&normalized, candidates, scratch, cancelled) {
+            if !self.collect_indexed(normalized, candidates, scratch, cancelled) {
                 return Vec::new();
             }
-        } else if !self.collect_scanned(&normalized, scratch, cancelled) {
+        } else if !self.collect_scanned(normalized, scratch, cancelled) {
             return Vec::new();
         }
-        self.collect_aliases(&normalized, scratch);
+        self.collect_aliases(normalized, scratch);
         let count = limit.min(scratch.candidates.len());
         if count < scratch.candidates.len() {
             scratch.candidates.select_nth_unstable(count);
@@ -257,19 +326,19 @@ impl ApplicationCatalog {
             } else {
                 MatchClass::Prefix
             };
-            match scratch
-                .candidates
-                .iter_mut()
-                .find(|candidate| candidate.ordinal == *ordinal)
-            {
-                Some(existing) => existing.class = existing.class.min(class),
-                None => self.push_candidate(*ordinal, class, scratch),
+            match scratch.slots[*ordinal] {
+                NO_SLOT => self.push_candidate(*ordinal, class, scratch),
+                slot => {
+                    let existing = &mut scratch.candidates[slot];
+                    existing.class = existing.class.min(class);
+                }
             }
         }
     }
 
     fn push_candidate(&self, ordinal: usize, class: MatchClass, scratch: &mut SearchScratch) {
         let application = &self.applications[ordinal].application;
+        scratch.slots[ordinal] = scratch.candidates.len();
         scratch.candidates.push(Candidate {
             class,
             unpinned: !application.pinned,
@@ -343,6 +412,85 @@ mod tests {
             1
         );
         assert!(names("xyz", &mut scratch).is_empty());
+    }
+
+    #[test]
+    fn alias_and_name_matching_one_app_merge_into_its_best_class() {
+        let mut editor = application("editor", "Code Editor", false);
+        editor.aliases = Arc::from([Arc::from("code"), Arc::from("codeedit")]);
+        let catalog = ApplicationCatalog::new(vec![
+            application("codex", "Codex Tools", true),
+            editor,
+            application("other", "Other Code", false),
+        ]);
+        let mut scratch = SearchScratch::default();
+        let mut ids = |query: &str| -> Vec<String> {
+            catalog
+                .search(query, 8, &mut scratch)
+                .iter()
+                .map(|ranked| ranked.application.id.to_string())
+                .collect()
+        };
+        // Name prefix plus exact alias: listed once, ranked as exact above the pinned prefix.
+        assert_eq!(ids("code"), ["editor", "codex", "other"]);
+        // Two aliases starting with the query still give one row.
+        assert_eq!(ids("cod"), ["codex", "editor", "other"]);
+        assert_eq!(ids("codee"), ["editor"]);
+        // Reused scratch starts clean after a larger search and on another catalog.
+        let small = ApplicationCatalog::new(vec![application("other", "Other Code", false)]);
+        assert_eq!(small.search("code", 8, &mut scratch).len(), 1);
+        assert_eq!(catalog.search("code", 8, &mut scratch).len(), 3);
+    }
+
+    #[test]
+    fn indexed_alias_merging_equals_the_scan() {
+        let applications: Vec<_> = (0..300)
+            .map(|index| {
+                let mut application = application(
+                    &format!("app:{index}"),
+                    &format!("Code Tool {index}"),
+                    index % 7 == 0,
+                );
+                application.launches = (index % 13) as u32;
+                application.aliases = Arc::from([
+                    Arc::from(format!("code{index}")),
+                    Arc::from(format!("tool{}", index % 5)),
+                ]);
+                application
+            })
+            .collect();
+        let indexed = ApplicationCatalog::new(applications.clone());
+        assert!(indexed.index.is_some());
+        let mut scanned = ApplicationCatalog::new(applications);
+        scanned.index = None;
+        let mut scratch = SearchScratch::default();
+        for query in [
+            "code",
+            "code1",
+            "code12",
+            "tool",
+            "tool3",
+            "ct",
+            "code tool 1",
+        ] {
+            for limit in [1, 8, 500] {
+                let indexed_ids: Vec<_> = indexed
+                    .search(query, limit, &mut scratch)
+                    .into_iter()
+                    .map(|ranked| ranked.application.id.clone())
+                    .collect();
+                let scanned_ids: Vec<_> = scanned
+                    .search(query, limit, &mut scratch)
+                    .into_iter()
+                    .map(|ranked| ranked.application.id.clone())
+                    .collect();
+                assert_eq!(indexed_ids, scanned_ids, "query {query:?}, limit {limit}");
+                let mut unique = indexed_ids.clone();
+                unique.sort();
+                unique.dedup();
+                assert_eq!(unique.len(), indexed_ids.len(), "query {query:?}");
+            }
+        }
     }
 
     #[test]

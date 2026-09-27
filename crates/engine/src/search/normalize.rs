@@ -3,6 +3,26 @@ use std::borrow::Cow;
 /// Borrow canonical ASCII. Lowercase Unicode and fold final sigma for consistent prefix matching.
 pub fn normalize(query: &str) -> Cow<'_, str> {
     let trimmed = query.trim();
+    if is_canonical(trimmed) {
+        return Cow::Borrowed(trimmed);
+    }
+    let mut result = String::with_capacity(trimmed.len());
+    write_normalized(trimmed, &mut result);
+    Cow::Owned(result)
+}
+
+/// [`normalize`] for every keystroke: text that needs changes is written into reused `buffer`.
+pub fn normalize_into<'text>(query: &'text str, buffer: &'text mut String) -> &'text str {
+    let trimmed = query.trim();
+    if is_canonical(trimmed) {
+        return trimmed;
+    }
+    write_normalized(trimmed, buffer);
+    buffer
+}
+
+/// Lowercase ASCII words separated by single spaces.
+fn is_canonical(trimmed: &str) -> bool {
     let mut previous_space = false;
     for character in trimmed.bytes() {
         let is_space = character == b' ';
@@ -11,22 +31,25 @@ pub fn normalize(query: &str) -> Cow<'_, str> {
             || ((character.is_ascii_whitespace() || character == b'\x0b') && !is_space)
             || (is_space && previous_space)
         {
-            let lowercase = trimmed.to_lowercase();
-            let mut result = String::with_capacity(lowercase.len());
-            for word in lowercase.split_whitespace() {
-                if !result.is_empty() {
-                    result.push(' ');
-                }
-                result.extend(
-                    word.chars()
-                        .map(|character| if character == 'ς' { 'σ' } else { character }),
-                );
-            }
-            return Cow::Owned(result);
+            return false;
         }
         previous_space = is_space;
     }
-    Cow::Borrowed(trimmed)
+    true
+}
+
+/// Per-character lowercasing equals `str::to_lowercase` apart from its final-sigma rule, and
+/// every sigma is folded to `σ` anyway, so no intermediate lowercase copy is needed.
+fn write_normalized(trimmed: &str, output: &mut String) {
+    output.clear();
+    for word in trimmed.split_whitespace() {
+        if !output.is_empty() {
+            output.push(' ');
+        }
+        for character in word.chars().flat_map(char::to_lowercase) {
+            output.push(if character == 'ς' { 'σ' } else { character });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -51,6 +74,32 @@ mod tests {
                     .split_whitespace()
                     .collect::<Vec<_>>()
                     .join(" ")
+            );
+        }
+    }
+
+    #[test]
+    fn reused_buffer_matches_owned_normalization() {
+        let mut buffer = String::new();
+        let canonical = "hello world";
+        assert!(std::ptr::eq(
+            normalize_into(canonical, &mut buffer),
+            canonical
+        ));
+        for input in [
+            " HeLLo  WORLD ",
+            "ΟΣ",
+            "ΣΊΣΥΦΟΣ ΟΣ",
+            "İ",
+            "MÜNCHEN",
+            "\u{2003}hello\u{2003}world",
+            "  ",
+            "a",
+        ] {
+            assert_eq!(
+                normalize_into(input, &mut buffer),
+                normalize(input),
+                "{input}"
             );
         }
     }
