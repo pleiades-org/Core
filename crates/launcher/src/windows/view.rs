@@ -39,12 +39,14 @@ mod app_grid;
 mod command_prompt;
 mod console;
 mod footer;
+mod icon_cache;
 mod output;
 mod paint;
 mod power;
 mod preference_changes;
 mod settings_bridge;
 
+use icon_cache::IconCache;
 use preference_changes::PreferenceChanges;
 
 pub use footer::CLOCK_TIMER;
@@ -132,6 +134,8 @@ pub struct View {
     clip_shape: Cell<Option<window_placement::ClipShape>>,
     layout_key: Cell<LayoutKey>,
     rows: RefCell<Vec<DisplayRow>>,
+    /// Icons shown recently, for results that come back.
+    icon_cache: RefCell<IconCache>,
 }
 
 impl View {
@@ -176,6 +180,7 @@ impl View {
             clip_shape: Cell::new(None),
             layout_key: Cell::new(LayoutKey::STALE),
             rows: RefCell::new(Vec::new()),
+            icon_cache: RefCell::new(IconCache::default()),
         };
         unsafe {
             view.input = child(
@@ -654,12 +659,17 @@ impl View {
         }
         self.grid_hover.set(None);
         let previous = self.rows.take();
+        let mut cache = self.icon_cache.borrow_mut();
         for row in &mut rows {
-            row.icon = previous
-                .iter()
-                .find(|old| old.identifier == row.identifier)
-                .and_then(|old| old.icon.clone());
+            // An icon shown recently comes back at once; the rest are asked for.
+            row.icon = cache.get(&row.identifier).or_else(|| {
+                previous
+                    .iter()
+                    .find(|old| old.identifier == row.identifier)
+                    .and_then(|old| old.icon.clone())
+            });
         }
+        drop(cache);
         *self.rows.borrow_mut() = rows;
         unsafe {
             SendMessageW(self.results, WM_SETREDRAW, Some(WPARAM(0)), None);
@@ -696,28 +706,51 @@ impl View {
     }
 
     pub fn set_icons(&self, icons: &[LoadedIcon]) {
-        let mut changed = false;
-        for row in self.rows.borrow_mut().iter_mut() {
+        let mut cache = self.icon_cache.borrow_mut();
+        for loaded in icons {
+            if let Some(icon) = &loaded.icon {
+                cache.insert(loaded.identifier.clone(), icon.clone());
+            }
+        }
+        drop(cache);
+        let mut changed = Vec::new();
+        for (index, row) in self.rows.borrow_mut().iter_mut().enumerate() {
             if let Some(loaded) = icons
                 .iter()
                 .find(|loaded| loaded.identifier == row.identifier)
             {
-                changed |= !same_icon(&row.icon, &loaded.icon);
+                if !same_icon(&row.icon, &loaded.icon) {
+                    changed.push(index);
+                }
                 row.icon = loaded.icon.clone();
             }
         }
-        // A failed icon for a row that has none, or an icon it already shows, changes nothing.
-        if !changed {
-            return;
+        // Only rows whose icon changed repaint. A failed icon for a row that has none, or an
+        // icon it already shows, changes nothing.
+        let grid = self.grid();
+        for index in changed {
+            // In the grid, tiles are painted by the window itself; the hidden list never repaints.
+            if grid {
+                self.invalidate_tile(index);
+            } else {
+                self.invalidate_row(index);
+            }
         }
-        // In the grid, tiles are painted by the window itself; the hidden list never repaints.
-        let target = if self.grid() {
-            self.parent
-        } else {
-            self.results
-        };
+    }
+
+    fn invalidate_row(&self, index: usize) {
+        let mut area = RECT::default();
         unsafe {
-            let _ = InvalidateRect(Some(target), None, false);
+            if SendMessageW(
+                self.results,
+                LB_GETITEMRECT,
+                Some(WPARAM(index)),
+                Some(LPARAM(&mut area as *mut RECT as isize)),
+            )
+            .0 != LB_ERR as isize
+            {
+                let _ = InvalidateRect(Some(self.results), Some(&area), false);
+            }
         }
     }
 
@@ -854,6 +887,89 @@ mod tests {
         assert_eq!(control_text(view.footer), "");
         view.set_footer("Finished");
         assert_eq!(control_text(view.footer), "Finished");
+        unsafe { DestroyWindow(parent) }.unwrap();
+    }
+
+    #[test]
+    fn cached_icons_come_back_without_reloading_and_evictions_release_them() {
+        use windows::Win32::System::Threading::{
+            GetCurrentProcess, GetGuiResources, GR_GDIOBJECTS, GR_USEROBJECTS,
+        };
+        let _serial = crate::windows::GUI_RESOURCE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let handles = || unsafe {
+            (
+                GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS),
+                GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS),
+            )
+        };
+        let instance = unsafe { windows::Win32::System::LibraryLoader::GetModuleHandleW(None) }
+            .unwrap()
+            .into();
+        let parent = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!(""),
+                WS_POPUP,
+                0,
+                0,
+                100,
+                100,
+                None,
+                None,
+                Some(instance),
+                None,
+            )
+        }
+        .unwrap();
+        let view = View::create(parent, instance, Preferences::default()).unwrap();
+        let results = |range: std::ops::Range<usize>| -> Vec<SearchResult> {
+            range
+                .map(|index| SearchResult {
+                    kind: ResultKind::Application,
+                    id: format!("app:{index}").into(),
+                    title: format!("App {index}").into(),
+                    description: "Programs".into(),
+                    action: Action::LaunchApplication(format!("app:{index}").into()),
+                })
+                .collect()
+        };
+        // A new icon handle for each result, as the worker delivers after loading one.
+        let loaded = |results: &[SearchResult]| -> Vec<LoadedIcon> {
+            results
+                .iter()
+                .map(|result| {
+                    let icon = unsafe { CopyIcon(LoadIconW(None, IDI_APPLICATION).unwrap()) };
+                    LoadedIcon::new(
+                        result.id.clone(),
+                        ApplicationIcon::from_handle(icon.unwrap()).map(Arc::new),
+                    )
+                })
+                .collect()
+        };
+        let empty = handles();
+        // Load a screen at a time, far more icons than the cache keeps.
+        for start in (0..400).step_by(VISIBLE_RESULT_LIMIT) {
+            let screen = results(start..start + VISIBLE_RESULT_LIMIT);
+            view.set_rows(&screen);
+            view.set_icons(&loaded(&screen));
+        }
+        let full = handles();
+        assert!(full.0 <= empty.0 + icon_cache::CAPACITY as u32, "{full:?}");
+        // Results typed again show their icons at once, without loading new handles.
+        view.set_rows(&results(300..308));
+        assert!((300..308).all(|index| view.has_icon(&format!("app:{index}"))));
+        assert_eq!(handles(), full);
+        // Evicted ones are asked for again.
+        view.set_rows(&results(0..8));
+        assert!(!view.has_icon("app:0"));
+        // Every icon handle goes with the view; its fonts and brushes are deleted too.
+        drop(view);
+        let released = handles();
+        assert_eq!(released.0, empty.0);
+        assert!(released.1 < empty.1);
         unsafe { DestroyWindow(parent) }.unwrap();
     }
 

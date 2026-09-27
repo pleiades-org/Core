@@ -57,6 +57,16 @@ pub struct LoadedIcon {
 }
 
 impl LoadedIcon {
+    /// An icon as a worker delivers it, for view tests.
+    #[cfg(test)]
+    pub fn new(identifier: Arc<str>, icon: Option<Arc<ApplicationIcon>>) -> Self {
+        Self {
+            identifier,
+            icon,
+            loaded_at: Instant::now(),
+        }
+    }
+
     /// Until when a failed icon stays failed: the worker loads it again only after this.
     fn missing_until(&self) -> Option<Instant> {
         self.icon
@@ -98,8 +108,27 @@ struct RequestBatch {
 
 #[derive(Default)]
 struct Pending {
-    batch: Option<RequestBatch>,
+    shell: Option<RequestBatch>,
+    websites: Option<RequestBatch>,
     shutdown: bool,
+}
+
+/// Each worker thread takes requests from its own queue.
+#[derive(Clone, Copy)]
+enum Queue {
+    /// Windows Shell icons: local, and never the network.
+    Shell,
+    /// Website favicons, which may wait seconds for a slow site.
+    Websites,
+}
+
+impl Queue {
+    fn batch(self, pending: &mut Pending) -> &mut Option<RequestBatch> {
+        match self {
+            Self::Shell => &mut pending.shell,
+            Self::Websites => &mut pending.websites,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -110,35 +139,54 @@ struct Shared {
     completed: Mutex<Option<Vec<LoadedIcon>>>,
 }
 
+/// Two threads, so a slow website never delays application icons: one extracts Shell icons,
+/// the other fetches website icons. Both publish to the same completed list.
 pub struct IconWorker {
     shared: Arc<Shared>,
-    thread: Option<JoinHandle<()>>,
+    threads: Vec<JoinHandle<()>>,
 }
 
 impl IconWorker {
     pub fn new(window: HWND, allow_network: bool) -> std::io::Result<Self> {
-        let shared = Arc::new(Shared::default());
-        let worker_shared = shared.clone();
         let address = window.0 as usize;
-        let thread = thread::Builder::new()
-            .name("core-icons".into())
-            .spawn(move || run(address, worker_shared, allow_network))?;
-        Ok(Self {
-            shared,
-            thread: Some(thread),
-        })
+        // Dropped on a failed spawn, which stops a thread already started.
+        let mut worker = Self {
+            shared: Arc::new(Shared::default()),
+            threads: Vec::with_capacity(2),
+        };
+        let shared = worker.shared.clone();
+        worker.threads.push(
+            thread::Builder::new()
+                .name("core-icons".into())
+                .spawn(move || run_shell(address, shared))?,
+        );
+        let shared = worker.shared.clone();
+        worker.threads.push(
+            thread::Builder::new()
+                .name("core-favicons".into())
+                .spawn(move || run_websites(address, shared, allow_network))?,
+        );
+        Ok(worker)
     }
 
     pub fn submit(&self, requests: Vec<IconRequest>) {
         let generation = self.shared.generation.fetch_add(1, Ordering::AcqRel) + 1;
-        let should_wake = !requests.is_empty();
-        let batch = should_wake.then_some(RequestBatch {
-            generation,
-            requests,
-        });
-        self.shared.pending.lock().expect("icon request lock").batch = batch;
+        let (websites, shell): (Vec<_>, Vec<_>) = requests
+            .into_iter()
+            .partition(|request| matches!(request.source, IconSource::Website(_)));
+        let should_wake = !shell.is_empty() || !websites.is_empty();
+        let batch = |requests: Vec<IconRequest>| {
+            (!requests.is_empty()).then_some(RequestBatch {
+                generation,
+                requests,
+            })
+        };
+        let mut pending = self.shared.pending.lock().expect("icon request lock");
+        pending.shell = batch(shell);
+        pending.websites = batch(websites);
+        drop(pending);
         if should_wake {
-            self.shared.changed.notify_one();
+            self.shared.changed.notify_all();
         }
     }
 
@@ -156,13 +204,14 @@ impl Drop for IconWorker {
         {
             let mut pending = self.shared.pending.lock().expect("icon request lock");
             pending.shutdown = true;
-            pending.batch = None;
+            pending.shell = None;
+            pending.websites = None;
             self.shared.generation.fetch_add(1, Ordering::AcqRel);
         }
-        self.shared.changed.notify_one();
-        // A third-party Shell extension may stall. Never block the UI on that call at exit.
-        // The shared shutdown flag prevents later posts; thread-local icons drop on return.
-        if let Some(thread) = self.thread.take().filter(JoinHandle::is_finished) {
+        self.shared.changed.notify_all();
+        // A third-party Shell extension or a website may stall. Never block the UI on that at
+        // exit. The shared shutdown flag prevents later posts; thread-local icons drop on return.
+        for thread in self.threads.drain(..).filter(JoinHandle::is_finished) {
             if thread.join().is_err() {
                 eprintln!("Core icon worker stopped unexpectedly");
             }
@@ -170,11 +219,11 @@ impl Drop for IconWorker {
     }
 }
 
-fn run(address: usize, shared: Arc<Shared>, allow_network: bool) {
+fn run_shell(address: usize, shared: Arc<Shared>) {
     let mut cache = VecDeque::with_capacity(CACHE_CAPACITY);
     // Initialize lazily so a hidden launcher does not load the Shell icon machinery.
     let mut com = None;
-    while let Some(batch) = next_batch(&shared) {
+    while let Some(batch) = next_batch(&shared, Queue::Shell) {
         if com.is_none() {
             match ComApartment::new() {
                 Ok(apartment) => com = Some(apartment),
@@ -184,23 +233,41 @@ fn run(address: usize, shared: Arc<Shared>, allow_network: bool) {
                 }
             }
         }
-        // Local icons first: a slow website must not delay application icons.
-        let (websites, local): (Vec<_>, Vec<_>) = batch
-            .requests
-            .into_iter()
-            .partition(|request| matches!(request.source, IconSource::Website(_)));
         let current = || shared.generation.load(Ordering::Acquire) == batch.generation;
-        let mut loaded = Vec::with_capacity(local.len());
-        for request in local {
+        // Icons loaded before appear at once; each new one appears as soon as it is extracted,
+        // not after the slowest in the batch.
+        let mut loaded = Vec::new();
+        let mut missing = Vec::new();
+        for request in batch.requests {
+            match cached(&mut cache, &request.identifier) {
+                Some(icon) => loaded.push(icon),
+                None => missing.push(request),
+            }
+        }
+        publish(address, &shared, loaded);
+        for request in missing {
             if !current() {
                 break;
             }
-            loaded.push(cached_icon(&mut cache, request, allow_network));
+            // Never the network, even for a website request that reached this queue.
+            publish(
+                address,
+                &shared,
+                vec![cached_icon(&mut cache, request, false)],
+            );
         }
-        publish(address, &shared, loaded);
+    }
+    // Release icons before the COM apartment is uninitialized.
+    drop(cache);
+}
+
+fn run_websites(address: usize, shared: Arc<Shared>, allow_network: bool) {
+    let mut cache = VecDeque::with_capacity(CACHE_CAPACITY);
+    while let Some(batch) = next_batch(&shared, Queue::Websites) {
+        let current = || shared.generation.load(Ordering::Acquire) == batch.generation;
         // Downloads are slow and re-renders (search results, exchange rates, discovery) start
         // new batches often, so each website icon is published the moment it is ready.
-        for request in websites {
+        for request in batch.requests {
             if !current() {
                 break;
             }
@@ -211,20 +278,32 @@ fn run(address: usize, shared: Arc<Shared>, allow_network: bool) {
             );
         }
     }
-    // Release icons before the COM apartment is uninitialized.
-    drop(cache);
 }
 
-fn next_batch(shared: &Shared) -> Option<RequestBatch> {
+fn next_batch(shared: &Shared, queue: Queue) -> Option<RequestBatch> {
     let mut pending = shared.pending.lock().expect("icon request lock");
-    while pending.batch.is_none() && !pending.shutdown {
+    loop {
+        if pending.shutdown {
+            return None;
+        }
+        if let Some(batch) = queue.batch(&mut pending).take() {
+            return Some(batch);
+        }
         pending = shared.changed.wait(pending).expect("icon wake lock");
     }
-    if pending.shutdown {
-        None
-    } else {
-        pending.batch.take()
+}
+
+/// A loaded icon, or a failure not yet due for a retry, moved to the most recent place.
+fn cached(cache: &mut VecDeque<LoadedIcon>, identifier: &str) -> Option<LoadedIcon> {
+    let index = cache
+        .iter()
+        .position(|entry| &*entry.identifier == identifier)?;
+    let entry = cache.remove(index).expect("cached icon index");
+    if entry.icon.is_none() && entry.loaded_at.elapsed() >= FAILED_ICON_RETRY {
+        return None;
     }
+    cache.push_back(entry.clone());
+    Some(entry)
 }
 
 fn cached_icon(
@@ -232,20 +311,13 @@ fn cached_icon(
     request: IconRequest,
     allow_network: bool,
 ) -> LoadedIcon {
-    let cached = cache
-        .iter()
-        .position(|entry| entry.identifier == request.identifier)
-        .map(|index| cache.remove(index).expect("cached icon index"))
-        .filter(|entry| entry.icon.is_some() || entry.loaded_at.elapsed() < FAILED_ICON_RETRY);
-    let loaded = if let Some(entry) = cached {
-        entry
-    } else {
-        let icon = request.source.load(allow_network).map(Arc::new);
-        LoadedIcon {
-            identifier: request.identifier,
-            icon,
-            loaded_at: Instant::now(),
-        }
+    if let Some(entry) = cached(cache, &request.identifier) {
+        return entry;
+    }
+    let loaded = LoadedIcon {
+        icon: request.source.load(allow_network).map(Arc::new),
+        identifier: request.identifier,
+        loaded_at: Instant::now(),
     };
     if cache.len() == CACHE_CAPACITY {
         cache.pop_front();
@@ -364,6 +436,47 @@ mod tests {
         assert!(!missing.is_missing("broken", later));
         missing.record(&[], start + FAILED_ICON_RETRY * 2);
         assert!(missing.0.is_empty());
+    }
+
+    /// Contacts the network: run with `cargo test -- --ignored stalled`.
+    #[test]
+    #[ignore = "requires network access; waits for a connection that never answers"]
+    fn application_icons_arrive_while_a_website_request_is_stalled() {
+        // The workers post to a null window and load an icon; keep them off handle counts.
+        let _serial = crate::windows::GUI_RESOURCE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let worker = IconWorker::new(HWND::default(), true).unwrap();
+        // Unroutable: the connection waits for WinHTTP's 3 s connect timeout.
+        worker.submit(vec![IconRequest {
+            identifier: "stalled".into(),
+            source: IconSource::Website(WebsiteOrigin::parse("http://10.255.255.1").unwrap()),
+        }]);
+        thread::sleep(Duration::from_millis(300));
+        let started = Instant::now();
+        worker.submit(vec![IconRequest {
+            identifier: "app".into(),
+            source: IconSource::Shell(std::env::current_exe().unwrap()),
+        }]);
+        let icon = loop {
+            if let Some(icon) = worker
+                .take_completed()
+                .and_then(|icons| icons.into_iter().find(|icon| &*icon.identifier == "app"))
+            {
+                break icon;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "no application icon"
+            );
+            thread::sleep(Duration::from_millis(5));
+        };
+        assert!(icon.icon.is_some());
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the application icon waited {:?} behind the website",
+            started.elapsed()
+        );
     }
 
     #[test]
