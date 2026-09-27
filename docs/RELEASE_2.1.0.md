@@ -11,7 +11,8 @@ This release brings the native v2 launcher into the main Core repository and add
 - Search indexing retains long-name catalogs and indexes two-byte queries within the memory budget.
 - Known-folder relocation refreshes recent-app resolutions without restarting Core.
 
-See [UPDATES.md](UPDATES.md) for network behavior, signing, release assets, and recovery.
+See [the update guide](https://github.com/pleiades-org/Core/blob/main/docs/UPDATES.md)
+for network behavior, signing, release assets, and recovery.
 Executables remain unsigned by Authenticode. Background release checks do not replace manual
 foreground, mixed-DPI, accessibility, or physical-keyboard validation.
 
