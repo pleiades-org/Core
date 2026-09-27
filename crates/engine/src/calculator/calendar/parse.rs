@@ -43,8 +43,7 @@ pub fn parse_calendar(input: &str) -> Option<Result<CalendarRequest, CalendarErr
         words[count] = word;
         count += 1;
     }
-    // Do not steal app names such as "Nextcloud",
-            "next time i open the launcher please show me my apps", "In Design" or "Days Gone".
+    // Do not steal app names such as "Nextcloud", "In Design" or "Days Gone".
     if !starts_date && !is_calendar_shape(&words[..count]) {
         return None;
     }

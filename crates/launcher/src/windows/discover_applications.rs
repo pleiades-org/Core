@@ -63,6 +63,7 @@ pub fn discover_applications(stopped: &AtomicBool) -> Discovery {
                     launches: 0,
                     aliases: shortcuts
                         .as_ref()
+                        .filter(|_| is_shortcut(&path))
                         .and_then(|reader| reader.program_alias(&path))
                         .map(|alias| Arc::from([alias]))
                         .unwrap_or_default(),
@@ -178,6 +179,11 @@ fn record_warning(warnings: &mut Vec<String>, warning: String) {
     }
 }
 
+fn is_shortcut(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("lnk"))
+}
+
 fn is_launch_target(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -195,4 +201,19 @@ fn identity(path: &Path) -> Arc<str> {
         write!(identifier, "{unit:04x}").expect("writing to String cannot fail");
     }
     identifier.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_shell_links_are_read_for_program_aliases() {
+        for name in ["App.lnk", "App.LNK", "App.LnK"] {
+            assert!(is_shortcut(Path::new(name)));
+        }
+        for name in ["App.exe", "App.url", "App.appref-ms", "App", "lnk"] {
+            assert!(!is_shortcut(Path::new(name)));
+        }
+    }
 }

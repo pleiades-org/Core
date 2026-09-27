@@ -3,12 +3,18 @@
 //! HTML; the site's own `/favicon.ico` is the fallback. Private hosts (`localhost`, IP addresses,
 //! intranet names) are never sent to Google. No cookies or credentials are sent anywhere.
 use super::{application_icon::ApplicationIcon, http};
-use std::{fs, ops::Range, path::PathBuf, time::Duration};
+use std::{
+    fs,
+    ops::Range,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use windows::Win32::UI::WindowsAndMessaging::{CreateIconFromResourceEx, LR_DEFAULTCOLOR};
 
 /// Keep icons for a month; retry sites without a usable icon after a day.
 const CACHE_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const MISSING_RETRY: Duration = Duration::from_secs(24 * 60 * 60);
+const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_ICON_BYTES: usize = 512 * 1024;
 /// Preferred favicon edge; rows draw icons at 26 px scaled for the display.
 const PREFERRED_SIZE: u32 = 48;
@@ -91,8 +97,8 @@ fn strip_prefix_ignore_case<'text>(text: &'text str, prefix: &str) -> Option<&'t
 /// Returns the cached icon, fetching it first when the cache is missing or stale.
 pub fn load(origin: &WebsiteOrigin) -> Option<ApplicationIcon> {
     let path = cache_folder()?.join(origin.cache_name());
-    if let Some(bytes) = fresh_cache(&path) {
-        return decode(&bytes);
+    if let Some(icon) = cached_icon(&path) {
+        return icon;
     }
     let bytes = match fetch(origin) {
         Ok(bytes) => bytes,
@@ -112,10 +118,31 @@ pub fn load(origin: &WebsiteOrigin) -> Option<ApplicationIcon> {
     if icon.is_none() {
         eprintln!("{} has no icon from Google or /favicon.ico", origin.host);
     }
-    if let Err(error) = fs::create_dir_all(path.parent()?).and_then(|_| fs::write(&path, cached)) {
+    let temporary = path.with_extension("icon.tmp");
+    if let Err(error) = fs::create_dir_all(path.parent()?)
+        .and_then(|_| fs::write(&temporary, cached))
+        .and_then(|_| fs::rename(&temporary, &path))
+    {
         eprintln!("Could not cache the icon for {}: {error}", origin.host);
     }
     icon
+}
+
+fn cached_icon(path: &PathBuf) -> Option<Option<ApplicationIcon>> {
+    let bytes = fresh_cache(path)?;
+    if bytes.is_empty() {
+        return Some(None);
+    }
+    if let Some(icon) = decode(&bytes) {
+        return Some(Some(icon));
+    }
+    if let Err(error) = fs::remove_file(path) {
+        eprintln!(
+            "Could not remove invalid icon cache {}: {error}",
+            path.display()
+        );
+    }
+    None
 }
 
 fn cache_folder() -> Option<PathBuf> {
@@ -207,10 +234,11 @@ fn fetch(origin: &WebsiteOrigin) -> windows::core::Result<Vec<u8>> {
         .then_some(google)
         .into_iter()
         .chain([direct]);
+    let deadline = Instant::now() + FETCH_TIMEOUT;
     let mut reached = false;
     let mut last_error = None;
     for request in sources {
-        match http::get(request) {
+        match get_icon(request, deadline) {
             // Google answers unknown sites with 404 and a generic globe; the body is then empty.
             Ok(response) if is_icon_data(&response.body) => return Ok(response.body),
             Ok(_) => reached = true,
@@ -221,6 +249,74 @@ fn fetch(origin: &WebsiteOrigin) -> windows::core::Result<Vec<u8>> {
         Some(error) if !reached => Err(error),
         _ => Ok(Vec::new()),
     }
+}
+
+fn get_icon(
+    request: http::Request<'_>,
+    deadline: Instant,
+) -> windows::core::Result<http::Response> {
+    let response = http::get(request, deadline)?;
+    let Some(location) = &response.location else {
+        return Ok(response);
+    };
+    let (origin, path) = redirect_target(request, location).ok_or_else(|| {
+        windows::core::Error::new(
+            windows::Win32::Foundation::E_FAIL,
+            "unsafe favicon redirect",
+        )
+    })?;
+    http::get(
+        http::Request {
+            secure: origin.secure,
+            host: &origin.host,
+            port: origin.port,
+            path: &path,
+            max_bytes: request.max_bytes,
+        },
+        deadline,
+    )
+}
+
+fn redirect_target(request: http::Request<'_>, location: &str) -> Option<(WebsiteOrigin, String)> {
+    if location.is_empty()
+        || location.chars().any(|character| {
+            character.is_whitespace() || character.is_control() || character == '\\'
+        })
+    {
+        return None;
+    }
+    let scheme = if request.secure { "https" } else { "http" };
+    let url = if location.starts_with("//") {
+        format!("{scheme}:{location}")
+    } else if location.contains("://") {
+        location.to_owned()
+    } else {
+        let base = format!("{scheme}://{}:{}", request.host, request.port);
+        if location.starts_with('/') {
+            format!("{base}{location}")
+        } else {
+            let directory = request
+                .path
+                .rsplit_once('/')
+                .map_or("", |(directory, _)| directory);
+            format!("{base}{directory}/{location}")
+        }
+    };
+    let origin = WebsiteOrigin::parse(&url)?;
+    if !origin.is_public() || (request.secure && !origin.secure) {
+        return None;
+    }
+    let rest = url.split_once("://")?.1;
+    let path = rest
+        .find(['/', '?', '#'])
+        .map_or("/", |start| &rest[start..]);
+    let path = path.split('#').next()?;
+    let path = if path.starts_with('/') {
+        path.to_owned()
+    } else {
+        format!("/{path}")
+    };
+    Some((origin, path))
 }
 
 fn is_icon_data(bytes: &[u8]) -> bool {
@@ -345,12 +441,55 @@ mod tests {
     }
 
     #[test]
+    fn redirects_revalidate_hosts_and_prevent_https_downgrades() {
+        let request = http::Request {
+            secure: true,
+            host: "example.com",
+            port: 443,
+            path: "/favicon.ico",
+            max_bytes: MAX_ICON_BYTES,
+        };
+        for location in [
+            "https://cdn.example.com/icon.ico",
+            "//cdn.example.com/icon.ico",
+            "/icon.ico",
+            "icon.ico",
+        ] {
+            let (origin, path) = redirect_target(request, location).unwrap();
+            assert!(origin.is_public());
+            assert_eq!(path, "/icon.ico");
+        }
+        for location in [
+            "http://example.com/icon.ico",
+            "https://127.0.0.1/icon",
+            "https://nas/icon",
+            "https://router.lan/icon",
+            "https://localhost/icon",
+            "https://user@site.com/icon",
+            "https://site.com\\@localhost/icon",
+            "",
+        ] {
+            assert!(redirect_target(request, location).is_none(), "{location}");
+        }
+        let private = http::Request {
+            host: "printer.local",
+            ..request
+        };
+        assert!(redirect_target(private, "/icon.ico").is_none());
+    }
+
+    #[test]
     fn a_new_miss_is_cached_and_absent_files_are_fetched() {
         let folder = std::env::temp_dir().join(format!("core-favicon-{}", std::process::id()));
         fs::create_dir_all(&folder).unwrap();
         let missing = folder.join("missing.icon");
         fs::write(&missing, b"").unwrap();
         assert_eq!(fresh_cache(&missing), Some(Vec::new()));
+        assert!(matches!(cached_icon(&missing), Some(None)));
+        let corrupt = folder.join("corrupt.icon");
+        fs::write(&corrupt, b"not an icon").unwrap();
+        assert!(cached_icon(&corrupt).is_none());
+        assert!(!corrupt.exists());
         assert_eq!(fresh_cache(&folder.join("absent.icon")), None);
         fs::remove_dir_all(&folder).unwrap();
     }

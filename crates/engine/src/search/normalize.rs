@@ -17,7 +17,10 @@ pub fn normalize(query: &str) -> Cow<'_, str> {
                 if !result.is_empty() {
                     result.push(' ');
                 }
-                result.extend(word.chars().map(|character| if character == 'ς' { 'σ' } else { character }));
+                result.extend(
+                    word.chars()
+                        .map(|character| if character == 'ς' { 'σ' } else { character }),
+                );
             }
             return Cow::Owned(result);
         }

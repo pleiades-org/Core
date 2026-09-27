@@ -160,9 +160,7 @@ impl CommandRun {
             }
             return Err(error("track the command", failure));
         }
-        unsafe {
-            ResumeThread(main_thread.0);
-        }
+        resume_command(main_thread.0, job.0)?;
         drop(main_thread);
         let shared: SharedState = Arc::default();
         let address = window.0 as usize;
@@ -171,7 +169,9 @@ impl CommandRun {
             thread::Builder::new()
                 .name("core-command-output".into())
                 .spawn(move || read_output(output_read, shared, address))
-                .map_err(|failure| format!("Could not read command output: {failure}"))?;
+                .map_err(|failure| {
+                    failed_start(job.0, format!("Could not read command output: {failure}"))
+                })?;
         }
         {
             let shared = shared.clone();
@@ -179,7 +179,9 @@ impl CommandRun {
             thread::Builder::new()
                 .name("core-command-exit".into())
                 .spawn(move || wait_for_exit(process, console, report, shared, address))
-                .map_err(|failure| format!("Could not watch the command: {failure}"))?;
+                .map_err(|failure| {
+                    failed_start(job.0, format!("Could not watch the command: {failure}"))
+                })?;
         }
         Ok(Self {
             job,
@@ -231,6 +233,24 @@ impl Drop for CommandRun {
         self.stop();
         self.shared.0.lock().expect("command lock").detached = true;
     }
+}
+
+fn resume_command(thread: HANDLE, job: HANDLE) -> Result<(), String> {
+    if unsafe { ResumeThread(thread) } == u32::MAX {
+        let error = windows::core::Error::from_win32();
+        return Err(failed_start(
+            job,
+            format!("Could not resume the command: {error}"),
+        ));
+    }
+    Ok(())
+}
+
+fn failed_start(job: HANDLE, message: String) -> String {
+    if let Err(error) = unsafe { TerminateJobObject(job, 1) } {
+        return format!("{message}; could not terminate the command job: {error}");
+    }
+    message
 }
 
 fn pipe(buffer: u32) -> windows::core::Result<(OwnedHandle, OwnedHandle)> {
@@ -467,6 +487,64 @@ mod tests {
         crate::windows::GUI_RESOURCE_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn suspended_job() -> (OwnedHandle, OwnedHandle, OwnedHandle) {
+        let program =
+            PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/cmd.exe");
+        let program = wide_null(program.as_os_str());
+        let mut command: Vec<u16> = "cmd.exe /c exit 0".encode_utf16().chain(Some(0)).collect();
+        let startup = STARTUPINFOW {
+            cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+            ..Default::default()
+        };
+        let mut process = PROCESS_INFORMATION::default();
+        unsafe {
+            CreateProcessW(
+                PCWSTR(program.as_ptr()),
+                Some(PWSTR(command.as_mut_ptr())),
+                None,
+                None,
+                false,
+                CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                None,
+                PCWSTR::null(),
+                &startup,
+                &mut process,
+            )
+        }
+        .unwrap();
+        let process_handle = OwnedHandle(process.hProcess);
+        let thread_handle = OwnedHandle(process.hThread);
+        let job = OwnedHandle(unsafe { CreateJobObjectW(None, PCWSTR::null()) }.unwrap());
+        unsafe { AssignProcessToJobObject(job.0, process_handle.0) }.unwrap();
+        (job, process_handle, thread_handle)
+    }
+
+    #[test]
+    fn startup_errors_terminate_the_job_and_successful_resume_runs() {
+        let _serial = lock();
+        let (job, process, main_thread) = suspended_job();
+        resume_command(main_thread.0, job.0).unwrap();
+        assert_eq!(
+            unsafe { WaitForSingleObject(process.0, 5_000) },
+            WAIT_OBJECT_0
+        );
+        let (job, process, _main_thread) = suspended_job();
+        assert!(resume_command(HANDLE::default(), job.0).is_err());
+        assert_eq!(
+            unsafe { WaitForSingleObject(process.0, 5_000) },
+            WAIT_OBJECT_0
+        );
+        let (job, process, _main_thread) = suspended_job();
+        assert_eq!(
+            failed_start(job.0, "worker spawn failed".into()),
+            "worker spawn failed"
+        );
+        assert_eq!(
+            unsafe { WaitForSingleObject(process.0, 5_000) },
+            WAIT_OBJECT_0
+        );
     }
 
     #[test]

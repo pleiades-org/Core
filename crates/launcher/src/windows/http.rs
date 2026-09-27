@@ -1,8 +1,12 @@
 //! Minimal HTTP GET over WinHTTP for background workers: website icons and exchange rates.
 //! No cookies or credentials are sent, responses are size-limited, and slow servers time out.
+use std::time::Instant;
 use windows::{
     core::{w, PCWSTR},
-    Win32::{Foundation::E_FAIL, Networking::WinHttp::*},
+    Win32::{
+        Foundation::{E_FAIL, WIN32_ERROR},
+        Networking::WinHttp::*,
+    },
 };
 
 /// Resolve, connect and send limits; receiving the body gets a little longer.
@@ -11,6 +15,7 @@ const RECEIVE_TIMEOUT_MS: i32 = 5_000;
 const CHUNK_BYTES: usize = 16 * 1024;
 pub const STATUS_OK: u32 = 200;
 
+#[derive(Clone, Copy)]
 pub struct Request<'a> {
     pub secure: bool,
     pub host: &'a str,
@@ -21,6 +26,7 @@ pub struct Request<'a> {
 
 pub struct Response {
     pub status: u32,
+    pub location: Option<String>,
     /// Empty unless the status is 200.
     pub body: Vec<u8>,
 }
@@ -44,7 +50,7 @@ impl Drop for Internet {
 }
 
 /// Blocking GET; call only from a background thread.
-pub fn get(request: Request) -> windows::core::Result<Response> {
+pub fn get(request: Request, deadline: Instant) -> windows::core::Result<Response> {
     unsafe {
         let session = Internet::new(WinHttpOpen(
             w!("Core/2"),
@@ -53,13 +59,7 @@ pub fn get(request: Request) -> windows::core::Result<Response> {
             PCWSTR::null(),
             0,
         ))?;
-        WinHttpSetTimeouts(
-            session.0,
-            CONNECT_TIMEOUT_MS,
-            CONNECT_TIMEOUT_MS,
-            CONNECT_TIMEOUT_MS,
-            RECEIVE_TIMEOUT_MS,
-        )?;
+        set_timeouts(session.0, deadline)?;
         let host: Vec<u16> = request.host.encode_utf16().chain(Some(0)).collect();
         let connection = Internet::new(WinHttpConnect(
             session.0,
@@ -87,8 +87,16 @@ pub fn get(request: Request) -> windows::core::Result<Response> {
             WINHTTP_OPTION_DISABLE_FEATURE,
             Some(&disabled),
         )?;
+        WinHttpSetOption(
+            Some(handle.0),
+            WINHTTP_OPTION_REDIRECT_POLICY,
+            Some(&WINHTTP_OPTION_REDIRECT_POLICY_NEVER.to_le_bytes()),
+        )?;
+        set_timeouts(handle.0, deadline)?;
         WinHttpSendRequest(handle.0, None, None, 0, 0, 0)?;
+        set_timeouts(handle.0, deadline)?;
         WinHttpReceiveResponse(handle.0, std::ptr::null_mut())?;
+        remaining_timeout(deadline, Instant::now())?;
         let mut status = 0_u32;
         let mut length = std::mem::size_of::<u32>() as u32;
         WinHttpQueryHeaders(
@@ -99,31 +107,58 @@ pub fn get(request: Request) -> windows::core::Result<Response> {
             &mut length,
             std::ptr::null_mut(),
         )?;
+        let location = if matches!(status, 301 | 302 | 303 | 307 | 308) {
+            header(handle.0, WINHTTP_QUERY_LOCATION)?
+        } else {
+            None
+        };
         let body = if status == STATUS_OK {
-            read_body(handle.0, request.max_bytes)?
+            let length = header(handle.0, WINHTTP_QUERY_CONTENT_LENGTH)?;
+            validate_length(length.as_deref(), request.max_bytes)?;
+            read_body(handle.0, request.max_bytes, deadline)?
         } else {
             Vec::new()
         };
-        Ok(Response { status, body })
+        Ok(Response {
+            status,
+            location,
+            body,
+        })
     }
 }
 
 unsafe fn read_body(
     request: *mut core::ffi::c_void,
     max_bytes: usize,
+    deadline: Instant,
 ) -> windows::core::Result<Vec<u8>> {
     let mut body = Vec::new();
     let mut chunk = [0_u8; CHUNK_BYTES];
     loop {
+        set_timeouts(request, deadline)?;
+        let mut available = 0_u32;
+        WinHttpQueryDataAvailable(request, &mut available)?;
+        remaining_timeout(deadline, Instant::now())?;
+        if available == 0 {
+            return Ok(body);
+        }
+        if available as usize > max_bytes.saturating_sub(body.len()) {
+            return Err(windows::core::Error::new(
+                E_FAIL,
+                "response exceeds size limit",
+            ));
+        }
+        set_timeouts(request, deadline)?;
         let mut read = 0_u32;
         unsafe {
             WinHttpReadData(
                 request,
                 chunk.as_mut_ptr().cast(),
-                chunk.len() as u32,
+                available.min(chunk.len() as u32),
                 &mut read,
             )?;
         }
+        remaining_timeout(deadline, Instant::now())?;
         if read == 0 {
             return Ok(body);
         }
@@ -133,6 +168,155 @@ unsafe fn read_body(
                 E_FAIL,
                 format!("response exceeds {max_bytes} bytes"),
             ));
+        }
+    }
+}
+
+fn remaining_timeout(deadline: Instant, now: Instant) -> windows::core::Result<i32> {
+    let remaining = deadline
+        .checked_duration_since(now)
+        .filter(|duration| !duration.is_zero())
+        .ok_or_else(|| {
+            windows::core::Error::new(E_FAIL, "HTTP request exceeded its total deadline")
+        })?;
+    Ok(remaining.as_millis().clamp(1, RECEIVE_TIMEOUT_MS as u128) as i32)
+}
+
+unsafe fn set_timeouts(
+    handle: *mut core::ffi::c_void,
+    deadline: Instant,
+) -> windows::core::Result<()> {
+    let receive = remaining_timeout(deadline, Instant::now())?;
+    let connect = receive.min(CONNECT_TIMEOUT_MS);
+    WinHttpSetTimeouts(handle, connect, connect, connect, receive)
+}
+
+unsafe fn header(
+    request: *mut core::ffi::c_void,
+    query: u32,
+) -> windows::core::Result<Option<String>> {
+    let mut buffer = [0_u16; 4096];
+    let mut length = std::mem::size_of_val(&buffer) as u32;
+    match WinHttpQueryHeaders(
+        request,
+        query,
+        PCWSTR::null(),
+        Some(buffer.as_mut_ptr().cast()),
+        &mut length,
+        std::ptr::null_mut(),
+    ) {
+        Ok(()) => {
+            let text = String::from_utf16(&buffer[..length as usize / 2])
+                .map_err(|_| windows::core::Error::new(E_FAIL, "invalid HTTP header encoding"))?;
+            Ok(Some(text.trim_end_matches('\0').to_owned()))
+        }
+        Err(error) if error.code() == WIN32_ERROR(ERROR_WINHTTP_HEADER_NOT_FOUND).to_hresult() => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn validate_length(length: Option<&str>, max_bytes: usize) -> windows::core::Result<()> {
+    let Some(length) = length else { return Ok(()) };
+    let length = length
+        .parse::<u64>()
+        .map_err(|_| windows::core::Error::new(E_FAIL, "invalid Content-Length"))?;
+    if length > max_bytes as u64 {
+        return Err(windows::core::Error::new(
+            E_FAIL,
+            "declared response exceeds size limit",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn deadlines_expire_at_the_boundary_and_bound_each_wait() {
+        let now = Instant::now();
+        assert_eq!(
+            remaining_timeout(now + Duration::from_secs(30), now).unwrap(),
+            RECEIVE_TIMEOUT_MS
+        );
+        assert_eq!(
+            remaining_timeout(now + Duration::from_millis(12), now).unwrap(),
+            12
+        );
+        assert!(remaining_timeout(now, now).is_err());
+        assert!(remaining_timeout(now, now + Duration::from_nanos(1)).is_err());
+    }
+
+    #[test]
+    fn a_trickling_body_cannot_extend_the_total_deadline() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let server = thread::spawn(move || {
+            let started = Instant::now();
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(started.elapsed() < Duration::from_secs(2));
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("could not accept test request: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = [0; 4096];
+            assert!(stream.read(&mut request).unwrap() > 0);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            for _ in 0..100 {
+                if stream.write_all(b"x").is_err() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+        });
+        let started = Instant::now();
+        let result = get(
+            Request {
+                secure: false,
+                host: "127.0.0.1",
+                port,
+                path: "/",
+                max_bytes: 100,
+            },
+            started + Duration::from_millis(250),
+        );
+        let elapsed = started.elapsed();
+        server.join().unwrap();
+        assert!(result.is_err());
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "request ran for {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn declared_lengths_are_checked_before_reading() {
+        assert!(validate_length(None, 10).is_ok());
+        assert!(validate_length(Some("10"), 10).is_ok());
+        for length in ["11", "18446744073709551615", "-1", "invalid"] {
+            assert!(validate_length(Some(length), 10).is_err());
         }
     }
 }

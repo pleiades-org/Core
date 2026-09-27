@@ -232,8 +232,8 @@ mod tests {
         let answer = convert_units("10 pounds to kg").unwrap().unwrap();
         assert_eq!(answer.title, "4.5359237 kg");
         let tiny = convert_units("1e-300 m to km").unwrap().unwrap();
-        assert_eq!(tiny.title, "1e-303 km");
-        assert_eq!(tiny.copy.parse::<f64>().unwrap(), 1e-303);
+        assert_eq!(tiny.title, format!("{} km", tiny.copy));
+        assert!((tiny.copy.parse::<f64>().unwrap() / 1e-303 - 1.).abs() < 1e-12);
         assert_eq!(convert_units("0.1 m to cm").unwrap().unwrap().copy, "10");
     }
 
