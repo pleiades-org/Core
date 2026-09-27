@@ -9,16 +9,29 @@ use crate::windows::{
 };
 use core_engine::search::{parse_query, CommandKind, ParsedQuery, RunMode, ShellKind};
 use std::{
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf, Prefix},
     sync::Arc,
     time::{Duration, Instant},
 };
-use windows::Win32::Foundation::HWND;
+use windows::Win32::{
+    Foundation::HWND,
+    UI::WindowsAndMessaging::{KillTimer, SetTimer},
+};
+
+/// Delays taking output that arrives sooner than [`OUTPUT_INTERVAL`] after the last batch.
+pub const COMMAND_OUTPUT_TIMER: usize = 43;
+/// The shortest time between output batches. Each costs a parse, a layout check and a
+/// repaint, so a fast command's small reads are gathered into fewer, larger batches.
+const OUTPUT_INTERVAL: Duration = Duration::from_millis(16);
 
 pub struct CommandSession {
     run: CommandRun,
     started: Instant,
     finished: Option<(Outcome, Duration)>,
+    /// When output was last taken from the run.
+    last_output: Option<Instant>,
+    /// [`COMMAND_OUTPUT_TIMER`] is set to take the output later.
+    output_timer: bool,
 }
 
 /// Progress through the history while ↑ and ↓ are pressed.
@@ -105,7 +118,7 @@ impl LauncherState {
     /// Where the next command starts: where the last one finished, as after `cd` in a
     /// terminal. Home again if that folder has since gone.
     fn command_directory(&mut self) -> PathBuf {
-        if !self.working_directory.is_dir() {
+        if !usable_directory(&self.working_directory, Path::is_dir) {
             self.working_directory = commands::home();
         }
         self.working_directory.clone()
@@ -129,18 +142,27 @@ impl LauncherState {
         self.remember_command(&command);
         let invocation = commands::capture_invocation(&resolved, &command);
         let directory = self.command_directory();
-        let header = format!(
-            "{}> {command}",
-            display_directory(&directory, &commands::home())
-        );
-        let (columns, rows) = view.start_console(&header);
+        let header = |directory: &Path| {
+            format!(
+                "{}> {command}",
+                display_directory(directory, &commands::home())
+            )
+        };
+        let (columns, rows) = view.start_console(&header(&directory));
         match CommandRun::start(self.window, &invocation, &directory, columns, rows) {
             Ok(run) => {
+                // The folder had gone, so the command started at home.
+                if run.directory() != directory {
+                    self.working_directory = run.directory().to_path_buf();
+                    view.start_console(&header(run.directory()));
+                }
                 view.attach_console(run.input());
                 self.command = Some(CommandSession {
                     run,
                     started: Instant::now(),
                     finished: None,
+                    last_output: None,
+                    output_timer: false,
                 });
                 self.sync_terminal_view();
                 view.relayout();
@@ -150,13 +172,51 @@ impl LauncherState {
         }
     }
 
+    /// The run has output. Output arriving within [`OUTPUT_INTERVAL`] of the last batch waits
+    /// for a timer; the run keeps gathering it meanwhile.
     pub fn receive_command_output(&mut self) {
+        let window = self.window;
+        let Some(session) = self.command.as_mut() else {
+            return;
+        };
+        if session.output_timer {
+            return;
+        }
+        let delay = output_delay(session.last_output, Instant::now());
+        if !delay.is_zero() {
+            let milliseconds = delay.as_millis().try_into().unwrap_or(u32::MAX);
+            session.output_timer =
+                unsafe { SetTimer(Some(window), COMMAND_OUTPUT_TIMER, milliseconds, None) } != 0;
+            // Without a timer the output is taken now rather than left waiting.
+            if session.output_timer {
+                return;
+            }
+        }
+        self.take_command_output();
+    }
+
+    /// [`COMMAND_OUTPUT_TIMER`] fired: the delayed output is taken.
+    pub fn command_output_timer(&mut self) {
+        if let Err(error) = unsafe { KillTimer(Some(self.window), COMMAND_OUTPUT_TIMER) } {
+            eprintln!("Could not stop the command output timer: {error}");
+        }
+        let Some(session) = self.command.as_mut() else {
+            return;
+        };
+        session.output_timer = false;
+        self.take_command_output();
+    }
+
+    fn take_command_output(&mut self) {
         let (Some(view), Some(session)) = (self.view.clone(), self.command.as_mut()) else {
             return;
         };
-        let update = session.run.take_update();
+        session.last_output = Some(Instant::now());
+        let mut update = session.run.take_update();
         view.feed_console(&update.output);
-        if let Some(directory) = update.directory.filter(|directory| directory.is_dir()) {
+        session.run.recycle(std::mem::take(&mut update.output));
+        // The run checked that the folder exists, away from the UI thread.
+        if let Some(directory) = update.directory {
             self.working_directory = directory;
         }
         let Some(session) = self.command.as_mut() else {
@@ -324,6 +384,18 @@ impl LauncherState {
     }
 }
 
+/// Whether a command can start in `directory`. Network and WSL folders (`\\server\share`,
+/// `\\wsl.localhost\…`) are not checked, because touching an offline share or an idle WSL
+/// distribution blocks for seconds; starting the command falls back to home if one has gone.
+fn usable_directory(directory: &Path, is_dir: impl FnOnce(&Path) -> bool) -> bool {
+    let unc = matches!(
+        directory.components().next(),
+        Some(Component::Prefix(prefix))
+            if matches!(prefix.kind(), Prefix::UNC(..) | Prefix::VerbatimUNC(..))
+    );
+    unc || is_dir(directory)
+}
+
 /// A directory as a prompt shows it: `~` for the home folder and anything inside it.
 fn display_directory(directory: &Path, home: &Path) -> String {
     match directory.strip_prefix(home) {
@@ -331,6 +403,13 @@ fn display_directory(directory: &Path, home: &Path) -> String {
         Ok(relative) => format!("~\\{}", relative.display()),
         Err(_) => directory.display().to_string(),
     }
+}
+
+/// How long to wait before taking output, so batches come at least [`OUTPUT_INTERVAL`] apart.
+fn output_delay(last: Option<Instant>, now: Instant) -> Duration {
+    last.map_or(Duration::ZERO, |last| {
+        OUTPUT_INTERVAL.saturating_sub(now.saturating_duration_since(last))
+    })
 }
 
 fn duration(elapsed: Duration) -> String {
@@ -393,6 +472,44 @@ mod tests {
         assert_eq!(
             display_directory(Path::new(r"C:\Users\Mel"), home),
             r"C:\Users\Mel"
+        );
+    }
+
+    #[test]
+    fn network_and_wsl_folders_are_not_checked_before_a_run() {
+        let unchecked = |_: &Path| -> bool { panic!("a UNC folder was checked") };
+        for folder in [
+            r"\\wsl.localhost\Ubuntu\home\me",
+            r"\\wsl$\Debian",
+            r"\\nas\share\projects",
+            r"\\?\UNC\nas\share",
+        ] {
+            assert!(usable_directory(Path::new(folder), unchecked), "{folder}");
+        }
+        assert!(usable_directory(Path::new(r"C:\Users\Me"), |_| true));
+        assert!(!usable_directory(Path::new(r"C:\gone"), |_| false));
+        assert!(!usable_directory(Path::new(r"\\?\C:\gone"), |_| false));
+    }
+
+    #[test]
+    fn output_batches_come_at_least_an_interval_apart() {
+        let now = Instant::now();
+        assert_eq!(
+            output_delay(None, now),
+            Duration::ZERO,
+            "the first batch is taken at once"
+        );
+        assert_eq!(
+            output_delay(Some(now), now + Duration::from_millis(4)),
+            OUTPUT_INTERVAL - Duration::from_millis(4)
+        );
+        assert_eq!(
+            output_delay(Some(now), now + OUTPUT_INTERVAL),
+            Duration::ZERO
+        );
+        assert_eq!(
+            output_delay(Some(now), now + Duration::from_secs(1)),
+            Duration::ZERO
         );
     }
 

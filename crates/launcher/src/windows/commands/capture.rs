@@ -30,6 +30,10 @@ use windows::{
 
 pub const COMMAND_OUTPUT: u32 = WM_APP + 14;
 const READ_CHUNK: usize = 16 * 1024;
+/// Room for output the UI has not read yet, so a fast command is not held up by each read.
+const OUTPUT_BUFFER_BYTES: u32 = 128 * 1024;
+/// Output held for the UI before the reader waits for it to catch up.
+const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
 /// Room for keys the console has not read yet, so typing never blocks Core.
 const INPUT_BUFFER_BYTES: u32 = 64 * 1024;
 /// How long to wait for the console's last output after the command exits.
@@ -53,6 +57,8 @@ pub struct Update {
 #[derive(Default)]
 struct Shared {
     output: Vec<u8>,
+    /// The buffer the UI handed back, swapped in for `output` so its capacity is kept.
+    spare: Vec<u8>,
     outcome: Option<Outcome>,
     directory: Option<PathBuf>,
     stopping: bool,
@@ -121,10 +127,12 @@ pub struct CommandRun {
     job: OwnedHandle,
     shared: SharedState,
     input: TerminalInput,
+    directory: PathBuf,
 }
 
 impl CommandRun {
-    /// Starts `invocation` in `directory` on a console of `columns` × `rows` characters.
+    /// Starts `invocation` in `directory` on a console of `columns` × `rows` characters. If
+    /// `directory` has gone, the command starts in the home folder; see [`Self::directory`].
     pub fn start(
         window: HWND,
         invocation: &Invocation,
@@ -133,8 +141,8 @@ impl CommandRun {
         rows: u16,
     ) -> Result<Self, String> {
         let error = |what: &str, error: windows::core::Error| format!("Could not {what}: {error}");
-        let (output_read, output_write) =
-            pipe(0).map_err(|failure| error("create the output pipe", failure))?;
+        let (output_read, output_write) = pipe(OUTPUT_BUFFER_BYTES)
+            .map_err(|failure| error("create the output pipe", failure))?;
         let (input_read, input_write) =
             pipe(INPUT_BUFFER_BYTES).map_err(|failure| error("create the input pipe", failure))?;
         let size = COORD {
@@ -153,7 +161,7 @@ impl CommandRun {
         );
         // A stale report from an earlier Core must not be read as this command's.
         let _ = std::fs::remove_file(&invocation.directory_report);
-        let (process, main_thread) = spawn_suspended(invocation, directory, &console)?;
+        let (process, main_thread, directory) = spawn_suspended(invocation, directory, &console)?;
         if let Err(failure) = unsafe { AssignProcessToJobObject(job.0, process.0) } {
             unsafe {
                 let _ = TerminateProcess(process.0, 1);
@@ -187,7 +195,13 @@ impl CommandRun {
             job,
             shared,
             input: TerminalInput(Arc::new(input_write)),
+            directory,
         })
+    }
+
+    /// Where the command started: the folder asked for, or home when that had gone.
+    pub fn directory(&self) -> &Path {
+        &self.directory
     }
 
     pub fn input(&self) -> TerminalInput {
@@ -216,14 +230,27 @@ impl CommandRun {
             .is_none()
     }
 
+    /// Hands over the output so far, letting the reader continue if it was waiting for room.
+    /// Pass `Update::output` back with [`Self::recycle`] once it is shown.
     pub fn take_update(&self) -> Update {
-        let mut shared = self.shared.0.lock().expect("command lock");
-        shared.notified = false;
-        Update {
-            output: std::mem::take(&mut shared.output),
-            outcome: shared.outcome.clone(),
-            directory: shared.directory.take(),
-        }
+        let update = {
+            let mut shared = self.shared.0.lock().expect("command lock");
+            shared.notified = false;
+            let spare = std::mem::take(&mut shared.spare);
+            Update {
+                output: std::mem::replace(&mut shared.output, spare),
+                outcome: shared.outcome.clone(),
+                directory: shared.directory.take(),
+            }
+        };
+        self.shared.1.notify_all();
+        update
+    }
+
+    /// Returns a shown update's output buffer, to be filled again without reallocating.
+    pub fn recycle(&self, mut output: Vec<u8>) {
+        output.clear();
+        self.shared.0.lock().expect("command lock").spare = output;
     }
 }
 
@@ -232,6 +259,8 @@ impl Drop for CommandRun {
         // Stopping lets the waiting thread close the console, which ends the output reader.
         self.stop();
         self.shared.0.lock().expect("command lock").detached = true;
+        // A reader waiting for the UI to take output drains the console instead.
+        self.shared.1.notify_all();
     }
 }
 
@@ -260,12 +289,12 @@ fn pipe(buffer: u32) -> windows::core::Result<(OwnedHandle, OwnedHandle)> {
 }
 
 /// Creates the process attached to `console`, with its first thread suspended so it can join
-/// the job before running. Returns the process and that thread.
+/// the job before running. Returns the process, that thread and the folder it started in.
 fn spawn_suspended(
     invocation: &Invocation,
     directory: &Path,
     console: &PseudoConsole,
-) -> Result<(OwnedHandle, OwnedHandle), String> {
+) -> Result<(OwnedHandle, OwnedHandle, PathBuf), String> {
     let error = |what: &str, error: windows::core::Error| format!("Could not {what}: {error}");
     let mut attribute_size = 0_usize;
     // The first call only reports the size needed, so its error is expected.
@@ -302,35 +331,51 @@ fn spawn_suspended(
     };
     let environment = environment::fresh_block(&invocation.environment);
     let program = wide_null(invocation.program.as_os_str());
-    let mut command_line: Vec<u16> = invocation
-        .command_line()
-        .encode_utf16()
-        .chain(Some(0))
-        .collect();
-    let directory = wide_null(directory.as_os_str());
     let mut flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED;
     if environment.is_some() {
         flags |= CREATE_UNICODE_ENVIRONMENT;
     }
     let mut information = PROCESS_INFORMATION::default();
-    unsafe {
-        CreateProcessW(
-            PCWSTR(program.as_ptr()),
-            Some(PWSTR(command_line.as_mut_ptr())),
-            None,
-            None,
-            false,
-            flags,
-            environment.as_ref().map(|block| block.as_ptr().cast()),
-            PCWSTR(directory.as_ptr()),
-            &startup.StartupInfo,
-            &mut information,
-        )
+    let mut create = |directory: &Path| {
+        // CreateProcessW may write to the command line, so each attempt gets its own.
+        let mut command_line: Vec<u16> = invocation
+            .command_line()
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        let directory = wide_null(directory.as_os_str());
+        unsafe {
+            CreateProcessW(
+                PCWSTR(program.as_ptr()),
+                Some(PWSTR(command_line.as_mut_ptr())),
+                None,
+                None,
+                false,
+                flags,
+                environment.as_ref().map(|block| block.as_ptr().cast()),
+                PCWSTR(directory.as_ptr()),
+                &startup.StartupInfo,
+                &mut information,
+            )
+        }
+    };
+    let mut directory = directory.to_path_buf();
+    let mut created = create(&directory);
+    // Network and WSL folders are not checked before starting, so one that has gone (an
+    // offline share, a removed distribution) is found here; the command starts at home.
+    if created
+        .as_ref()
+        .is_err_and(|failure| failure.code() == ERROR_DIRECTORY.to_hresult())
+    {
+        directory = environment::home();
+        created = create(&directory);
     }
-    .map_err(|failure| error(&format!("start {}", invocation.program.display()), failure))?;
+    created
+        .map_err(|failure| error(&format!("start {}", invocation.program.display()), failure))?;
     Ok((
         OwnedHandle(information.hProcess),
         OwnedHandle(information.hThread),
+        directory,
     ))
 }
 
@@ -353,18 +398,27 @@ fn notify(shared: &mut Shared, address: usize) {
 
 fn read_output(read: OwnedHandle, shared: SharedState, address: usize) {
     let mut buffer = vec![0_u8; READ_CHUNK];
+    let (lock, taken) = &*shared;
     loop {
         let mut count = 0_u32;
         let result = unsafe { ReadFile(read.0, Some(&mut buffer), Some(&mut count), None) };
         if result.is_err() || count == 0 {
             break;
         }
-        let mut state = shared.0.lock().expect("command lock");
+        // While the UI is behind, the reader waits, and the console holds the command back.
+        let mut state = taken
+            .wait_while(lock.lock().expect("command lock"), |state| {
+                state.output.len() >= OUTPUT_LIMIT && !state.detached
+            })
+            .expect("command lock");
+        if state.detached {
+            continue;
+        }
         state.output.extend_from_slice(&buffer[..count as usize]);
         notify(&mut state, address);
     }
-    shared.0.lock().expect("command lock").drained = true;
-    shared.1.notify_all();
+    lock.lock().expect("command lock").drained = true;
+    taken.notify_all();
 }
 
 /// Waits for the command, then closes its console so its last output arrives, and publishes
@@ -397,13 +451,16 @@ fn wait_for_exit(
     notify(&mut state, address);
 }
 
-/// The directory the shell wrote, removing its file.
+/// The directory the shell wrote, removing its file, if it still exists. Checked here, off the
+/// UI thread: touching a WSL folder after the distribution has idled out boots it, and an
+/// offline share blocks until the network times out.
 fn read_report(report: &Path) -> Option<PathBuf> {
     let bytes = std::fs::read(report).ok()?;
     if let Err(error) = std::fs::remove_file(report) {
         eprintln!("Could not remove {}: {error}", report.display());
     }
     reported_directory(String::from_utf8_lossy(&bytes).trim_start_matches('\u{feff}'))
+        .filter(|directory| directory.is_dir())
 }
 
 fn wide_null(text: &std::ffi::OsStr) -> Vec<u16> {
@@ -519,6 +576,71 @@ mod tests {
         let job = OwnedHandle(unsafe { CreateJobObjectW(None, PCWSTR::null()) }.unwrap());
         unsafe { AssignProcessToJobObject(job.0, process_handle.0) }.unwrap();
         (job, process_handle, thread_handle)
+    }
+
+    #[test]
+    fn output_waits_for_the_ui_past_the_limit_and_reuses_its_buffers() {
+        let _serial = lock();
+        let (read, write) = pipe(OUTPUT_BUFFER_BYTES).unwrap();
+        let shared: SharedState = Arc::default();
+        // Finished already, so dropping the run stops nothing.
+        shared.0.lock().unwrap().outcome = Some(Outcome::Exited(0));
+        let run = CommandRun {
+            job: OwnedHandle(HANDLE::default()),
+            shared: shared.clone(),
+            input: TerminalInput(Arc::new(OwnedHandle(HANDLE::default()))),
+            directory: environment::home(),
+        };
+        let total = OUTPUT_LIMIT + 1024 * 1024;
+        let writer = thread::spawn(move || {
+            let write = write;
+            let chunk = vec![b'x'; 64 * 1024];
+            let mut sent = 0;
+            while sent < total {
+                let mut written = 0_u32;
+                unsafe { WriteFile(write.0, Some(&chunk), Some(&mut written), None) }.unwrap();
+                sent += written as usize;
+            }
+            sent
+        });
+        {
+            let shared = shared.clone();
+            // A null window makes notifications harmless thread messages.
+            thread::spawn(move || read_output(read, shared, 0));
+        }
+        let held = || shared.0.lock().unwrap().output.len();
+        let started = Instant::now();
+        while held() < OUTPUT_LIMIT {
+            assert!(started.elapsed() < Duration::from_secs(20), "{}", held());
+            thread::sleep(Duration::from_millis(5));
+        }
+        thread::sleep(Duration::from_millis(100));
+        assert!(held() < OUTPUT_LIMIT + READ_CHUNK, "{}", held());
+        assert!(
+            !writer.is_finished(),
+            "the writer waits while the UI is behind"
+        );
+
+        let first = run.take_update().output;
+        let (address, capacity) = (first.as_ptr(), first.capacity());
+        let mut received = first.len();
+        run.recycle(first);
+        while received < total {
+            let update = run.take_update();
+            received += update.output.len();
+            if update.output.as_ptr() == address {
+                assert!(update.output.capacity() >= capacity);
+            }
+            run.recycle(update.output);
+            assert!(started.elapsed() < Duration::from_secs(20), "{received}");
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(writer.join().unwrap(), total);
+        assert_eq!(received, total);
+        // The recycled buffer came back rather than a new one being grown.
+        let reused = run.take_update().output;
+        let other = run.take_update().output;
+        assert!([reused.as_ptr(), other.as_ptr()].contains(&address));
     }
 
     #[test]
@@ -638,6 +760,36 @@ mod tests {
                 failed.directory
             );
         }
+    }
+
+    #[test]
+    fn a_folder_that_has_gone_starts_the_command_at_home() {
+        let _serial = lock();
+        let missing = std::env::temp_dir().join("core-v2-missing-folder");
+        let _ = std::fs::remove_dir(&missing);
+        let mut session = Session::start(&invocation(ShellKind::Cmd, "cd"), &missing);
+        assert_eq!(session.run.directory(), environment::home());
+        assert_eq!(session.finish(None), Outcome::Exited(0));
+        assert_eq!(
+            session.directory.as_deref(),
+            Some(environment::home().as_path())
+        );
+    }
+
+    #[test]
+    fn reported_folders_that_no_longer_exist_are_dropped() {
+        let report = |name: &str, text: &str| {
+            let path = std::env::temp_dir().join(format!("core-v2-report-test-{name}.txt"));
+            std::fs::write(&path, text).unwrap();
+            path
+        };
+        let existing = std::env::temp_dir();
+        let path = report("existing", &existing.to_string_lossy());
+        assert_eq!(read_report(&path), Some(existing));
+        assert!(!path.exists(), "the report file is removed");
+        let path = report("missing", r"C:\core-v2-missing-folder\inside");
+        assert_eq!(read_report(&path), None);
+        assert!(!path.exists());
     }
 
     #[test]
