@@ -127,10 +127,12 @@ pub struct CommandRun {
     job: OwnedHandle,
     shared: SharedState,
     input: TerminalInput,
+    directory: PathBuf,
 }
 
 impl CommandRun {
-    /// Starts `invocation` in `directory` on a console of `columns` × `rows` characters.
+    /// Starts `invocation` in `directory` on a console of `columns` × `rows` characters. If
+    /// `directory` has gone, the command starts in the home folder; see [`Self::directory`].
     pub fn start(
         window: HWND,
         invocation: &Invocation,
@@ -159,7 +161,7 @@ impl CommandRun {
         );
         // A stale report from an earlier Core must not be read as this command's.
         let _ = std::fs::remove_file(&invocation.directory_report);
-        let (process, main_thread) = spawn_suspended(invocation, directory, &console)?;
+        let (process, main_thread, directory) = spawn_suspended(invocation, directory, &console)?;
         if let Err(failure) = unsafe { AssignProcessToJobObject(job.0, process.0) } {
             unsafe {
                 let _ = TerminateProcess(process.0, 1);
@@ -193,7 +195,13 @@ impl CommandRun {
             job,
             shared,
             input: TerminalInput(Arc::new(input_write)),
+            directory,
         })
+    }
+
+    /// Where the command started: the folder asked for, or home when that had gone.
+    pub fn directory(&self) -> &Path {
+        &self.directory
     }
 
     pub fn input(&self) -> TerminalInput {
@@ -281,12 +289,12 @@ fn pipe(buffer: u32) -> windows::core::Result<(OwnedHandle, OwnedHandle)> {
 }
 
 /// Creates the process attached to `console`, with its first thread suspended so it can join
-/// the job before running. Returns the process and that thread.
+/// the job before running. Returns the process, that thread and the folder it started in.
 fn spawn_suspended(
     invocation: &Invocation,
     directory: &Path,
     console: &PseudoConsole,
-) -> Result<(OwnedHandle, OwnedHandle), String> {
+) -> Result<(OwnedHandle, OwnedHandle, PathBuf), String> {
     let error = |what: &str, error: windows::core::Error| format!("Could not {what}: {error}");
     let mut attribute_size = 0_usize;
     // The first call only reports the size needed, so its error is expected.
@@ -323,35 +331,51 @@ fn spawn_suspended(
     };
     let environment = environment::fresh_block(&invocation.environment);
     let program = wide_null(invocation.program.as_os_str());
-    let mut command_line: Vec<u16> = invocation
-        .command_line()
-        .encode_utf16()
-        .chain(Some(0))
-        .collect();
-    let directory = wide_null(directory.as_os_str());
     let mut flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED;
     if environment.is_some() {
         flags |= CREATE_UNICODE_ENVIRONMENT;
     }
     let mut information = PROCESS_INFORMATION::default();
-    unsafe {
-        CreateProcessW(
-            PCWSTR(program.as_ptr()),
-            Some(PWSTR(command_line.as_mut_ptr())),
-            None,
-            None,
-            false,
-            flags,
-            environment.as_ref().map(|block| block.as_ptr().cast()),
-            PCWSTR(directory.as_ptr()),
-            &startup.StartupInfo,
-            &mut information,
-        )
+    let mut create = |directory: &Path| {
+        // CreateProcessW may write to the command line, so each attempt gets its own.
+        let mut command_line: Vec<u16> = invocation
+            .command_line()
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        let directory = wide_null(directory.as_os_str());
+        unsafe {
+            CreateProcessW(
+                PCWSTR(program.as_ptr()),
+                Some(PWSTR(command_line.as_mut_ptr())),
+                None,
+                None,
+                false,
+                flags,
+                environment.as_ref().map(|block| block.as_ptr().cast()),
+                PCWSTR(directory.as_ptr()),
+                &startup.StartupInfo,
+                &mut information,
+            )
+        }
+    };
+    let mut directory = directory.to_path_buf();
+    let mut created = create(&directory);
+    // Network and WSL folders are not checked before starting, so one that has gone (an
+    // offline share, a removed distribution) is found here; the command starts at home.
+    if created
+        .as_ref()
+        .is_err_and(|failure| failure.code() == ERROR_DIRECTORY.to_hresult())
+    {
+        directory = environment::home();
+        created = create(&directory);
     }
-    .map_err(|failure| error(&format!("start {}", invocation.program.display()), failure))?;
+    created
+        .map_err(|failure| error(&format!("start {}", invocation.program.display()), failure))?;
     Ok((
         OwnedHandle(information.hProcess),
         OwnedHandle(information.hThread),
+        directory,
     ))
 }
 
@@ -427,13 +451,16 @@ fn wait_for_exit(
     notify(&mut state, address);
 }
 
-/// The directory the shell wrote, removing its file.
+/// The directory the shell wrote, removing its file, if it still exists. Checked here, off the
+/// UI thread: touching a WSL folder after the distribution has idled out boots it, and an
+/// offline share blocks until the network times out.
 fn read_report(report: &Path) -> Option<PathBuf> {
     let bytes = std::fs::read(report).ok()?;
     if let Err(error) = std::fs::remove_file(report) {
         eprintln!("Could not remove {}: {error}", report.display());
     }
     reported_directory(String::from_utf8_lossy(&bytes).trim_start_matches('\u{feff}'))
+        .filter(|directory| directory.is_dir())
 }
 
 fn wide_null(text: &std::ffi::OsStr) -> Vec<u16> {
@@ -562,6 +589,7 @@ mod tests {
             job: OwnedHandle(HANDLE::default()),
             shared: shared.clone(),
             input: TerminalInput(Arc::new(OwnedHandle(HANDLE::default()))),
+            directory: environment::home(),
         };
         let total = OUTPUT_LIMIT + 1024 * 1024;
         let writer = thread::spawn(move || {
@@ -732,6 +760,36 @@ mod tests {
                 failed.directory
             );
         }
+    }
+
+    #[test]
+    fn a_folder_that_has_gone_starts_the_command_at_home() {
+        let _serial = lock();
+        let missing = std::env::temp_dir().join("core-v2-missing-folder");
+        let _ = std::fs::remove_dir(&missing);
+        let mut session = Session::start(&invocation(ShellKind::Cmd, "cd"), &missing);
+        assert_eq!(session.run.directory(), environment::home());
+        assert_eq!(session.finish(None), Outcome::Exited(0));
+        assert_eq!(
+            session.directory.as_deref(),
+            Some(environment::home().as_path())
+        );
+    }
+
+    #[test]
+    fn reported_folders_that_no_longer_exist_are_dropped() {
+        let report = |name: &str, text: &str| {
+            let path = std::env::temp_dir().join(format!("core-v2-report-test-{name}.txt"));
+            std::fs::write(&path, text).unwrap();
+            path
+        };
+        let existing = std::env::temp_dir();
+        let path = report("existing", &existing.to_string_lossy());
+        assert_eq!(read_report(&path), Some(existing));
+        assert!(!path.exists(), "the report file is removed");
+        let path = report("missing", r"C:\core-v2-missing-folder\inside");
+        assert_eq!(read_report(&path), None);
+        assert!(!path.exists());
     }
 
     #[test]

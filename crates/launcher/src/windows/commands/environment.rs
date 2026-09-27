@@ -54,10 +54,17 @@ pub fn fresh_block(extra: &[(&str, String)]) -> Option<Vec<u16>> {
 }
 
 /// Whether a `NAME=value` entry sets `name`. Names ignore case, as Windows treats them.
+/// Compared as UTF-16, so the block's many entries are checked without allocating.
 fn names_variable(entry: &[u16], name: &str) -> bool {
-    let text = String::from_utf16_lossy(entry);
-    text.split_once('=')
-        .is_some_and(|(entry_name, _)| entry_name.eq_ignore_ascii_case(name))
+    let Some(end) = entry.iter().position(|&unit| unit == u16::from(b'=')) else {
+        return false;
+    };
+    let upper =
+        |unit: u16| u8::try_from(unit).map_or(unit, |byte| byte.to_ascii_uppercase().into());
+    entry[..end]
+        .iter()
+        .map(|&unit| upper(unit))
+        .eq(name.encode_utf16().map(upper))
 }
 
 /// Where commands start, like a new terminal: the user's profile folder.
@@ -89,5 +96,19 @@ mod tests {
             .filter(|entry| entry.to_ascii_uppercase().starts_with("PATH="))
             .collect();
         assert_eq!(paths, ["Path=C:\\core-only"]);
+    }
+
+    #[test]
+    fn variable_names_match_ignoring_ascii_case_only() {
+        let entry = |text: &str| -> Vec<u16> { text.encode_utf16().chain(Some(0)).collect() };
+        assert!(names_variable(&entry("Path=C:\\Windows"), "PATH"));
+        assert!(names_variable(&entry("core_test="), "CORE_TEST"));
+        assert!(!names_variable(&entry("PATHEXT=.COM"), "PATH"));
+        assert!(!names_variable(&entry("PAT=x"), "PATH"));
+        // Windows keeps per-drive folders in entries whose name is empty.
+        assert!(!names_variable(&entry("=C:=C:\\Users"), "C:"));
+        assert!(!names_variable(&entry("PATH"), "PATH"));
+        assert!(names_variable(&entry("Größe=1"), "GRößE"));
+        assert!(!names_variable(&entry("Größe=1"), "GRÖSSE"));
     }
 }

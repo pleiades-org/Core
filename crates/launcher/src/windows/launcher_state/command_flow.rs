@@ -9,7 +9,7 @@ use crate::windows::{
 };
 use core_engine::search::{parse_query, CommandKind, ParsedQuery, RunMode, ShellKind};
 use std::{
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf, Prefix},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -118,7 +118,7 @@ impl LauncherState {
     /// Where the next command starts: where the last one finished, as after `cd` in a
     /// terminal. Home again if that folder has since gone.
     fn command_directory(&mut self) -> PathBuf {
-        if !self.working_directory.is_dir() {
+        if !usable_directory(&self.working_directory, Path::is_dir) {
             self.working_directory = commands::home();
         }
         self.working_directory.clone()
@@ -142,13 +142,20 @@ impl LauncherState {
         self.remember_command(&command);
         let invocation = commands::capture_invocation(&resolved, &command);
         let directory = self.command_directory();
-        let header = format!(
-            "{}> {command}",
-            display_directory(&directory, &commands::home())
-        );
-        let (columns, rows) = view.start_console(&header);
+        let header = |directory: &Path| {
+            format!(
+                "{}> {command}",
+                display_directory(directory, &commands::home())
+            )
+        };
+        let (columns, rows) = view.start_console(&header(&directory));
         match CommandRun::start(self.window, &invocation, &directory, columns, rows) {
             Ok(run) => {
+                // The folder had gone, so the command started at home.
+                if run.directory() != directory {
+                    self.working_directory = run.directory().to_path_buf();
+                    view.start_console(&header(run.directory()));
+                }
                 view.attach_console(run.input());
                 self.command = Some(CommandSession {
                     run,
@@ -208,7 +215,8 @@ impl LauncherState {
         let mut update = session.run.take_update();
         view.feed_console(&update.output);
         session.run.recycle(std::mem::take(&mut update.output));
-        if let Some(directory) = update.directory.filter(|directory| directory.is_dir()) {
+        // The run checked that the folder exists, away from the UI thread.
+        if let Some(directory) = update.directory {
             self.working_directory = directory;
         }
         let Some(session) = self.command.as_mut() else {
@@ -376,6 +384,18 @@ impl LauncherState {
     }
 }
 
+/// Whether a command can start in `directory`. Network and WSL folders (`\\server\share`,
+/// `\\wsl.localhost\…`) are not checked, because touching an offline share or an idle WSL
+/// distribution blocks for seconds; starting the command falls back to home if one has gone.
+fn usable_directory(directory: &Path, is_dir: impl FnOnce(&Path) -> bool) -> bool {
+    let unc = matches!(
+        directory.components().next(),
+        Some(Component::Prefix(prefix))
+            if matches!(prefix.kind(), Prefix::UNC(..) | Prefix::VerbatimUNC(..))
+    );
+    unc || is_dir(directory)
+}
+
 /// A directory as a prompt shows it: `~` for the home folder and anything inside it.
 fn display_directory(directory: &Path, home: &Path) -> String {
     match directory.strip_prefix(home) {
@@ -453,6 +473,22 @@ mod tests {
             display_directory(Path::new(r"C:\Users\Mel"), home),
             r"C:\Users\Mel"
         );
+    }
+
+    #[test]
+    fn network_and_wsl_folders_are_not_checked_before_a_run() {
+        let unchecked = |_: &Path| -> bool { panic!("a UNC folder was checked") };
+        for folder in [
+            r"\\wsl.localhost\Ubuntu\home\me",
+            r"\\wsl$\Debian",
+            r"\\nas\share\projects",
+            r"\\?\UNC\nas\share",
+        ] {
+            assert!(usable_directory(Path::new(folder), unchecked), "{folder}");
+        }
+        assert!(usable_directory(Path::new(r"C:\Users\Me"), |_| true));
+        assert!(!usable_directory(Path::new(r"C:\gone"), |_| false));
+        assert!(!usable_directory(Path::new(r"\\?\C:\gone"), |_| false));
     }
 
     #[test]
