@@ -1,6 +1,6 @@
 //! Minimal HTTP GET over WinHTTP for background workers: website icons and exchange rates.
 //! No cookies or credentials are sent, responses are size-limited, and slow servers time out.
-use std::time::Instant;
+use std::{sync::OnceLock, time::Instant};
 use windows::{
     core::{w, PCWSTR},
     Win32::{
@@ -49,17 +49,36 @@ impl Drop for Internet {
     }
 }
 
-/// Blocking GET; call only from a background thread.
-pub fn get(request: Request, deadline: Instant) -> windows::core::Result<Response> {
-    unsafe {
-        let session = Internet::new(WinHttpOpen(
+/// One session for the process, so proxy detection and open connections are reused.
+/// Synchronous WinHTTP handles may be used from several threads at once.
+struct Session(Internet);
+unsafe impl Send for Session {}
+unsafe impl Sync for Session {}
+static SESSION: OnceLock<Session> = OnceLock::new();
+
+/// Opens the session on first use; a failed open is retried by the next request.
+fn session() -> windows::core::Result<&'static Internet> {
+    if let Some(session) = SESSION.get() {
+        return Ok(&session.0);
+    }
+    let opened = Internet::new(unsafe {
+        WinHttpOpen(
             w!("Core/2"),
             WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
             PCWSTR::null(),
             PCWSTR::null(),
             0,
-        ))?;
-        set_timeouts(session.0, deadline)?;
+        )
+    })?;
+    // If another thread opened one first, that one is kept and this one closes.
+    Ok(&SESSION.get_or_init(|| Session(opened)).0)
+}
+
+/// Blocking GET; call only from a background thread.
+pub fn get(request: Request, deadline: Instant) -> windows::core::Result<Response> {
+    unsafe {
+        // Timeouts are set on each request handle, never on the shared session.
+        let session = session()?;
         let host: Vec<u16> = request.host.encode_utf16().chain(Some(0)).collect();
         let connection = Internet::new(WinHttpConnect(
             session.0,
@@ -309,6 +328,16 @@ mod tests {
             elapsed < Duration::from_secs(1),
             "request ran for {elapsed:?}"
         );
+    }
+
+    #[test]
+    fn every_request_shares_one_session() {
+        let first = session().unwrap().0 as usize;
+        let other_thread = std::thread::spawn(|| session().unwrap().0 as usize)
+            .join()
+            .unwrap();
+        assert_ne!(first, 0);
+        assert_eq!(first, other_thread);
     }
 
     #[test]
