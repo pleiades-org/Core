@@ -462,7 +462,9 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_CREATE => {
-            match GetModuleHandleW(None).and_then(|instance| View::create(window, instance.into()))
+            let preferences = shell.settings.saved.preferences;
+            match GetModuleHandleW(None)
+                .and_then(|instance| View::create(window, instance.into(), preferences))
             {
                 Ok(view) => {
                     let view = Rc::new(view);
@@ -470,12 +472,6 @@ unsafe extern "system" fn window_proc(
                         return LRESULT(-1);
                     }
                     shell.view = Some(view);
-                    if let Some(view) = &shell.view {
-                        if let Err(error) = view.apply_preferences(shell.settings.saved.preferences)
-                        {
-                            eprintln!("Could not apply saved appearance: {error}");
-                        }
-                    }
                     shell.render_results();
                 }
                 Err(error) => {
@@ -589,7 +585,8 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_TIMER if word.0 == super::settings::AUTO_SAVE_TIMER => {
-            shell.save_queued_settings(window);
+            // Quicklink typing leaves the full check to this pause, so the draft is read again.
+            shell.flush_settings(window);
             LRESULT(0)
         }
         WM_HOTKEY => {

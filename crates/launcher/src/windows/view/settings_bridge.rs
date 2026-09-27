@@ -24,8 +24,8 @@ impl View {
         self.set_clock_active(false);
         self.show_search_controls(false);
         page.show(true);
-        self.invalidate_layout();
-        self.layout()
+        // Showing Core then lays out and repaints once, on the display it opens on.
+        Ok(())
     }
 
     pub fn close_settings(&self, saved: Preferences) -> windows::core::Result<()> {
@@ -35,7 +35,8 @@ impl View {
         self.settings_open.set(false);
         self.show_search_controls(true);
         self.set_clock_active(unsafe { IsWindowVisible(self.parent) }.as_bool());
-        self.apply_preferences(saved)
+        // The search controls return, so everything is applied and repainted.
+        self.apply(saved, PreferenceChanges::ALL)
     }
 
     fn show_search_controls(&self, visible: bool) {
