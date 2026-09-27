@@ -75,16 +75,42 @@ pub fn bounds(area: RECT, width: i32, height: i32, position: ScreenPosition) -> 
     }
 }
 
-/// `radius` is in physical pixels. Zero produces a plain rectangle.
-pub fn clip_to_edges(
-    window: HWND,
-    bounds: RECT,
-    edges: RECT,
+/// Everything the window's clipping region depends on. Moving the window without changing
+/// its size or which corners touch a screen edge keeps the same shape, so the region is kept.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClipShape {
+    width: i32,
+    height: i32,
     radius: i32,
-) -> windows::core::Result<()> {
-    let width = bounds.right - bounds.left;
-    let height = bounds.bottom - bounds.top;
-    let radius = radius.min(width / 2).min(height / 2).max(0);
+    corners: [bool; 4],
+}
+
+impl ClipShape {
+    /// `radius` is in physical pixels. Zero produces a plain rectangle.
+    pub fn new(bounds: RECT, edges: RECT, radius: i32) -> Self {
+        let width = bounds.right - bounds.left;
+        let height = bounds.bottom - bounds.top;
+        let radius = radius.min(width / 2).min(height / 2).max(0);
+        Self {
+            width,
+            height,
+            radius,
+            corners: if radius == 0 {
+                [false; 4]
+            } else {
+                attached_corners(bounds, edges)
+            },
+        }
+    }
+}
+
+pub fn clip_to_edges(window: HWND, shape: ClipShape) -> windows::core::Result<()> {
+    let ClipShape {
+        width,
+        height,
+        radius,
+        corners,
+    } = shape;
     let region = Region::new(unsafe {
         if radius == 0 {
             CreateRectRgn(0, 0, width, height)
@@ -92,11 +118,6 @@ pub fn clip_to_edges(
             CreateRoundRectRgn(0, 0, width + 1, height + 1, radius * 2, radius * 2)
         }
     })?;
-    let corners = if radius == 0 {
-        [false; 4]
-    } else {
-        attached_corners(bounds, edges)
-    };
     for (attached, left, top) in [
         (corners[0], 0, 0),
         (corners[1], width - radius, 0),
@@ -230,5 +251,39 @@ mod tests {
         }
         .placement(200);
         assert!(tiny.right > tiny.left && tiny.bottom > tiny.top);
+    }
+
+    #[test]
+    fn clip_shape_changes_only_with_size_radius_or_attached_corners() {
+        let area = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1040,
+        };
+        let centered = bounds(area, 640, 300, ScreenPosition::Center);
+        let shape = ClipShape::new(centered, area, 16);
+        // Moving without touching an edge keeps the region.
+        let moved = RECT {
+            left: centered.left + 40,
+            right: centered.right + 40,
+            ..centered
+        };
+        assert_eq!(ClipShape::new(moved, area, 16), shape);
+        // Taller (another result), rounder, or now touching the top edge: a new region.
+        let taller = bounds(area, 640, 352, ScreenPosition::Center);
+        assert_ne!(ClipShape::new(taller, area, 16), shape);
+        assert_ne!(ClipShape::new(centered, area, 8), shape);
+        let top = bounds(area, 640, 300, ScreenPosition::Top);
+        assert_ne!(ClipShape::new(top, area, 16), shape);
+        // Square corners ignore edges, and radii beyond half the size clamp to the same shape.
+        assert_eq!(
+            ClipShape::new(top, area, 0),
+            ClipShape::new(centered, area, 0)
+        );
+        assert_eq!(
+            ClipShape::new(centered, area, 500),
+            ClipShape::new(centered, area, 150)
+        );
     }
 }

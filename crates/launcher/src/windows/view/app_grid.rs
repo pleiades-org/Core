@@ -54,16 +54,21 @@ impl View {
         )
     }
 
-    pub(super) fn paint_grid(&self, context: HDC) {
+    /// Draws the tiles that intersect `update`; a hover change repaints only its two tiles.
+    pub(super) fn paint_grid(&self, context: HDC, update: &RECT) {
         let selected = self.selected();
         let hovered = self.grid_hover.get();
         let fonts = self.fonts.get();
         let palette = self.palette.get();
         let visible = self.grid_visible.get();
         for (index, row) in self.rows.borrow().iter().enumerate().take(visible) {
+            let tile = self.tile(index);
+            if !painting::intersects(&tile, update) {
+                continue;
+            }
             painting::app_tile(
                 context,
-                self.tile(index),
+                tile,
                 row,
                 index == selected || hovered == Some(index),
                 fonts,
