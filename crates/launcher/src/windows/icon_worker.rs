@@ -1,6 +1,6 @@
 use super::{application_icon::ApplicationIcon, favicon::WebsiteOrigin};
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -54,6 +54,41 @@ pub struct LoadedIcon {
     pub identifier: Arc<str>,
     pub icon: Option<Arc<ApplicationIcon>>,
     loaded_at: Instant,
+}
+
+impl LoadedIcon {
+    /// Until when a failed icon stays failed: the worker loads it again only after this.
+    fn missing_until(&self) -> Option<Instant> {
+        self.icon
+            .is_none()
+            .then(|| self.loaded_at + FAILED_ICON_RETRY)
+    }
+}
+
+/// Icons that failed recently, kept on the UI thread. Renders skip asking for them until the
+/// worker would retry, so a missing icon does not wake the worker and repaint the list for
+/// nothing on every keystroke.
+#[derive(Default)]
+pub struct MissingIcons(HashMap<Arc<str>, Instant>);
+
+impl MissingIcons {
+    pub fn record(&mut self, loaded: &[LoadedIcon], now: Instant) {
+        self.0.retain(|_, until| *until > now);
+        for icon in loaded {
+            match icon.missing_until().filter(|until| *until > now) {
+                Some(until) => {
+                    self.0.insert(icon.identifier.clone(), until);
+                }
+                None => {
+                    self.0.remove(&icon.identifier);
+                }
+            }
+        }
+    }
+
+    pub fn is_missing(&self, identifier: &str, now: Instant) -> bool {
+        self.0.get(identifier).is_some_and(|until| *until > now)
+    }
 }
 
 struct RequestBatch {
@@ -291,6 +326,44 @@ mod tests {
         let completed = shared.completed.lock().unwrap().take().unwrap();
         let identifiers: Vec<&str> = completed.iter().map(|icon| &*icon.identifier).collect();
         assert_eq!(identifiers, ["github", "youtube"]);
+    }
+
+    #[test]
+    fn the_ui_skips_failed_icons_until_the_worker_would_retry_them() {
+        // Loading a real icon must not disturb the handle-counting test.
+        let _serial = crate::windows::GUI_RESOURCE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _apartment = ComApartment::new().unwrap();
+        let icon = Arc::new(
+            ApplicationIcon::load(&std::env::current_exe().unwrap()).expect("executable icon"),
+        );
+        let start = Instant::now();
+        let loaded = |identifier: &str, found: bool, loaded_at: Instant| LoadedIcon {
+            identifier: identifier.into(),
+            icon: found.then(|| icon.clone()),
+            loaded_at,
+        };
+        let mut missing = MissingIcons::default();
+        missing.record(
+            &[loaded("broken", false, start), loaded("fine", true, start)],
+            start,
+        );
+        assert!(missing.is_missing("broken", start));
+        assert!(missing.is_missing("broken", start + FAILED_ICON_RETRY / 2));
+        assert!(!missing.is_missing("fine", start));
+        assert!(!missing.is_missing("unknown", start));
+        // Retry time: asked for again.
+        assert!(!missing.is_missing("broken", start + FAILED_ICON_RETRY));
+        // A failure the worker cached earlier only waits out the rest of its retry time.
+        let later = start + FAILED_ICON_RETRY / 2;
+        missing.record(&[loaded("stale", false, start)], later);
+        assert!(!missing.is_missing("stale", start + FAILED_ICON_RETRY));
+        // A later success clears the failure, and expired entries are dropped.
+        missing.record(&[loaded("broken", true, later)], later);
+        assert!(!missing.is_missing("broken", later));
+        missing.record(&[], start + FAILED_ICON_RETRY * 2);
+        assert!(missing.0.is_empty());
     }
 
     #[test]

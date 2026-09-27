@@ -747,7 +747,7 @@ unsafe fn paint_message(
         WM_PAINT => {
             let mut paint = PAINTSTRUCT::default();
             let context = BeginPaint(window, &mut paint);
-            view.paint(context);
+            view.paint(context, &paint.rcPaint);
             let _ = EndPaint(window, &paint);
             Some(LRESULT(0))
         }
@@ -762,7 +762,7 @@ unsafe fn paint_message(
             None
         }
         WM_PRINTCLIENT => {
-            view.paint(HDC(word.0 as *mut _));
+            view.paint(HDC(word.0 as *mut _), &view.client_area());
             Some(LRESULT(0))
         }
         _ => None,

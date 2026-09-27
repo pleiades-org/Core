@@ -91,11 +91,10 @@ impl View {
         }
     }
 
-    pub fn paint(&self, context: HDC) {
+    /// Draws what intersects `update`, the area Windows asked to repaint; the rest is skipped.
+    pub fn paint(&self, context: HDC, update: &RECT) {
         let dpi = self.dpi.get();
-        let width = self.width.get();
-        let height = self.height.get();
-        let area = painting::rectangle(0, 0, width, height);
+        let area = self.client_area();
         let palette = self.palette.get();
         painting::fill(context, &area, palette.background);
         if self.settings_open.get() {
@@ -105,20 +104,33 @@ impl View {
                 .paint(context, palette);
             return;
         }
-        painting::search_icon(
-            context,
+        let icon = painting::rectangle(
             scale(27, dpi),
             scale(32, dpi),
-            dpi,
-            palette.secondary,
+            scale(48, dpi),
+            scale(53, dpi),
         );
-        self.paint_labels(context);
+        if painting::intersects(&icon, update) {
+            painting::search_icon(
+                context,
+                scale(27, dpi),
+                scale(32, dpi),
+                dpi,
+                palette.secondary,
+            );
+        }
+        self.paint_labels(context, update);
         if self.grid() {
-            self.paint_grid(context);
+            self.paint_grid(context, update);
         }
     }
 
-    fn paint_labels(&self, context: HDC) {
+    /// The whole window, for WM_PRINTCLIENT captures.
+    pub fn client_area(&self) -> RECT {
+        painting::rectangle(0, 0, self.width.get(), self.height.get())
+    }
+
+    fn paint_labels(&self, context: HDC, update: &RECT) {
         let dpi = self.dpi.get();
         let fonts = self.fonts.get();
         let rows = self.rows.borrow();
@@ -147,23 +159,27 @@ impl View {
                 scale(bottom, dpi),
             )
         };
-        painting::text(
-            context,
-            section,
-            area(24, 83, 400, 100),
-            fonts.detail,
-            self.palette.get().secondary,
+        let label = area(24, SECTION_LABEL_TOP, 400, 100);
+        if painting::intersects(&label, update) {
+            painting::text(
+                context,
+                section,
+                label,
+                fonts.detail,
+                self.palette.get().secondary,
+            );
+        }
+        let empty = area(
+            25,
+            theme::RESULTS_TOP + 10,
+            theme::WIDTH - 25,
+            theme::RESULTS_TOP + 38,
         );
-        if rows.is_empty() && !terminal {
+        if rows.is_empty() && !terminal && painting::intersects(&empty, update) {
             painting::text(
                 context,
                 "No results yet",
-                area(
-                    25,
-                    theme::RESULTS_TOP + 10,
-                    theme::WIDTH - 25,
-                    theme::RESULTS_TOP + 38,
-                ),
+                empty,
                 fonts.title,
                 self.palette.get().secondary,
             );

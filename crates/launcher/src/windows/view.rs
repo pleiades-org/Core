@@ -1,4 +1,5 @@
 use super::{
+    application_icon::ApplicationIcon,
     button_hover,
     icon_worker::LoadedIcon,
     painting::{self, DisplayRow, ResultKind},
@@ -13,7 +14,10 @@ use super::{
     wide, window_placement,
 };
 use core_engine::{search::SearchResult, RECENT_APPLICATION_LIMIT, VISIBLE_RESULT_LIMIT};
-use std::cell::{Cell, OnceCell, RefCell};
+use std::{
+    cell::{Cell, OnceCell, RefCell},
+    sync::Arc,
+};
 use windows::{
     core::{w, PCWSTR},
     Win32::{
@@ -51,6 +55,8 @@ pub const INPUT_ID: usize = 100;
 pub const RESULTS_ID: usize = 101;
 pub const FOOTER_ID: usize = 102;
 pub const SETTINGS_ID: usize = 104;
+/// Top of the section label ("APPLICATIONS"); from here down, the window shows the results.
+const SECTION_LABEL_TOP: i32 = 83;
 /// Rows, or the larger recently used grid.
 const ROW_LIMIT: usize = if RECENT_APPLICATION_LIMIT > VISIBLE_RESULT_LIMIT {
     RECENT_APPLICATION_LIMIT
@@ -118,6 +124,8 @@ pub struct View {
     height: Cell<i32>,
     /// The window's screen rectangle from the last layout, which corner clipping needs.
     bounds: Cell<RECT>,
+    /// The shape of the window region that is set, if any.
+    clip_shape: Cell<Option<window_placement::ClipShape>>,
     layout_key: Cell<LayoutKey>,
     rows: RefCell<Vec<DisplayRow>>,
 }
@@ -160,6 +168,7 @@ impl View {
             width: Cell::new(0),
             height: Cell::new(0),
             bounds: Cell::new(RECT::default()),
+            clip_shape: Cell::new(None),
             layout_key: Cell::new(LayoutKey::STALE),
             rows: RefCell::new(Vec::new()),
         };
@@ -287,45 +296,22 @@ impl View {
     }
 
     fn layout(&self) -> windows::core::Result<()> {
-        let dpi = self.dpi.get();
+        let key = self.current_layout_key();
+        let previous = self.layout_key.get();
         let settings_open = self.settings_open.get();
-        let terminal = self.terminal.get() && !settings_open;
-        // Terminal mode shows output in place of rows, so rows do not affect its size.
-        let count = if terminal {
-            0
-        } else {
-            self.rows.borrow().len()
-        };
-        let row_height = if self
-            .rows
-            .borrow()
-            .first()
-            .is_some_and(|row| painting::is_answer(row.kind))
-        {
-            theme::ANSWER_HEIGHT
-        } else {
-            theme::ROW_HEIGHT
-        };
-        let grid = self.grid();
-        let output_height = if terminal && self.output_visible.get() {
-            self.fitted_output_height()
-        } else {
-            0
-        };
-        let key = LayoutKey {
+        if previous == key {
+            // Only what the rows show may have changed.
+            self.invalidate_below_search(settings_open);
+            return Ok(());
+        }
+        let LayoutKey {
             dpi,
             count,
             row_height,
             output_height,
             terminal,
             grid,
-        };
-        if self.layout_key.get() == key {
-            unsafe {
-                let _ = InvalidateRect(Some(self.parent), None, false);
-            }
-            return Ok(());
-        }
+        } = key;
         let row_count = count.max(1) as i32;
         let preferences = self.preferences.get();
         let spacing = scale(preferences.edge_spacing.logical(), dpi);
@@ -360,6 +346,11 @@ impl View {
         let bounds = window_placement::bounds(area, width, height, preferences.position);
         let client_width = bounds.right - bounds.left;
         let client_height = bounds.bottom - bounds.top;
+        // The search box row keeps its pixels unless its width, scale or page changed.
+        let keeps_search_row = !settings_open
+            && previous != LayoutKey::STALE
+            && previous.dpi == dpi
+            && self.width.get() == client_width;
         self.width.set(client_width);
         self.height.set(client_height);
         self.bounds.set(bounds);
@@ -387,7 +378,7 @@ impl View {
                     .expect("open settings page")
                     .layout(settings_dpi)?;
             }
-            for (control, area) in [
+            let controls = [
                 (self.input, search.input),
                 (self.settings_button, search.settings),
                 (self.results, search.results),
@@ -395,9 +386,13 @@ impl View {
                 (self.clock, search.clock),
                 (self.power_button, search.power),
                 (self.output, search.output),
-            ] {
+            ];
+            // One batch moves every control together, with a single repaint.
+            let mut batch = BeginDeferWindowPos(controls.len() as i32)?;
+            for (control, area) in controls {
                 // Moved controls repaint rather than reuse pixels from where they were.
-                SetWindowPos(
+                batch = DeferWindowPos(
+                    batch,
                     control,
                     None,
                     area.left,
@@ -407,6 +402,7 @@ impl View {
                     SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS,
                 )?;
             }
+            EndDeferWindowPos(batch)?;
             let _ = ShowWindow(
                 self.results,
                 if settings_open || terminal || grid || self.rows.borrow().is_empty() {
@@ -415,13 +411,75 @@ impl View {
                     SW_SHOWNA
                 },
             );
-            let _ = InvalidateRect(Some(self.parent), None, false);
         }
-        if let Some(menu) = self.power_menu.get() {
+        if keeps_search_row {
+            self.invalidate_below_search(false);
+        } else {
+            unsafe {
+                let _ = InvalidateRect(Some(self.parent), None, false);
+            }
+        }
+        // A closed menu is hidden; opening it lays out again first.
+        if let Some(menu) = self.power_menu.get().filter(|menu| menu.is_open()) {
             menu.layout(client_width, client_height, dpi)?;
         }
         self.layout_key.set(key);
         Ok(())
+    }
+
+    /// What the window's size and control positions depend on right now.
+    fn current_layout_key(&self) -> LayoutKey {
+        let dpi = self.dpi.get();
+        let settings_open = self.settings_open.get();
+        let terminal = self.terminal.get() && !settings_open;
+        // Terminal mode shows output in place of rows, so rows do not affect its size.
+        let count = if terminal {
+            0
+        } else {
+            self.rows.borrow().len()
+        };
+        let row_height = if self
+            .rows
+            .borrow()
+            .first()
+            .is_some_and(|row| painting::is_answer(row.kind))
+        {
+            theme::ANSWER_HEIGHT
+        } else {
+            theme::ROW_HEIGHT
+        };
+        let grid = self.grid();
+        let output_height = if terminal && self.output_visible.get() {
+            self.fitted_output_height()
+        } else {
+            0
+        };
+        LayoutKey {
+            dpi,
+            count,
+            row_height,
+            output_height,
+            terminal,
+            grid,
+        }
+    }
+
+    /// Repaints everything below the search box: the section label, the rows or tiles, the
+    /// output and the footer. The settings page is repainted whole.
+    fn invalidate_below_search(&self, settings_open: bool) {
+        let area = painting::rectangle(
+            0,
+            scale(SECTION_LABEL_TOP, self.dpi.get()),
+            self.width.get(),
+            self.height.get(),
+        );
+        unsafe {
+            let _ = InvalidateRect(
+                Some(self.parent),
+                (!settings_open).then_some(&area as *const RECT),
+                false,
+            );
+        }
     }
 
     /// Lays out again after a change `set_rows` does not make, such as entering terminal mode.
@@ -517,16 +575,24 @@ impl View {
     }
 
     /// Rounds the corners that float; corners touching a screen edge stay square.
+    /// An unchanged shape keeps the current region instead of replacing and redrawing it.
     fn clip(&self) -> windows::core::Result<()> {
         let dpi = self.dpi.get();
         let preferences = self.preferences.get();
         let spacing = scale(preferences.edge_spacing.logical(), dpi);
-        window_placement::clip_to_edges(
-            self.parent,
+        let shape = window_placement::ClipShape::new(
             self.bounds.get(),
             self.screen.get().edges(spacing),
             scale(preferences.corner_radius.logical(), dpi),
-        )
+        );
+        if self.clip_shape.get() == Some(shape) {
+            return Ok(());
+        }
+        // Forget the old shape first: a failure leaves the region unknown, so it is retried.
+        self.clip_shape.set(None);
+        window_placement::clip_to_edges(self.parent, shape)?;
+        self.clip_shape.set(Some(shape));
+        Ok(())
     }
 
     /// Runs each time Core is shown. Everything is repainted: controls that were moved or
@@ -565,20 +631,29 @@ impl View {
     }
 
     pub fn set_rows(&self, results: &[SearchResult]) {
-        self.grid_hover.set(None);
-        let previous = self.rows.take();
-        *self.rows.borrow_mut() = results
+        let mut rows: Vec<DisplayRow> = results
             .iter()
             .take(ROW_LIMIT)
-            .map(|result| {
-                let mut row = DisplayRow::new(result);
-                row.icon = previous
-                    .iter()
-                    .find(|old| old.identifier == row.identifier)
-                    .and_then(|old| old.icon.clone());
-                row
-            })
+            .map(DisplayRow::new)
             .collect();
+        // The same results again (an exchange-rate refresh, a repeated search): the list,
+        // its selection and the window already show them.
+        if same_rows(&self.rows.borrow(), &rows)
+            && self.layout_key.get() == self.current_layout_key()
+        {
+            // As a reset would, clear the hover; the pointer's next move restores it.
+            self.leave_grid();
+            return;
+        }
+        self.grid_hover.set(None);
+        let previous = self.rows.take();
+        for row in &mut rows {
+            row.icon = previous
+                .iter()
+                .find(|old| old.identifier == row.identifier)
+                .and_then(|old| old.icon.clone());
+        }
+        *self.rows.borrow_mut() = rows;
         unsafe {
             SendMessageW(self.results, WM_SETREDRAW, Some(WPARAM(0)), None);
             SendMessageW(self.results, LB_RESETCONTENT, None, None);
@@ -608,13 +683,19 @@ impl View {
     }
 
     pub fn set_icons(&self, icons: &[LoadedIcon]) {
+        let mut changed = false;
         for row in self.rows.borrow_mut().iter_mut() {
             if let Some(loaded) = icons
                 .iter()
                 .find(|loaded| loaded.identifier == row.identifier)
             {
+                changed |= !same_icon(&row.icon, &loaded.icon);
                 row.icon = loaded.icon.clone();
             }
+        }
+        // A failed icon for a row that has none, or an icon it already shows, changes nothing.
+        if !changed {
+            return;
         }
         // In the grid, tiles are painted by the window itself; the hidden list never repaints.
         let target = if self.grid() {
@@ -669,6 +750,25 @@ impl Drop for View {
     }
 }
 
+/// Rows that draw the same: same results, titles, details and kinds. Icons are carried over.
+fn same_rows(current: &[DisplayRow], next: &[DisplayRow]) -> bool {
+    current.len() == next.len()
+        && current.iter().zip(next).all(|(current, next)| {
+            current.identifier == next.identifier
+                && current.title == next.title
+                && current.detail == next.detail
+                && current.kind == next.kind
+        })
+}
+
+fn same_icon(current: &Option<Arc<ApplicationIcon>>, next: &Option<Arc<ApplicationIcon>>) -> bool {
+    match (current, next) {
+        (Some(current), Some(next)) => Arc::ptr_eq(current, next),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 pub(super) fn control_text(window: HWND) -> String {
     unsafe {
         let length = GetWindowTextLengthW(window).max(0) as usize;
@@ -700,4 +800,90 @@ pub(super) unsafe fn child(
         Some(instance),
         None,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core_engine::search::{Action, ResultKind};
+
+    fn row(kind: ResultKind, id: &str, title: &str, description: &str) -> DisplayRow {
+        DisplayRow::new(&SearchResult {
+            kind,
+            id: id.into(),
+            title: title.into(),
+            description: description.into(),
+            action: Action::CopyText(title.into()),
+        })
+    }
+
+    fn rows() -> Vec<DisplayRow> {
+        vec![
+            row(
+                ResultKind::Application,
+                "app:1",
+                "Code",
+                r"C:\Programs\Code",
+            ),
+            row(
+                ResultKind::Conversion,
+                "convert",
+                "5 USD",
+                "€4.60 · rates of today",
+            ),
+        ]
+    }
+
+    #[test]
+    fn identical_results_are_the_same_rows_whatever_their_icons() {
+        let mut current = rows();
+        assert!(same_rows(&current, &rows()));
+        assert!(same_rows(&[], &[]));
+        // Icons are carried over from the current rows, so a missing one is not a change.
+        current[0].icon = None;
+        assert!(same_rows(&current, &rows()));
+        assert!(same_icon(&None, &None));
+    }
+
+    #[test]
+    fn any_difference_in_id_title_detail_kind_or_count_is_a_change() {
+        let current = rows();
+        for changed in [
+            row(
+                ResultKind::Application,
+                "app:2",
+                "Code",
+                r"C:\Programs\Code",
+            ),
+            row(
+                ResultKind::Application,
+                "app:1",
+                "Code - Insiders",
+                r"C:\Programs\Code",
+            ),
+            row(
+                ResultKind::Application,
+                "app:1",
+                "Code",
+                r"C:\Programs\Tools",
+            ),
+            // Same app among recent tiles: drawn as a grid instead of a row.
+            row(ResultKind::Recent, "app:1", "Code", r"C:\Programs\Code"),
+        ] {
+            let mut next = rows();
+            next[0] = changed;
+            assert!(!same_rows(&current, &next));
+        }
+        // A new exchange rate changes only the detail.
+        let mut refreshed = rows();
+        refreshed[1] = row(
+            ResultKind::Conversion,
+            "convert",
+            "5 USD",
+            "€4.61 · rates of today",
+        );
+        assert!(!same_rows(&current, &refreshed));
+        assert!(!same_rows(&current, &current[..1]));
+        assert!(!same_rows(&[], &current));
+    }
 }
