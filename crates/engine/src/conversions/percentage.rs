@@ -1,60 +1,60 @@
 //! Everyday percentage questions. Plain `25% of 80` stays with the calculator.
 use super::{
     format::{format_number, readable, significant},
-    phrase::{tokenize, Token, Token::*},
+    phrase::{Token, Token::*},
     Conversion, Outcome,
 };
 use crate::calculator::Calculation;
 
 const MESSAGE: &str = "Enter to copy number · Esc to hide";
 
-pub fn calculate_percentage(input: &str) -> Outcome {
-    let tokens = tokenize(input)?;
-    let answer = match tokens.as_slice() {
+/// `tokens` come from [`super::phrase::tokenize`], shared with the other sentence converters.
+pub fn calculate_percentage(tokens: &[Token]) -> Outcome {
+    let answer = match tokens {
         // 20% off 80 · 20% discount on 80
-        [Percent(rate), Word(off), Number(base)] if off == "off" => Ok(discount(*rate, *base)),
+        [Percent(rate), Word(off), Number(base)] if *off == "off" => Ok(discount(*rate, *base)),
         [Percent(rate), Word(keyword), Word(on), Number(base)]
-            if keyword == "discount" && (on == "on" || on == "off") =>
+            if *keyword == "discount" && (*on == "on" || *on == "off") =>
         {
             Ok(discount(*rate, *base))
         }
         // 20 is what % of 80 · 20 as a % of 80 · what % of 80 is 20
         [Number(part), Word(is), Word(what), Word(pct), Word(of), Number(whole)]
-            if is == "is" && what == "what" && pct == "%" && of == "of" =>
+            if *is == "is" && *what == "what" && *pct == "%" && *of == "of" =>
         {
             share(*part, *whole)
         }
         [Number(part), Word(r#as), rest @ .., Word(of), Number(whole)]
-            if r#as == "as" && of == "of" && is_percent_phrase(rest) =>
+            if *r#as == "as" && *of == "of" && is_percent_phrase(rest) =>
         {
             share(*part, *whole)
         }
         [Word(what), Word(pct), Word(of), Number(whole), Word(is), Number(part)]
-            if what == "what" && pct == "%" && of == "of" && is == "is" =>
+            if *what == "what" && *pct == "%" && *of == "of" && *is == "is" =>
         {
             share(*part, *whole)
         }
         // % change from 50 to 75 · change from 50 to 75
         [rest @ .., Number(from), Word(to), Number(target)]
-            if to == "to" && is_change_prefix(rest) =>
+            if *to == "to" && is_change_prefix(rest) =>
         {
             change(*from, *target)
         }
         // increase 50 by 10% · 50 decreased by 10%
-        [Word(verb), Number(base), Word(by), Percent(rate)] if by == "by" => {
+        [Word(verb), Number(base), Word(by), Percent(rate)] if *by == "by" => {
             Ok(adjust(verb, *base, *rate)?)
         }
-        [Number(base), Word(verb), Word(by), Percent(rate)] if by == "by" => {
+        [Number(base), Word(verb), Word(by), Percent(rate)] if *by == "by" => {
             Ok(adjust(verb.trim_end_matches('d'), *base, *rate)?)
         }
         // 15 is 20% of what · 20% of what is 15
         [Number(part), Word(is), Percent(rate), Word(of), Word(what)]
-            if is == "is" && of == "of" && what == "what" =>
+            if *is == "is" && *of == "of" && *what == "what" =>
         {
             base_of(*part, *rate)
         }
         [Percent(rate), Word(of), Word(what), Word(is), Number(part)]
-            if of == "of" && what == "what" && is == "is" =>
+            if *of == "of" && *what == "what" && *is == "is" =>
         {
             base_of(*part, *rate)
         }
@@ -66,8 +66,8 @@ pub fn calculate_percentage(input: &str) -> Outcome {
 /// `%` or `a %` between `as` and `of`.
 fn is_percent_phrase(tokens: &[Token]) -> bool {
     match tokens {
-        [Word(percent)] => percent == "%",
-        [Word(article), Word(percent)] => article == "a" && percent == "%",
+        [Word(percent)] => *percent == "%",
+        [Word(article), Word(percent)] => *article == "a" && *percent == "%",
         _ => false,
     }
 }
@@ -76,7 +76,7 @@ fn is_change_prefix(tokens: &[Token]) -> bool {
     let words: Vec<&str> = tokens
         .iter()
         .map(|token| match token {
-            Word(text) => Some(text.as_str()),
+            Word(text) => Some(*text),
             _ => None,
         })
         .collect::<Option<_>>()
@@ -186,6 +186,12 @@ fn base_of(part: f64, rate: f64) -> Result<Calculation, &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Tokenizes like `convert()` does, then calls the converter.
+    fn calculate_percentage(input: &str) -> Outcome {
+        let mut text = String::new();
+        super::calculate_percentage(&super::super::phrase::tokenize(input, &mut text)?)
+    }
 
     fn title(query: &str) -> String {
         calculate_percentage(query)

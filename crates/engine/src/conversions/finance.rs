@@ -2,7 +2,7 @@
 //! `compound 1000 at 5% for 10 years monthly`.
 use super::{
     format::{grouped, plain, readable},
-    phrase::{tokenize, Token, Token::*},
+    phrase::{Token, Token::*},
     Conversion, Outcome,
 };
 use crate::calculator::Calculation;
@@ -10,9 +10,9 @@ use crate::calculator::Calculation;
 const MESSAGE: &str = "Enter to copy amount · estimates exclude fees and taxes";
 const MAX_YEARS: f64 = 100.;
 
-pub fn calculate_finance(input: &str) -> Outcome {
-    let tokens = tokenize(input)?;
-    let (kind, rest) = match tokens.as_slice() {
+/// `tokens` come from [`super::phrase::tokenize`], shared with the other sentence converters.
+pub fn calculate_finance(tokens: &[Token]) -> Outcome {
+    let (kind, rest) = match tokens {
         [first, rest @ ..] if first.is("loan") || first.is("mortgage") || first.is("repayment") => {
             (Kind::Loan, rest)
         }
@@ -20,7 +20,7 @@ pub fn calculate_finance(input: &str) -> Outcome {
             (Kind::Compound, rest)
         }
         // `1000 at 5% for 10 years` without a keyword means compound growth.
-        [Number(_), at, ..] if at.is("at") => (Kind::Compound, tokens.as_slice()),
+        [Number(_), at, ..] if at.is("at") => (Kind::Compound, tokens),
         _ => return None,
     };
     let terms = parse_terms(rest)?;
@@ -173,6 +173,12 @@ fn money(value: f64, detail: String) -> Calculation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Tokenizes like `convert()` does, then calls the converter.
+    fn calculate_finance(input: &str) -> Outcome {
+        let mut text = String::new();
+        super::calculate_finance(&super::super::phrase::tokenize(input, &mut text)?)
+    }
 
     fn titles(query: &str) -> Vec<String> {
         calculate_finance(query)

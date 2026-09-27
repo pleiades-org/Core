@@ -512,6 +512,34 @@ mod recent_tests {
         let typed = engine.search("calc", &catalog);
         assert_eq!(typed.results[0].kind, ResultKind::Application);
     }
+
+    #[test]
+    fn app_names_skip_converters_and_reach_app_search() {
+        let catalog = ApplicationCatalog::new(vec![Application {
+            id: "id:code".into(),
+            name: "Visual Studio Code".into(),
+            description: "Programs".into(),
+            pinned: false,
+            launches: 0,
+            aliases: Default::default(),
+        }]);
+        let mut engine = SearchEngine::default();
+        for query in ["code", "vsc", "visual studio code"] {
+            assert!(engine.try_calculation(query).is_none(), "{query}");
+            let batch = engine.search(query, &catalog);
+            assert_eq!(batch.results[0].kind, ResultKind::Application, "{query}");
+            assert_eq!(&*batch.results[0].title, "Visual Studio Code", "{query}");
+        }
+        let dash = engine.search("-", &catalog);
+        assert!(dash.results.is_empty());
+        assert_eq!(dash.message, "Finish the expression");
+        assert_eq!(
+            engine.search(".5 kg to lb", &catalog).results[0]
+                .title
+                .as_ref(),
+            "1.10231131092 lb"
+        );
+    }
 }
 
 #[cfg(test)]
