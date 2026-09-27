@@ -150,10 +150,8 @@ fn run_search(
     let mut engine =
         SearchEngine::with_time_converter(super::time_converter::WindowsTimeConverter::default())
             .with_calendar_clock(super::time_converter::WindowsCalendarClock);
-    let mut source_catalog: Option<Arc<ApplicationCatalog>> = None;
     let mut source_quicklinks: Arc<[Quicklink]> = Arc::from([]);
     let mut quicklink_catalog = ApplicationCatalog::default();
-    let mut combined_catalog = ApplicationCatalog::default();
     loop {
         let request = {
             let (lock, changed) = &*pending;
@@ -169,32 +167,28 @@ fn run_search(
         if generation.load(Ordering::Acquire) != request.generation {
             continue;
         }
-        if !source_catalog
-            .as_ref()
-            .is_some_and(|catalog| Arc::ptr_eq(catalog, &request.catalog))
-            || !Arc::ptr_eq(&source_quicklinks, &request.quicklinks)
-        {
-            if request.quicklinks.is_empty() {
-                quicklink_catalog = ApplicationCatalog::default();
-                combined_catalog = ApplicationCatalog::default();
+        // Quicklinks are ranked in their own catalog and merged with the apps' results, so only
+        // a quicklink edit rebuilds a catalog here; new apps from discovery are used as they are.
+        if !Arc::ptr_eq(&source_quicklinks, &request.quicklinks) {
+            quicklink_catalog = if request.quicklinks.is_empty() {
+                ApplicationCatalog::default()
             } else {
-                (quicklink_catalog, combined_catalog) =
-                    core_engine::quicklinks::catalogs(&request.catalog, &request.quicklinks);
-            }
-            source_catalog = Some(request.catalog.clone());
+                ApplicationCatalog::new(
+                    request
+                        .quicklinks
+                        .iter()
+                        .map(Quicklink::application)
+                        .collect(),
+                )
+            };
             source_quicklinks = request.quicklinks.clone();
         }
-        let general_catalog = if request.quicklinks.is_empty() {
-            &request.catalog
-        } else {
-            &combined_catalog
-        };
         engine.set_exchange_rates(request.exchange_rates.clone());
         engine.set_recent_applications(request.recent_applications.clone());
         let batch = engine.search_catalogs(
             &request.query,
             &request.catalog,
-            general_catalog,
+            &request.catalog,
             &quicklink_catalog,
             &|| {
                 stopped.load(Ordering::Relaxed)

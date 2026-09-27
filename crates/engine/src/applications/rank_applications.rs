@@ -147,6 +147,18 @@ impl SearchScratch {
 
 pub struct RankedApplication<'catalog> {
     pub application: &'catalog Application,
+    /// Class, pinning and launches as ranked, then the normalized name: with the ID, how
+    /// results from two catalogs interleave.
+    rank: u64,
+    normalized_name: &'catalog str,
+}
+
+impl RankedApplication<'_> {
+    /// The order a single catalog holding both would give: `Candidate` without the ordinal,
+    /// then catalog order.
+    fn merge_order(&self) -> (u64, &str, &str) {
+        (self.rank, self.normalized_name, &self.application.id)
+    }
 }
 
 impl ApplicationCatalog {
@@ -262,6 +274,39 @@ impl ApplicationCatalog {
         self.search_with_cancel(query, limit, scratch, &|| false)
     }
 
+    /// Ranks this catalog and `other` as one list, exactly as one catalog holding both would,
+    /// without building that catalog: the best `limit` of each are merged in its order. Equal
+    /// entries list this catalog's first, as they would sort in a catalog built from this one
+    /// followed by `other`.
+    pub fn search_merged<'catalog>(
+        &'catalog self,
+        other: &'catalog ApplicationCatalog,
+        query: &str,
+        limit: usize,
+        scratch: &mut SearchScratch,
+        cancelled: &impl Fn() -> bool,
+    ) -> Vec<RankedApplication<'catalog>> {
+        let first = self.search_with_cancel(query, limit, scratch, cancelled);
+        if other.is_empty() {
+            return first;
+        }
+        let second = other.search_with_cancel(query, limit, scratch, cancelled);
+        let mut merged = Vec::with_capacity(limit.min(first.len() + second.len()));
+        let (mut first, mut second) = (first.into_iter().peekable(), second.into_iter().peekable());
+        while merged.len() < limit {
+            let next = match (first.peek(), second.peek()) {
+                (Some(left), Some(right)) if right.merge_order() < left.merge_order() => {
+                    second.next()
+                }
+                (Some(_), _) => first.next(),
+                (None, _) => second.next(),
+            };
+            let Some(next) = next else { break };
+            merged.push(next);
+        }
+        merged
+    }
+
     pub fn search_with_cancel<'catalog>(
         &'catalog self,
         query: &str,
@@ -315,8 +360,13 @@ impl ApplicationCatalog {
         scratch.candidates[..count].sort_unstable();
         scratch.candidates[..count]
             .iter()
-            .map(|candidate| RankedApplication {
-                application: &self.applications[candidate.ordinal()].application,
+            .map(|candidate| {
+                let prepared = &self.applications[candidate.ordinal()];
+                RankedApplication {
+                    application: &prepared.application,
+                    rank: candidate.0 >> LAUNCH_SHIFT,
+                    normalized_name: &prepared.normalized_name,
+                }
             })
             .collect()
     }
@@ -886,6 +936,98 @@ mod tests {
                 candidate,
                 Candidate::new(left.0.min(MatchClass::Prefix), left.1, left.2, left.3)
             );
+        }
+    }
+
+    /// A deterministic pseudo-random sequence (Knuth's MMIX linear congruential generator).
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self, bound: usize) -> usize {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((self.0 >> 33) % bound as u64) as usize
+        }
+    }
+
+    #[test]
+    fn merged_catalogs_rank_like_one_combined_catalog() {
+        let words = [
+            "code",
+            "docs",
+            "visual",
+            "studio",
+            "terminal",
+            "editor",
+            "σίσυφος",
+            "東京",
+            "a",
+            "ab",
+            "notes",
+            "project",
+        ];
+        let mut random = Lcg(0x5eed);
+        let entry = |prefix: &str, index: usize, random: &mut Lcg| {
+            let name: Vec<&str> = (0..1 + random.next(3))
+                .map(|_| words[random.next(words.len())])
+                .collect();
+            let mut application = application(
+                &format!("{prefix}:{}", random.next(40)),
+                &name.join(if random.next(4) == 0 { "-" } else { " " }),
+                random.next(9) == 0,
+            );
+            application.launches = [0, 3, 999, 1_000, 5_000][random.next(5)];
+            if random.next(6) == 0 {
+                application.aliases = Arc::from([Arc::from(words[random.next(words.len())])]);
+            }
+            // Some entries repeat another's name and ID, as a shortcut in two folders does.
+            if index.is_multiple_of(17) {
+                application.id = format!("{prefix}:0").into();
+            }
+            application
+        };
+        for round in 0..40 {
+            // Small catalogs scan; from 128 entries up, the apps are indexed.
+            let app_count = [0, 5, 60, 200, 400][round % 5];
+            let link_count = [0, 1, 7, 50, 150][(round / 5) % 5];
+            let apps: Vec<_> = (0..app_count)
+                .map(|index| entry("app", index, &mut random))
+                .collect();
+            let links: Vec<_> = (0..link_count)
+                .map(|index| entry("quicklink:", index, &mut random))
+                .collect();
+            let separate = (
+                ApplicationCatalog::new(apps.clone()),
+                ApplicationCatalog::new(links.clone()),
+            );
+            let combined = ApplicationCatalog::new(apps.into_iter().chain(links).collect());
+            let mut scratch = SearchScratch::default();
+            for _ in 0..30 {
+                let word = words[random.next(words.len())];
+                let start = random.next(word.chars().count());
+                let query: String = match random.next(4) {
+                    0 => word.chars().skip(start).collect(),
+                    1 => word.chars().take(1 + start).collect(),
+                    2 => format!("{word} {}", words[random.next(words.len())]),
+                    _ => String::new(),
+                };
+                for limit in [1, 8, 20] {
+                    let merged: Vec<_> = separate
+                        .0
+                        .search_merged(&separate.1, &query, limit, &mut scratch, &|| false)
+                        .iter()
+                        .map(|ranked| ranked.application.id.clone())
+                        .collect();
+                    let expected: Vec<_> = combined
+                        .search(&query, limit, &mut scratch)
+                        .iter()
+                        .map(|ranked| ranked.application.id.clone())
+                        .collect();
+                    assert_eq!(merged, expected, "round {round}, {query:?}, limit {limit}");
+                }
+            }
         }
     }
 
