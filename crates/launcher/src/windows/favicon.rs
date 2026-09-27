@@ -4,9 +4,11 @@
 //! intranet names) are never sent to Google. No cookies or credentials are sent anywhere.
 use super::{application_icon::ApplicationIcon, http};
 use std::{
+    collections::BTreeMap,
     fs,
     ops::Range,
     path::PathBuf,
+    sync::{Mutex, MutexGuard},
     time::{Duration, Instant},
 };
 use windows::Win32::UI::WindowsAndMessaging::{CreateIconFromResourceEx, LR_DEFAULTCOLOR};
@@ -28,6 +30,17 @@ const GOOGLE_SIZE: u32 = 64;
 const CACHE_VERSION: u32 = 2;
 /// Name suffixes that only resolve inside a private network.
 const PRIVATE_SUFFIXES: &[&str] = &[".local", ".lan", ".internal", ".home.arpa", ".localhost"];
+/// Waits after consecutive failures to reach a host; the last wait repeats.
+const UNREACHABLE_BACKOFF: [Duration; 3] = [
+    Duration::from_secs(30),
+    Duration::from_secs(5 * 60),
+    Duration::from_secs(60 * 60),
+];
+/// While Google cannot be reached, sites are asked for `/favicon.ico` directly.
+const GOOGLE_UNREACHABLE: Duration = Duration::from_secs(5 * 60);
+
+/// Unreachable sources, kept outside the icon worker's cache so evictions do not forget them.
+static BACKOFF: Mutex<Backoff> = Mutex::new(Backoff::new());
 
 /// `scheme://host[:port]` for an HTTP(S) quicklink, lowercase. `None` for files and folders.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,14 +113,23 @@ pub fn load(origin: &WebsiteOrigin) -> Option<ApplicationIcon> {
     if let Some(icon) = cached_icon(&path) {
         return icon;
     }
+    if backoff().host_waiting(&origin.host, Instant::now()) {
+        return None;
+    }
     let bytes = match fetch(origin) {
         Ok(bytes) => bytes,
         Err(error) => {
-            // Offline or unreachable: not cached, so the icon worker retries shortly.
-            eprintln!("Could not fetch the icon for {}: {error}", origin.host);
+            // Offline or unreachable: not cached, and retried after a growing wait.
+            let wait = backoff().host_unreachable(&origin.host, Instant::now());
+            eprintln!(
+                "Could not fetch the icon for {}: {error}; retrying in {} s",
+                origin.host,
+                wait.as_secs()
+            );
             return None;
         }
     };
+    backoff().host_reached(&origin.host);
     let icon = decode(&bytes);
     // A source answered. An empty file records "no usable icon" so it is not asked again soon.
     let cached = if icon.is_some() {
@@ -212,7 +234,8 @@ fn best_icon_image(bytes: &[u8], preferred: u32) -> Option<Range<usize>> {
 }
 
 /// Icon bytes from the first source that has one; empty when every reachable source answered
-/// without an icon. `Err` only when no source could be reached, so offline retries stay short.
+/// without an icon. `Err` when no source could be reached, or when Google was skipped because
+/// it was recently unreachable, so a miss is not recorded for a day without asking Google.
 fn fetch(origin: &WebsiteOrigin) -> windows::core::Result<Vec<u8>> {
     let google_path = format!("/s2/favicons?domain={}&sz={GOOGLE_SIZE}", origin.host);
     let google = http::Request {
@@ -229,25 +252,88 @@ fn fetch(origin: &WebsiteOrigin) -> windows::core::Result<Vec<u8>> {
         path: "/favicon.ico",
         max_bytes: MAX_ICON_BYTES,
     };
-    let sources = origin
-        .is_public()
-        .then_some(google)
+    let skip_google = origin.is_public() && !backoff().google_available(Instant::now());
+    let sources = (origin.is_public() && !skip_google)
+        .then_some((true, google))
         .into_iter()
-        .chain([direct]);
+        .chain([(false, direct)]);
     let deadline = Instant::now() + FETCH_TIMEOUT;
     let mut reached = false;
     let mut last_error = None;
-    for request in sources {
+    for (is_google, request) in sources {
         match get_icon(request, deadline) {
             // Google answers unknown sites with 404 and a generic globe; the body is then empty.
             Ok(response) if is_icon_data(&response.body) => return Ok(response.body),
             Ok(_) => reached = true,
-            Err(error) => last_error = Some(error),
+            Err(error) => {
+                if is_google {
+                    backoff().google_unreachable(Instant::now());
+                }
+                last_error = Some(error);
+            }
         }
     }
     match last_error {
         Some(error) if !reached => Err(error),
+        _ if skip_google => Err(windows::core::Error::new(
+            windows::Win32::Foundation::E_FAIL,
+            "Google is unreachable and the site has no /favicon.ico",
+        )),
         _ => Ok(Vec::new()),
+    }
+}
+
+fn backoff() -> MutexGuard<'static, Backoff> {
+    BACKOFF.lock().expect("favicon backoff lock")
+}
+
+struct Unreachable {
+    failures: usize,
+    retry_at: Instant,
+}
+
+/// Exponential backoff per unreachable host, and a pause for Google while it is unreachable.
+struct Backoff {
+    hosts: BTreeMap<String, Unreachable>,
+    google_retry_at: Option<Instant>,
+}
+
+impl Backoff {
+    const fn new() -> Self {
+        Self {
+            hosts: BTreeMap::new(),
+            google_retry_at: None,
+        }
+    }
+
+    fn host_waiting(&self, host: &str, now: Instant) -> bool {
+        self.hosts
+            .get(host)
+            .is_some_and(|unreachable| now < unreachable.retry_at)
+    }
+
+    /// Records another failure and returns how long the host now waits.
+    fn host_unreachable(&mut self, host: &str, now: Instant) -> Duration {
+        let unreachable = self.hosts.entry(host.to_owned()).or_insert(Unreachable {
+            failures: 0,
+            retry_at: now,
+        });
+        let wait = UNREACHABLE_BACKOFF[unreachable.failures.min(UNREACHABLE_BACKOFF.len() - 1)];
+        unreachable.failures = unreachable.failures.saturating_add(1);
+        unreachable.retry_at = now + wait;
+        wait
+    }
+
+    fn host_reached(&mut self, host: &str) {
+        self.hosts.remove(host);
+    }
+
+    fn google_available(&self, now: Instant) -> bool {
+        self.google_retry_at.is_none_or(|retry_at| now >= retry_at)
+    }
+
+    fn google_unreachable(&mut self, now: Instant) {
+        self.google_retry_at = Some(now + GOOGLE_UNREACHABLE);
     }
 }
 
@@ -476,6 +562,44 @@ mod tests {
             ..request
         };
         assert!(redirect_target(private, "/icon.ico").is_none());
+    }
+
+    #[test]
+    fn unreachable_hosts_back_off_from_30_seconds_to_an_hour() {
+        let mut backoff = Backoff::new();
+        let now = Instant::now();
+        let minutes = |count: u64| Duration::from_secs(count * 60);
+        assert!(!backoff.host_waiting("nas", now));
+        assert_eq!(
+            backoff.host_unreachable("nas", now),
+            Duration::from_secs(30)
+        );
+        assert!(backoff.host_waiting("nas", now + Duration::from_secs(29)));
+        assert!(!backoff.host_waiting("nas", now + Duration::from_secs(30)));
+        assert!(!backoff.host_waiting("example.com", now));
+        assert_eq!(backoff.host_unreachable("nas", now), minutes(5));
+        assert!(backoff.host_waiting("nas", now + minutes(5) - Duration::from_secs(1)));
+        assert_eq!(backoff.host_unreachable("nas", now), minutes(60));
+        assert_eq!(backoff.host_unreachable("nas", now), minutes(60));
+        assert!(backoff.host_waiting("nas", now + minutes(59)));
+        assert!(!backoff.host_waiting("nas", now + minutes(60)));
+        backoff.host_reached("nas");
+        assert!(!backoff.host_waiting("nas", now));
+        assert_eq!(
+            backoff.host_unreachable("nas", now),
+            Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn google_is_skipped_for_a_few_minutes_after_it_is_unreachable() {
+        let mut backoff = Backoff::new();
+        let now = Instant::now();
+        assert!(backoff.google_available(now));
+        backoff.google_unreachable(now);
+        assert!(!backoff.google_available(now));
+        assert!(!backoff.google_available(now + GOOGLE_UNREACHABLE - Duration::from_secs(1)));
+        assert!(backoff.google_available(now + GOOGLE_UNREACHABLE));
     }
 
     #[test]
