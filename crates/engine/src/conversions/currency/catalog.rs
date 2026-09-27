@@ -1,4 +1,5 @@
 //! Currencies with European Central Bank reference rates, plus the euro itself.
+use std::sync::LazyLock;
 
 pub struct Currency {
     pub code: &'static str,
@@ -260,22 +261,25 @@ pub fn by_code(code: &str) -> Option<&'static Currency> {
 }
 
 /// Symbols that may be written directly against an amount: `$100`, `100€`, `£1.5k`.
-/// Longer symbols first so `us$` is not read as `$`.
-pub fn attached_symbols() -> impl Iterator<Item = (&'static str, &'static Currency)> {
-    let mut symbols: Vec<_> = CURRENCIES
-        .iter()
-        .flat_map(|currency| {
-            currency
-                .names
-                .iter()
-                .filter(|name| {
-                    !name
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphabetic() || byte == b' ')
-                })
-                .map(move |name| (*name, currency))
-        })
-        .collect();
-    symbols.sort_by_key(|(symbol, _)| std::cmp::Reverse(symbol.len()));
-    symbols.into_iter()
+/// Longer symbols first so `us$` is not read as `$`. Built once; queries only read it.
+pub fn attached_symbols() -> &'static [(&'static str, &'static Currency)] {
+    static SYMBOLS: LazyLock<Vec<(&'static str, &'static Currency)>> = LazyLock::new(|| {
+        let mut symbols: Vec<_> = CURRENCIES
+            .iter()
+            .flat_map(|currency| {
+                currency
+                    .names
+                    .iter()
+                    .filter(|name| {
+                        !name
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphabetic() || byte == b' ')
+                    })
+                    .map(move |name| (*name, currency))
+            })
+            .collect();
+        symbols.sort_by_key(|(symbol, _)| std::cmp::Reverse(symbol.len()));
+        symbols
+    });
+    &SYMBOLS
 }

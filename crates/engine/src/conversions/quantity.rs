@@ -7,26 +7,35 @@ pub fn parse_number(text: &str) -> Option<f64> {
     if text.is_empty() || !text.bytes().all(|byte| b"0123456789.,+-eE".contains(&byte)) {
         return None;
     }
-    let plain = if text.contains(',') {
-        ungroup(text)?
+    let value = if text.contains(',') {
+        ungroup(text)?.parse::<f64>()
     } else {
-        text.to_owned()
+        text.parse::<f64>()
     };
-    plain.parse::<f64>().ok().filter(|value| value.is_finite())
+    value.ok().filter(|value| value.is_finite())
 }
 
 /// Like [`parse_number`], also accepting `k`, `m`/`mm`, `b`/`bn` magnitude suffixes (`1.5k`).
 /// Only for money and plain counts: in unit conversions `2m` means metres.
 pub fn parse_scaled_number(text: &str) -> Option<f64> {
-    let lower = text.trim().to_ascii_lowercase();
+    let text = text.trim();
     for (suffix, factor) in [("bn", 1e9), ("mm", 1e6), ("k", 1e3), ("m", 1e6), ("b", 1e9)] {
-        if let Some(number) = lower.strip_suffix(suffix) {
+        let number = text
+            .len()
+            .checked_sub(suffix.len())
+            .filter(|&end| {
+                text.get(end..)
+                    .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
+            })
+            .map(|end| &text[..end]);
+        if let Some(number) = number {
             return parse_number(number)
                 .map(|value| value * factor)
                 .filter(|value| value.is_finite());
         }
     }
-    parse_number(&lower)
+    // `parse_number` accepts `e` and `E` alike, so the text needs no lowercasing.
+    parse_number(text)
 }
 
 pub(super) fn ungroup(text: &str) -> Option<String> {

@@ -22,6 +22,8 @@ fn only_absolute_executables_get_an_installation_directory() {
         r"C:\Start Menu\Game.url",
         "https://example.com/game.exe",
         "steam://rungameid/3669870",
+        "spotify:track:abc",
+        "com.epicgames.launcher://apps/fn?action=launch",
         "shell:AppsFolder\\Example!App",
         "game.exe",
         r"\Games\game.exe",
@@ -30,6 +32,17 @@ fn only_absolute_executables_get_an_installation_directory() {
         r"C:\Games",
     ] {
         assert_eq!(executable_directory(Path::new(path)), None, "{path}");
+    }
+}
+
+#[test]
+fn unregistered_app_link_schemes_name_the_missing_app() {
+    assert_eq!(
+        require_registered_scheme("core-no-such-scheme-12345"),
+        Err("No app is registered for core-no-such-scheme-12345: links".into())
+    );
+    for scheme in BUILT_IN_SCHEMES {
+        assert_eq!(require_registered_scheme(scheme), Ok(()), "{scheme}");
     }
 }
 
