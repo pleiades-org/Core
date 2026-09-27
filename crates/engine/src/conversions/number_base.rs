@@ -130,7 +130,7 @@ fn grouped_integer(number: u64) -> String {
     let digits = number.to_string();
     let mut output = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             output.push(',');
         }
         output.push(digit);
@@ -217,8 +217,13 @@ mod tests {
         let maximum = convert_number_base("0xFFFFFFFFFFFFFFFF").unwrap().unwrap();
         assert_eq!(maximum.answers[0].title, "18,446,744,073,709,551,615");
         assert_eq!(maximum.answers[0].copy, u64::MAX.to_string());
-        let large = convert_number_base("9007199254740993 to hex").unwrap().unwrap();
-        assert_eq!(large.answers[0].detail, "hexadecimal from decimal · 9,007,199,254,740,993");
+        let large = convert_number_base("9007199254740993 to hex")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            large.answers[0].detail,
+            "hexadecimal from decimal · 9,007,199,254,740,993"
+        );
         assert_eq!(grouped_integer(0), "0");
         assert_eq!(titles("255 to hex"), ["0xFF"]);
         assert_eq!(titles("255 in binary"), ["0b11111111"]);
