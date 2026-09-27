@@ -630,9 +630,13 @@ unsafe fn take_foreground(window: HWND) {
     }
 }
 
-/// Websites use their favicon; files and folders use their Windows Shell icon.
+/// Websites use their favicon; files and folders use their Windows Shell icon. App links such
+/// as `steam://` have neither and keep the ↗ symbol, so they never reach the network.
 fn quicklink_icon_source(link: &str) -> Option<IconSource> {
     let target = core_engine::quicklinks::validate_target(link).ok()?;
+    if core_engine::quicklinks::app_link_scheme(&target).is_some() {
+        return None;
+    }
     Some(match WebsiteOrigin::parse(&target) {
         Some(origin) => IconSource::Website(origin),
         None => IconSource::Shell(PathBuf::from(target)),
@@ -667,4 +671,28 @@ fn fixture_applications() -> Vec<Application> {
         aliases: Default::default(),
     })
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_website_quicklinks_request_favicons() {
+        assert!(matches!(
+            quicklink_icon_source("https://example.com"),
+            Some(IconSource::Website(_))
+        ));
+        assert!(matches!(
+            quicklink_icon_source(r"C:\Games"),
+            Some(IconSource::Shell(_))
+        ));
+        for link in [
+            "steam://rungameid/2379780",
+            "spotify:track:abc",
+            "shell:startup",
+        ] {
+            assert!(quicklink_icon_source(link).is_none(), "{link}");
+        }
+    }
 }

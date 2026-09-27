@@ -54,13 +54,24 @@ const UNIT_MESSAGE: &str = "Enter to copy number · Esc to hide";
 /// Keyword-led formats run first; generic `<number> <unit> to <unit>` runs last.
 pub fn convert(input: &str, context: ConversionContext) -> Outcome {
     let input = input.trim();
-    timestamp::convert_timestamp(input, context.clock)
+    let keyword_led = timestamp::convert_timestamp(input, context.clock)
         .or_else(|| color::convert_color(input))
-        .or_else(|| number_base::convert_number_base(input))
-        .or_else(|| bmi::calculate_bmi(input))
-        .or_else(|| finance::calculate_finance(input))
-        .or_else(|| tip::calculate_tip(input))
-        .or_else(|| percentage::calculate_percentage(input))
+        .or_else(|| number_base::convert_number_base(input));
+    // Every later converter needs a parsed number, so app names stop here without allocating.
+    // A leading sign or point may still be a unit error hint such as `.5x kg to lb`.
+    let might_be_numeric =
+        input.bytes().any(|byte| byte.is_ascii_digit()) || input.starts_with(['+', '-', '.']);
+    if keyword_led.is_some() || !might_be_numeric {
+        return keyword_led;
+    }
+    bmi::calculate_bmi(input)
+        .or_else(|| {
+            let mut text = String::new();
+            let tokens = phrase::tokenize(input, &mut text)?;
+            finance::calculate_finance(&tokens)
+                .or_else(|| tip::calculate_tip(&tokens))
+                .or_else(|| percentage::calculate_percentage(&tokens))
+        })
         .or_else(|| display::calculate_display(input))
         .or_else(|| transfer::calculate_transfer(input))
         .or_else(|| currency::convert_currency(input, context.rates))
@@ -123,5 +134,46 @@ mod tests {
                 "{query}"
             );
         }
+    }
+
+    #[test]
+    fn digit_free_text_reaches_only_keyword_converters() {
+        for query in ["code", "vsc", "visual studio code", "-", "+", "."] {
+            assert!(
+                convert(query, ConversionContext::default()).is_none(),
+                "{query}"
+            );
+        }
+        assert_eq!(
+            convert("unix now", ConversionContext::default()).map(|outcome| outcome.err()),
+            Some(Some("The current time is unavailable"))
+        );
+        assert_eq!(
+            titles("#ff8800"),
+            ["rgb(255, 136, 0)", "hsl(32, 100%, 50%)", "#FF8800"]
+        );
+        assert_eq!(
+            titles("rgb(1,2,3)"),
+            ["#010203", "hsl(210, 50%, 1%)", "rgb(1, 2, 3)"]
+        );
+        assert_eq!(titles("roman xlii"), ["42"]);
+        // A leading point or sign still reaches units, including its error hint.
+        assert_eq!(titles(".5 kg to lb"), ["1.10231131092 lb"]);
+        assert_eq!(
+            convert(".kg to lb", ConversionContext::default()).map(|outcome| outcome.err()),
+            Some(Some("Enter a valid number before the unit"))
+        );
+    }
+
+    #[test]
+    fn shared_tokens_and_symbols_keep_sentence_and_currency_answers() {
+        assert_eq!(titles("tip 15 percent on 80?"), ["92.00", "12.00"]);
+        assert_eq!(titles("20 per cent off 80"), ["64"]);
+        assert_eq!(titles("loan 10000 at 7% over 36 months")[0], "308.77");
+        for query in ["$5", "US$5", "us$5"] {
+            assert_eq!(titles(query), ["€4.55"], "{query}");
+        }
+        assert_eq!(titles("5K€"), ["$5,500.00"]);
+        assert_eq!(titles("1.5K usd"), ["€1,363.64"]);
     }
 }

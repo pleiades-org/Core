@@ -5,6 +5,28 @@ pub const MAX_QUICKLINKS: usize = 1000;
 pub const MAX_LINK_LENGTH: usize = 2048;
 pub const MAX_NAME_LENGTH: usize = 120;
 pub const ID_PREFIX: &str = "quicklink:";
+/// App-link schemes that run script, embed content or have a history of abuse. Quicklinks are
+/// typed by the local user, so this is defence in depth against pasted links.
+const BLOCKED_SCHEMES: &[&str] = &[
+    "javascript",
+    "vbscript",
+    "data",
+    "file",
+    "about",
+    "blob",
+    "ms-msdt",
+    "search-ms",
+    "search",
+    "ms-officecmd",
+    "ms-word",
+    "ms-excel",
+    "ms-powerpoint",
+    "mk",
+    "its",
+    "ms-its",
+    "hcp",
+    "jar",
+];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Quicklink {
@@ -39,7 +61,8 @@ impl Quicklink {
     }
 }
 
-/// Only explicit websites and absolute Windows paths; never interpret shell commands.
+/// Only explicit websites, absolute Windows paths and app links such as `steam://rungameid/1`;
+/// never interpret shell commands.
 pub fn validate_target(link: &str) -> Result<String, String> {
     let link = link.trim();
     if link.is_empty() || link.len() > MAX_LINK_LENGTH || link.chars().any(char::is_control) {
@@ -79,8 +102,13 @@ pub fn validate_target(link: &str) -> Result<String, String> {
             .is_some_and(|host| host.contains('.'))
     {
         format!("https://{link}")
+    } else if let Some(scheme) = app_link_scheme(link) {
+        return validate_app_link(link, scheme);
     } else {
-        return Err("Use an HTTP/HTTPS website or an absolute file/folder path.".into());
+        return Err(
+            "Use an HTTP/HTTPS website, an app link such as steam://… or an absolute file/folder path."
+                .into(),
+        );
     };
     let authority = normalized
         .split_once("://")
@@ -98,6 +126,33 @@ pub fn validate_target(link: &str) -> Result<String, String> {
         return Err("Enter a website with a host and no spaces or embedded credentials.".into());
     }
     Ok(normalized)
+}
+
+/// The scheme of an app link `scheme:rest` such as `steam://rungameid/1`, as written. `None` for
+/// websites, paths and anything else. Schemes follow RFC 3986 and need two characters, so a
+/// drive letter such as `c:relative` is never a scheme.
+pub fn app_link_scheme(link: &str) -> Option<&str> {
+    let (scheme, rest) = link.split_once(':')?;
+    let mut bytes = scheme.bytes();
+    let valid = scheme.len() >= 2
+        && bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'));
+    let web = scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https");
+    (valid && !web && !rest.is_empty()).then_some(scheme)
+}
+
+/// Lowercases only the scheme; the rest is passed to the registered app byte-for-byte.
+fn validate_app_link(link: &str, scheme: &str) -> Result<String, String> {
+    let scheme = scheme.to_ascii_lowercase();
+    if BLOCKED_SCHEMES.contains(&scheme.as_str()) {
+        return Err("That link type is not allowed.".into());
+    }
+    if link.chars().any(char::is_whitespace) || link.contains(['\\', '"', '<', '>']) {
+        return Err(
+            "Enter an app link without spaces, quotes, angle brackets or backslashes.".into(),
+        );
+    }
+    Ok(format!("{scheme}{}", &link[scheme.len()..]))
 }
 
 pub fn catalogs(
@@ -198,5 +253,70 @@ mod tests {
         ] {
             assert!(validate_target(target).is_err(), "{target}");
         }
+    }
+    #[test]
+    fn app_links_keep_their_target_and_lowercase_only_the_scheme() {
+        for (target, expected) in [
+            ("steam://rungameid/2379780", "steam://rungameid/2379780"),
+            ("STEAM://rungameid/1", "steam://rungameid/1"),
+            (
+                "com.epicgames.launcher://apps/fn?action=launch",
+                "com.epicgames.launcher://apps/fn?action=launch",
+            ),
+            ("spotify:track:abc", "spotify:track:abc"),
+            ("Spotify:Track:ABC", "spotify:Track:ABC"),
+            ("mailto:a@b.c", "mailto:a@b.c"),
+            ("ms-settings:display", "ms-settings:display"),
+            ("shell:startup", "shell:startup"),
+        ] {
+            assert_eq!(validate_target(target).as_deref(), Ok(expected), "{target}");
+            assert!(Quicklink::new("Game", target).is_ok(), "{target}");
+        }
+        assert_eq!(app_link_scheme("steam://rungameid/1"), Some("steam"));
+        for target in [
+            "https://example.com",
+            "C:\\Games",
+            "example.com",
+            "c:relative",
+        ] {
+            assert_eq!(app_link_scheme(target), None, "{target}");
+        }
+    }
+    #[test]
+    fn app_links_reject_unsafe_schemes_and_malformed_links() {
+        for target in [
+            "javascript:alert(1)",
+            "JavaScript:alert(1)",
+            "vbscript:x",
+            "data:text/html,x",
+            "file:///C:/x",
+            "search-ms:query=x",
+            "ms-msdt:/id",
+        ] {
+            assert_eq!(
+                validate_target(target),
+                Err("That link type is not allowed.".into()),
+                "{target}"
+            );
+        }
+        for target in [
+            "steam://run game",
+            "steam://run\tgame",
+            "steam://\"x\"",
+            "steam://<x>",
+            "steam:\\\\x",
+            "c:relative",
+            "1abc:x",
+            "steam:",
+            "http:example.com",
+            "-steam:x",
+            "st_eam:x",
+        ] {
+            assert!(validate_target(target).is_err(), "{target}");
+        }
+        let long = format!("steam://{}", "a".repeat(MAX_LINK_LENGTH));
+        assert!(validate_target(&long).is_err());
+        let longest = format!("steam:{}", "a".repeat(MAX_LINK_LENGTH - "steam:".len()));
+        assert_eq!(validate_target(&longest), Ok(longest.clone()));
     }
 }

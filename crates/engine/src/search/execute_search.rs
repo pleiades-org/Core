@@ -10,10 +10,14 @@ use crate::{
         format_number, Calculation, CalculatorEngine,
     },
     conversions::{self, Conversion, ConversionContext, ExchangeRates},
-    time_conversion::{parse_time, recognizes_time, TimeConverter, TimeError},
+    time_conversion::{parse_time, recognizes_time, TimeConverter, TimeError, TimeRequest},
     VISIBLE_RESULT_LIMIT,
 };
 use std::sync::Arc;
+
+const APPLICATION_MESSAGE: &str = "Enter to open · ↑ ↓ to select · Esc to hide";
+/// Empty-query lists kept at once: apps, apps with quicklinks, and quicklinks alone.
+const EMPTY_QUERY_CATALOGS: usize = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -76,6 +80,9 @@ pub struct SearchEngine {
     exchange_rates: Option<Arc<ExchangeRates>>,
     /// Application identifiers, most recent first, shown when nothing is typed.
     recent_applications: Arc<[Arc<str>]>,
+    /// Top results for an empty query per catalog identity; a catalog never changes, so these
+    /// stay valid until a different catalog is searched.
+    empty_query_results: Vec<(u64, Vec<SearchResult>)>,
 }
 
 impl SearchEngine {
@@ -228,9 +235,9 @@ impl SearchEngine {
             );
         }
         // A complete time-zone query wins; `9 pt to cup` (pints) falls through to units.
-        let time_query = recognizes_time(payload);
-        if time_query && parse_time(payload).is_ok() {
-            return Some(self.convert_time(payload));
+        let time_request = recognizes_time(payload).then(|| parse_time(payload));
+        if let Some(Ok(request)) = time_request {
+            return Some(self.time_batch(Ok(request)));
         }
         let context = ConversionContext {
             rates: self.exchange_rates.as_deref(),
@@ -245,8 +252,8 @@ impl SearchEngine {
                 },
             });
         }
-        if time_query {
-            return Some(self.convert_time(payload));
+        if let Some(request) = time_request {
+            return Some(self.time_batch(request));
         }
         self.calculator
             .recognizes(payload)
@@ -259,7 +266,20 @@ impl SearchEngine {
         catalog: &ApplicationCatalog,
         cancelled: &impl Fn() -> bool,
     ) -> SearchBatch {
-        let results = catalog
+        let empty_query = query.trim().is_empty();
+        if empty_query {
+            let cached = self
+                .empty_query_results
+                .iter()
+                .find(|(identity, _)| *identity == catalog.identity());
+            if let Some((_, results)) = cached {
+                return SearchBatch {
+                    results: results.clone(),
+                    message: APPLICATION_MESSAGE,
+                };
+            }
+        }
+        let results: Vec<SearchResult> = catalog
             .search_with_cancel(query, VISIBLE_RESULT_LIMIT, &mut self.scratch, cancelled)
             .into_iter()
             .map(|ranked| {
@@ -282,9 +302,17 @@ impl SearchEngine {
                 }
             })
             .collect();
+        // A cancelled search returns nothing, which must not be remembered as the answer.
+        if empty_query && !cancelled() {
+            if self.empty_query_results.len() == EMPTY_QUERY_CATALOGS {
+                self.empty_query_results.remove(0);
+            }
+            self.empty_query_results
+                .push((catalog.identity(), results.clone()));
+        }
         SearchBatch {
             results,
-            message: "Enter to open · ↑ ↓ to select · Esc to hide",
+            message: APPLICATION_MESSAGE,
         }
     }
 
@@ -362,7 +390,11 @@ fn calculation_batch(answer: Calculation, kind: ResultKind, message: &'static st
 
 impl SearchEngine {
     fn convert_time(&mut self, payload: &str) -> SearchBatch {
-        let conversion = parse_time(payload).and_then(|request| {
+        self.time_batch(parse_time(payload))
+    }
+
+    fn time_batch(&mut self, parsed: Result<TimeRequest, TimeError>) -> SearchBatch {
+        let conversion = parsed.and_then(|request| {
             let converter = self.time_converter.as_mut().ok_or(TimeError::Unavailable)?;
             converter
                 .convert(request)
@@ -511,6 +543,86 @@ mod recent_tests {
         assert_eq!(&*empty.results[0].title, "Notepad");
         let typed = engine.search("calc", &catalog);
         assert_eq!(typed.results[0].kind, ResultKind::Application);
+    }
+
+    #[test]
+    fn app_names_skip_converters_and_reach_app_search() {
+        let catalog = ApplicationCatalog::new(vec![Application {
+            id: "id:code".into(),
+            name: "Visual Studio Code".into(),
+            description: "Programs".into(),
+            pinned: false,
+            launches: 0,
+            aliases: Default::default(),
+        }]);
+        let mut engine = SearchEngine::default();
+        for query in ["code", "vsc", "visual studio code"] {
+            assert!(engine.try_calculation(query).is_none(), "{query}");
+            let batch = engine.search(query, &catalog);
+            assert_eq!(batch.results[0].kind, ResultKind::Application, "{query}");
+            assert_eq!(&*batch.results[0].title, "Visual Studio Code", "{query}");
+        }
+        let dash = engine.search("-", &catalog);
+        assert!(dash.results.is_empty());
+        assert_eq!(dash.message, "Finish the expression");
+        assert_eq!(
+            engine.search(".5 kg to lb", &catalog).results[0]
+                .title
+                .as_ref(),
+            "1.10231131092 lb"
+        );
+    }
+
+    #[test]
+    fn empty_scope_results_follow_the_catalog_they_came_from() {
+        let catalog_of = |names: &[&str]| {
+            ApplicationCatalog::new(
+                names
+                    .iter()
+                    .map(|name| Application {
+                        id: format!("id:{name}").into(),
+                        name: (*name).into(),
+                        description: "Programs".into(),
+                        pinned: false,
+                        launches: 0,
+                        aliases: Default::default(),
+                    })
+                    .collect(),
+            )
+        };
+        let titles = |batch: SearchBatch| -> Vec<String> {
+            batch
+                .results
+                .iter()
+                .map(|result| result.title.to_string())
+                .collect()
+        };
+        let mut engine = SearchEngine::default();
+        let mut catalog = catalog_of(&["Calculator", "Notepad"]);
+        for query in ["", "@app ", ""] {
+            assert_eq!(
+                titles(engine.search(query, &catalog)),
+                ["Calculator", "Notepad"],
+                "{query:?}"
+            );
+        }
+        // The search worker replaces its catalogs in place, so the same address must not
+        // bring back the previous catalog's list.
+        catalog = catalog_of(&["Paint"]);
+        assert_eq!(titles(engine.search("", &catalog)), ["Paint"]);
+        assert_eq!(titles(engine.search("@app ", &catalog)), ["Paint"]);
+        // A cancelled empty search is not remembered as an empty catalog.
+        let fresh = catalog_of(&["Word"]);
+        assert!(engine
+            .search_with_cancel("", &fresh, &|| true)
+            .results
+            .is_empty());
+        assert_eq!(titles(engine.search("", &fresh)), ["Word"]);
+        // Quicklinks keep their own list next to the application catalogs.
+        let quicklinks = catalog_of(&["Docs"]);
+        let batch = engine.search_catalogs(">", &catalog, &catalog, &quicklinks, &|| false);
+        assert_eq!(titles(batch), ["Docs"]);
+        assert_eq!(titles(engine.search("", &catalog)), ["Paint"]);
     }
 }
 

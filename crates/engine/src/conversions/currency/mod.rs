@@ -81,9 +81,20 @@ fn parse_money(tokens: &[&str]) -> Option<(f64, Named)> {
 }
 
 fn parse_attached(token: &str) -> Option<(f64, Named)> {
-    let lower = token.to_lowercase();
-    for (symbol, currency) in attached_symbols() {
-        if let Some(amount) = lower.strip_prefix(symbol) {
+    // ASCII compares in place; only symbols such as `Zł` and `Kč` need Unicode lowercasing.
+    let lower;
+    let text = if token.is_ascii() {
+        token
+    } else {
+        lower = token.to_lowercase();
+        &lower
+    };
+    for &(symbol, currency) in attached_symbols() {
+        let amount = text
+            .get(..symbol.len())
+            .filter(|prefix| prefix.eq_ignore_ascii_case(symbol))
+            .map(|_| &text[symbol.len()..]);
+        if let Some(amount) = amount {
             return Some((parse_scaled_number(amount)?, (currency, false)));
         }
     }

@@ -11,12 +11,18 @@ use windows::{
     core::{w, PCWSTR},
     Win32::{
         Foundation::*,
-        System::{DataExchange::*, Memory::*},
+        System::{
+            DataExchange::*,
+            Memory::*,
+            Registry::{RegGetValueW, HKEY_CLASSES_ROOT, RRF_RT_ANY},
+        },
         UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
     },
 };
 
 const UNICODE_TEXT_FORMAT: u32 = 13;
+/// App-link schemes Windows handles itself, without a `URL Protocol` registration.
+const BUILT_IN_SCHEMES: &[&str] = &["shell", "ms-settings"];
 
 pub enum NativeAction {
     OpenApplication(PathBuf),
@@ -49,6 +55,9 @@ impl NativeAction {
             Self::OpenUrl(url) => open_url(window, &url),
             Self::OpenQuicklink(link) => {
                 let target = core_engine::quicklinks::validate_target(&link)?;
+                if let Some(scheme) = core_engine::quicklinks::app_link_scheme(&target) {
+                    require_registered_scheme(scheme)?;
+                }
                 open_application(window, Path::new(&target))
             }
             Self::Power(action) => super::power::execute(action),
@@ -82,6 +91,31 @@ fn executable_directory(path: &Path) -> Option<&Path> {
     // Direct executables often read data relative to their installation folder. Let Windows
     // retain its own launch rules for shortcuts, documents, URLs and packaged applications.
     path.parent()
+}
+
+/// Names the missing app instead of ShellExecute's generic error for an unknown scheme.
+fn require_registered_scheme(scheme: &str) -> Result<(), String> {
+    if BUILT_IN_SCHEMES.contains(&scheme) {
+        return Ok(());
+    }
+    // A protocol handler is `HKEY_CLASSES_ROOT\<scheme>` with a `URL Protocol` value. Only the
+    // value's presence is queried, so no key handle is left to close.
+    let key = wide(scheme);
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CLASSES_ROOT,
+            PCWSTR(key.as_ptr()),
+            w!("URL Protocol"),
+            RRF_RT_ANY,
+            None,
+            None,
+            None,
+        )
+    };
+    if status.is_err() {
+        return Err(format!("No app is registered for {scheme}: links"));
+    }
+    Ok(())
 }
 
 pub fn open_url(window: HWND, url: &str) -> Result<(), String> {
