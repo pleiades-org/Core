@@ -1,0 +1,2 @@
+Core hotkey could not be registered: Hot key is already registered. (0x80070581)
+Discovered 294 Start Menu applications

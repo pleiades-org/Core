@@ -1,0 +1,27 @@
+{
+  "Date": "2026-09-19T20:14:22.8817915+01:00",
+  "Processor": "AMD Ryzen 7 7800X3D 8-Core Processor",
+  "LogicalProcessors": 16,
+  "OS": "Microsoft Windows NT 10.0.26200.0",
+  "Rust": "rustc 1.95.0 (59807616e 2026-04-14)",
+  "Ripgrep": [
+    "ripgrep 15.1.0",
+    "",
+    "features:-pcre2",
+    "simd(compile):+SSE2,-SSSE3,-AVX2",
+    "simd(runtime):+SSE2,+SSSE3,+AVX2",
+    "",
+    "PCRE2 is not available in this build of ripgrep."
+  ],
+  "Git": "git version 2.54.0.windows.1",
+  "GNUgrep": "grep (GNU grep) 3.0",
+  "SearchCommit": "fb1d7969450357955e23c344912c7856478716db",
+  "SearchBuild": "cargo build --release --locked --no-default-features --bin codesearch",
+  "PrototypeBuild": "release opt-level=3, thin LTO, codegen-units=1, memchr=2.8.0",
+  "Cache": "Fresh process; warm filesystem cache; Search filename database already built; no content index",
+  "Output": "All matching lines with filenames, line numbers and text; stdout drained and UTF-8 decoded, no terminal rendering; result order normalized outside timing",
+  "Samples": 21,
+  "ParallelBenchmarkProcesses": 1,
+  "Affinity": "Not pinned; machine not isolated",
+  "CpuResolution": "Observed 15.625 ms quantization; parent process only (cmd/git.exe launcher excluded from CPU comparisons)"
+}

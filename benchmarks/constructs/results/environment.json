@@ -1,0 +1,12 @@
+{
+  "Date": "2026-09-19T19:19:02+01:00",
+  "Processor": "AMD Ryzen 7 7800X3D 8-Core Processor",
+  "LogicalProcessors": 16,
+  "OperatingSystem": "Microsoft Windows NT 10.0.26200.0",
+  "Rust": "rustc 1.95.0 (59807616e 2026-04-14)",
+  "Build": "release; opt-level=3; thin LTO; codegen-units=1; no target-cpu=native",
+  "Runs": 3,
+  "BatchesPerCasePerRun": 31,
+  "Clock": "std::time::Instant; wall clock",
+  "Limitations": "Not isolated or affinity-pinned; no process/GPU/RSS measurement; p95 values describe batch averages, not individual query latency."
+}

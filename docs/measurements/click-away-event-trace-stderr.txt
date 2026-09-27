@@ -1,0 +1,9 @@
+Core hotkey could not be registered: Hot key is already registered. (0x80070581)
+Discovered 294 Start Menu applications
+SHOW visible=false
+ACT message=28 code=1 next=0 foreground=HWND(0x33083e)
+ACT message=6 code=1 next=0 foreground=HWND(0x33083e)
+CHECK visible=true owned=true foreground=HWND(0x3303d0)
+ACT message=6 code=0 next=0 foreground=HWND(0x140604)
+ACT message=28 code=0 next=22920 foreground=HWND(0x140604)
+CHECK visible=true owned=false foreground=HWND(0x140604)

@@ -1,0 +1,20 @@
+{
+  "Date": "2026-09-20T20:15:08.0339882+01:00",
+  "Sha256": "04097A9B5F0276B8F283A6AFC21E39F69337A8EBE01DD283175E0EE35FB8E62D",
+  "Samples": 1000,
+  "P50Milliseconds": 0.2716,
+  "P95Milliseconds": 0.5936,
+  "P99Milliseconds": 1.0644,
+  "MaximumMilliseconds": 14.0694,
+  "Before": {
+    "PrivateBytes": 2260992,
+    "Handles": 175,
+    "Threads": 6
+  },
+  "After": {
+    "PrivateBytes": 2260992,
+    "Handles": 175,
+    "Threads": 6
+  },
+  "Limitations": "WM_SETTEXT through worker completion and hidden LISTBOX text observation. Calculator queries; 2 ms polling interval. Includes harness overhead; excludes keyboard hardware, visible paint and compositor latency. External actions disabled."
+}

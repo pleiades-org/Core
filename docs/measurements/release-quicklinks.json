@@ -1,0 +1,22 @@
+{
+  "Date": "2026-09-25T15:05:52.5995588+01:00",
+  "Passed": true,
+  "Interactive": false,
+  "PhysicalKeyboardChecked": false,
+  "Sha256": "570C257F1AA9872FA78E161693A74F9AF4B7B4AF5FE4BD64939DD84A46B9C99B",
+  "Scenarios": [
+    "Link and Name table adds blank row after completion",
+    "scrolling beyond visible rows",
+    "31 rows without GDI growth",
+    "Unicode and website normalization",
+    "unsupported target and duplicate name rejection",
+    "rename and remove persisted",
+    "normal and scoped search",
+    "dry-run activation",
+    "partial row not persisted",
+    "process restart restores table and search",
+    "failed replacement preserves links and retry recovers"
+  ],
+  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\quicklinks-tests\\7ffc63177fa74f08b6f8763c06062054",
+  "SideEffects": "Isolated settings file and dry-run activation. Click-away suppressed only for table data checks by --test-stay-open; tested separately."
+}

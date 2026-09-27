@@ -1,0 +1,16 @@
+{
+  "Date": "2026-09-21T16:13:34.5429864+01:00",
+  "Passed": true,
+  "Sha256": "0E0578EA049DAE1AD1A2939E574079E383B9E4CCD2C55CF768A704F53C1909FB",
+  "Scenarios": [
+    "custom global hotkey opens Core",
+    "left and right Windows-key taps toggle Core",
+    "Windows combinations preserve delivery",
+    "batched key input preserves delivery",
+    "no stuck modifiers",
+    "switching Windows mode back to ordinary hotkey",
+    "conflict rejects save and keeps working binding"
+  ],
+  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\shortcut-tests\\70522281c95b472c8d74a0781ae1ca22",
+  "Limitations": "Controlled SendInput on the normal desktop; elevated apps and secure desktop not covered. All external actions and startup writes remain disabled."
+}

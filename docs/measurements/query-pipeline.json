@@ -1,0 +1,19 @@
+{
+  "Date": "2026-09-19T21:21:26.2102532+01:00",
+  "Samples": 1000,
+  "P50Milliseconds": 0.5836,
+  "P95Milliseconds": 1.0599,
+  "P99Milliseconds": 1.4484,
+  "MaximumMilliseconds": 11.0786,
+  "Before": {
+    "PrivateBytes": 2158592,
+    "Handles": 180,
+    "Threads": 5
+  },
+  "After": {
+    "PrivateBytes": 2158592,
+    "Handles": 180,
+    "Threads": 5
+  },
+  "Limitations": "WM_SETTEXT through worker completion and hidden LISTBOX text observation. Calculator queries; 2 ms polling interval. Includes harness overhead; excludes keyboard hardware, visible paint and compositor latency. External actions disabled."
+}

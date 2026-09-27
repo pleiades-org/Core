@@ -1,0 +1,19 @@
+{
+  "Date": "2026-09-20T19:37:13.2664065+01:00",
+  "Passed": true,
+  "Sha256": "A76ECAC59645F8A1A880F44015AE6535C40462E82276BB4E5293C2D2424E8AD3",
+  "EffectiveAnimationsEnabled": false,
+  "ColdGdiObjects": 5,
+  "GdiObjectsBefore": 19,
+  "GdiObjectsAfter": 19,
+  "Scenarios": [
+    "DPI-scaled compact single-result geometry",
+    "rounded window region",
+    "fade-in and fade-out opacity",
+    "clickable hide button",
+    "20 interrupted/reversed animation cycles",
+    "dynamic four-result height",
+    "arrow-key selection"
+  ],
+  "Limitations": "Native control and opacity observations; not presented-frame timing. Per-process motion preferences allow both animation and reduced-motion paths to be tested without changing Windows settings."
+}

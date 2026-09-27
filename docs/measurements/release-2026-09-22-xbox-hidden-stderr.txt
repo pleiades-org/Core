@@ -1,0 +1,2 @@
+Discovered 336 Start Menu and packaged applications
+Could not release Core shortcut: Invalid window handle. (0x80070578)

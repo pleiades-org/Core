@@ -1,0 +1,33 @@
+[package]
+name = "core-launcher-v2"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+core-engine.workspace = true
+gpui = { workspace = true, optional = true }
+gpui_platform = { workspace = true, optional = true }
+
+[features]
+gpui-probe = ["dep:gpui", "dep:gpui_platform"]
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "=0.61.3", features = [
+    "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm",
+    "Win32_UI_WindowsAndMessaging", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Accessibility",
+    "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Input_Ime", "Win32_UI_Shell", "Win32_Security",
+    "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_System_Memory",
+    "Win32_System_DataExchange", "Win32_System_Com", "Win32_System_Time",
+    "Win32_System_SystemInformation", "Win32_Storage_FileSystem", "Win32_UI_Shell_Common",
+    "Win32_System_Registry", "Win32_System_Power", "Win32_System_Console", "Win32_System_RemoteDesktop", "Win32_Networking_WinHttp", "Win32_Globalization", "Win32_System_Environment", "Win32_System_Pipes", "Win32_System_JobObjects", "Win32_System_IO", "Win32_System_Shutdown", "Win32_System_SystemServices"
+] }
+
+[[bin]]
+name = "core-v2"
+path = "src/main.rs"
+
+[[bin]]
+name = "core-gpui-probe"
+path = "src/bin/gpui_probe.rs"
+required-features = ["gpui-probe"]

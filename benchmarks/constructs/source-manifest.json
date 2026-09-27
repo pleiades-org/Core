@@ -1,0 +1,14 @@
+[
+  {
+    "Source": "C:\\Users\\Robert\\code\\Rust\\core\\src\\command_router.rs",
+    "SHA256": "127388786340F7C4FC3E1B2FFB767212FFE05BF8CA1D00B6ED10FF4921CF632F"
+  },
+  {
+    "Source": "C:\\Users\\Robert\\code\\Rust\\core\\src\\file_index.rs",
+    "SHA256": "E2A8E2248B03F69244D81A93FCD88743D3BD13DC34EF23AEF23574B061C1FAA2"
+  },
+  {
+    "Source": "C:\\Users\\Robert\\code\\Rust\\core\\src\\search_text.rs",
+    "SHA256": "F4A8D37A357380F0D951C87A3484703730D8D738FCB620E1862EA3A73C8F7415"
+  }
+]

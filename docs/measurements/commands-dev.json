@@ -1,0 +1,22 @@
+{
+  "Date": "2026-09-23T00:49:20.0262507+01:00",
+  "Passed": true,
+  "Interactive": false,
+  "Sha256": "22394D306A5EBE23304AA7A08B61B78317BC1E1A310752CB2F76955301C9D008",
+  "Scenarios": [
+    "typing / enters command mode with the / hidden; result rows hidden; output streams inline with no PowerShell CLIXML",
+    "the command is cleared after running and command mode stays",
+    "Backspace in the empty prompt returns to search",
+    "@cmd keeps its prefix after running",
+    "cd carries over to the next command, shown in the prompt and footer",
+    "a running command takes typed lines, which are not saved to history",
+    "@cmd exit codes reported",
+    "Esc stops a running command and keeps Core open",
+    "Up and Down recall history newest first, filtered by typed text; saved newest first",
+    "output hidden outside / mode",
+    "@run and bare Run-dialog URIs offer open and administrator rows",
+    "dry run never opens Run-dialog targets"
+  ],
+  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\commands-tests\\6fe650b2ba2341f5831eca64b777bc09",
+  "SideEffects": "Dry run with --test-commands: hidden echo, exit and ping commands only; no terminal, administrator prompt or Run-dialog target is opened."
+}

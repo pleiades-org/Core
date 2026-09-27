@@ -1,0 +1,65 @@
+Core hotkey could not be registered: Hot key is already registered. (0x80070581)
+Discovered 294 Start Menu applications
+TRACE show: visible=false
+TRACE activate code=1 other=0 foreground=HWND(0x17a0ce2)
+TRACE check: visible=true foreground=HWND(0x2503d0) owned=true
+TRACE activate code=0 other=0 foreground=HWND(0x10b09a2)
+TRACE check: visible=true foreground=HWND(0x10b09a2) owned=false
+TRACE show: visible=false
+TRACE activate code=1 other=0 foreground=HWND(0x2503d0)
+TRACE activate code=0 other=0 foreground=HWND(0x10b09a2)
+TRACE check: visible=true foreground=HWND(0x10b09a2) owned=false
+TRACE show: visible=false
+TRACE activate code=1 other=0 foreground=HWND(0x2503d0)
+TRACE activate code=0 other=0 foreground=HWND(0x10b09a2)
+TRACE check: visible=true foreground=HWND(0x10b09a2) owned=false
+TRACE show: visible=false
+TRACE activate code=1 other=0 foreground=HWND(0x2503d0)
+TRACE activate code=0 other=0 foreground=HWND(0x10b09a2)
+TRACE check: visible=true foreground=HWND(0x10b09a2) owned=false
+TRACE show: visible=false
+TRACE activate code=1 other=0 foreground=HWND(0x2503d0)
+TRACE activate code=0 other=0 foreground=HWND(0x10b09a2)
+TRACE check: visible=true foreground=HWND(0x10b09a2) owned=false
+TRACE show: visible=false
+TRACE activate code=1 other=0 foreground=HWND(0x2503d0)
+TRACE activate code=0 other=0 foreground=HWND(0x10b09a2)
+TRACE check: visible=true foreground=HWND(0x10b09a2) owned=false
+TRACE show: visible=false
+TRACE activate code=1 other=0 foreground=HWND(0x2503d0)
+TRACE activate code=0 other=0 foreground=HWND(0x10b09a2)
+TRACE check: visible=true foreground=HWND(0x10b09a2) owned=false
+TRACE show: visible=false
+TRACE activate code=1 other=0 foreground=HWND(0x2503d0)
+TRACE activate code=0 other=0 foreground=HWND(0x10b09a2)
+TRACE check: visible=true foreground=HWND(0x10b09a2) owned=false
+TRACE show: visible=false
+TRACE activate code=1 other=0 foreground=HWND(0x2503d0)
+TRACE activate code=0 other=0 foreground=HWND(0x10b09a2)
+TRACE check: visible=true foreground=HWND(0x10b09a2) owned=false
+TRACE show: visible=false
+TRACE activate code=1 other=0 foreground=HWND(0x2503d0)
+TRACE activate code=0 other=0 foreground=HWND(0x10b09a2)
+TRACE check: visible=true foreground=HWND(0x10b09a2) owned=false
+TRACE show: visible=false
+TRACE activate code=1 other=0 foreground=HWND(0x2503d0)
+TRACE activate code=0 other=0 foreground=HWND(0x10b09a2)
+TRACE check: visible=true foreground=HWND(0x10b09a2) owned=false
+TRACE show: visible=false
+TRACE activate code=1 other=0 foreground=HWND(0x2503d0)
+TRACE activate code=0 other=0 foreground=HWND(0x10b09a2)
+TRACE check: visible=true foreground=HWND(0x10b09a2) owned=false
+TRACE show: visible=false
+TRACE activate code=1 other=0 foreground=HWND(0x2503d0)
+TRACE activate code=0 other=0 foreground=HWND(0x0)
+TRACE check: visible=false foreground=HWND(0x0) owned=false
+TRACE show: visible=false
+TRACE activate code=1 other=0 foreground=HWND(0x2503d0)
+TRACE activate code=0 other=0 foreground=HWND(0x10b09a2)
+TRACE show: visible=true
+TRACE activate code=1 other=0 foreground=HWND(0x2503d0)
+TRACE check: visible=true foreground=HWND(0x2503d0) owned=true
+TRACE activate code=0 other=1770798 foreground=HWND(0x2503d0)
+TRACE check: visible=true foreground=HWND(0x2503d0) owned=true
+TRACE activate code=1 other=0 foreground=HWND(0x2503d0)
+TRACE activate code=0 other=0 foreground=HWND(0x0)

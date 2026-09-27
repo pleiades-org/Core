@@ -1,0 +1,20 @@
+{
+  "Date": "2026-09-20T20:48:16.8806655+01:00",
+  "Passed": true,
+  "Sha256": "78B5CE99F95E552358B61D779BE75AC59104ED744F9F0851AD15B4F3659AF315",
+  "Scenarios": [
+    "real app discovery and exact query with dry-run acceptance",
+    "calculator result and dry-run action",
+    "division error clears results",
+    "command completion",
+    "web payload",
+    "100 rapid edits plus immediate Enter",
+    "unknown command rejects stale action",
+    "implicit and explicit time conversion with date and immediate Enter",
+    "DST gap and overlap reject stale actions",
+    "invalid date and unknown time zone",
+    "search completion while tray menu is open",
+    "Escape hides"
+  ],
+  "SideEffects": "Disabled by --dry-run"
+}

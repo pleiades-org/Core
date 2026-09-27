@@ -1,0 +1,10 @@
+{
+  "Date": "2026-09-22T19:23:41.6257576+01:00",
+  "Passed": true,
+  "Sha256": "C8BEB0FDF84614BB91456E58B4B57282ED4E7C208EAAF4E0FD646FF4B12F3932",
+  "Scenarios": [
+    "second instance exits",
+    "existing window shown",
+    "visible window hides with Escape"
+  ]
+}

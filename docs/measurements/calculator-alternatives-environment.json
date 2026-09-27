@@ -1,0 +1,38 @@
+{
+  "Date": "2026-09-21T17:10:00.6445078+01:00",
+  "Processor": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD",
+  "Rust": "rustc 1.95.0 (59807616e 2026-04-14)\r\nbinary: rustc\r\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\r\ncommit-date: 2026-04-14\r\nhost: x86_64-pc-windows-msvc\r\nrelease: 1.95.0\r\nLLVM version: 22.1.2",
+  "BenchmarkSha256": "33047B0A3C075238A9C1410E42FBCFCC21025E4849F832D7F979EE1BC7C6ECD0",
+  "Profile": "opt-level=3, thin LTO, one codegen unit",
+  "Method": "Three processes, middle run reverses candidate order. 31 batches of 30000 operations per case. Median and p95 describe batch averages, not individual-query latency. Allocations sampled separately. Persistent scratch reused.",
+  "Sources": [
+    {
+      "Path": "C:\\Users\\Robert\\code\\Pleiades\\Core\\crates\\engine\\src\\calculator\\evaluate.rs",
+      "Hash": "B833D189A53B300989A364590E836FC524DB0473EF12550D1DCDBA817EA04043"
+    },
+    {
+      "Path": "C:\\Users\\Robert\\code\\Pleiades\\Core\\crates\\engine\\src\\calculator\\math_function.rs",
+      "Hash": "92B55CC8824A007E2AF48CBDEAEC24D1BA21BE81AE8254457826DF5B163E8CCD"
+    },
+    {
+      "Path": "C:\\Users\\Robert\\code\\Pleiades\\Core\\benchmarks\\calculator\\src\\instruction.rs",
+      "Hash": "FAE3D666159C8E7E91AABF8EA064F17BBF80241068FAE180E13F6452DD7F99B5"
+    },
+    {
+      "Path": "C:\\Users\\Robert\\code\\Pleiades\\Core\\benchmarks\\calculator\\src\\lexer.rs",
+      "Hash": "93B501E30381D01079E1E5865CA166501D05E6EAE2E4FD9D2CE03E7492D17E01"
+    },
+    {
+      "Path": "C:\\Users\\Robert\\code\\Pleiades\\Core\\benchmarks\\calculator\\src\\main.rs",
+      "Hash": "55F7360C92B2D0481AAC8BA25F496927BCC0C1B60FDC7F64EB2B9C32AA76D718"
+    },
+    {
+      "Path": "C:\\Users\\Robert\\code\\Pleiades\\Core\\benchmarks\\calculator\\src\\shunting_yard.rs",
+      "Hash": "1959F3F9F806E740D196ED650C9C3BB97164538CF8D7D144BAB5EC1A5A3BA716"
+    },
+    {
+      "Path": "C:\\Users\\Robert\\code\\Pleiades\\Core\\benchmarks\\calculator\\src\\stack.rs",
+      "Hash": "AD189AF9052992F3FAEB352FA51B3F28BF9D01498EF5B996DD21ABA30002D3AB"
+    }
+  ]
+}

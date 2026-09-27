@@ -1,0 +1,256 @@
+{
+  "Date": "2026-09-20T19:36:59.1897636+01:00",
+  "Label": "time-icons-apps-idle",
+  "Executable": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\styling\\release\\core-v2.exe",
+  "Sha256": "A76ECAC59645F8A1A880F44015AE6535C40462E82276BB4E5293C2D2424E8AD3",
+  "WarmupSeconds": 10,
+  "WarmedWithShowHide": false,
+  "WarmQuery": "code",
+  "DurationSeconds": 30.3855193,
+  "CpuPercentOneLogicalCore": 0.0,
+  "FinalPrivateBytes": 5869568,
+  "FinalWorkingSetBytes": 27099136,
+  "Samples": [
+    {
+      "ElapsedSeconds": 1.0102794,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 2.0240532,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 3.0347392,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 4.0475288,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 5.063914,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 6.0777798,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 7.0918581,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 8.104525,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 9.1188088,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 10.1213611,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 11.1351573,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 12.1499586,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 13.1628294,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 14.1797791,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 15.1937732,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 16.200937,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 17.2177868,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 18.2340625,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 19.2504656,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 20.2518298,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 21.2529586,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 22.2681468,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 23.2831254,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 24.2979416,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 25.3142836,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 26.32811,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27095040,
+      "Handles": 374,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 27.3414523,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27099136,
+      "Handles": 376,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 28.3530342,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27099136,
+      "Handles": 376,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 29.3713453,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27099136,
+      "Handles": 376,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    },
+    {
+      "ElapsedSeconds": 30.3855193,
+      "PrivateBytes": 5869568,
+      "WorkingSetBytes": 27099136,
+      "Handles": 376,
+      "Threads": 11,
+      "CpuSeconds": 0.0
+    }
+  ],
+  "Limitations": "Private bytes and CPU of the process; GPU memory and frame latency are not captured. Actual Start Menu catalog, not the full planned release dataset."
+}

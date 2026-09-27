@@ -1,0 +1,11 @@
+{
+  "Date": "2026-09-19T20:27:43.4010729+01:00",
+  "Mode": "minimal GPUI static shell, hidden from creation",
+  "PrivateBytes": 68198400,
+  "WorkingSetBytes": 94294016,
+  "PeakWorkingSetBytes": 107114496,
+  "Threads": 26,
+  "Handles": 839,
+  "IdleSampleSeconds": 10.0198011,
+  "CpuPercentOfOneLogicalProcessor": 0.0
+}

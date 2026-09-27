@@ -1,0 +1,25 @@
+{
+  "Date": "2026-09-25T15:05:32.3624639+01:00",
+  "Passed": true,
+  "Interactive": false,
+  "Sha256": "570C257F1AA9872FA78E161693A74F9AF4B7B4AF5FE4BD64939DD84A46B9C99B",
+  "Scenarios": [
+    "relative dates and leap-year month end",
+    "smart conversions: currency with fixture ECB rates, download time, number bases, percentages, colours, pints versus Pacific time",
+    "unit conversions and math functions",
+    "invalid math clears pending action",
+    "large calculator card",
+    "settings and power icons in requested corners",
+    "inline power popup and keyboard navigation",
+    "Escape closes popup before launcher",
+    "all three power options default to Cancel",
+    "confirmed command reaches dry-run dispatch",
+    "installed Xbox discovered",
+    "shortcut validation",
+    "specific monitor selection",
+    "startup preference persisted without registry side effects",
+    "Windows-key preset"
+  ],
+  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\extensions-tests\\f2286fc887fd4523b0114632ae385262",
+  "SideEffects": "External actions, startup registration and global shortcuts disabled by --dry-run. Separate shortcut tests are required."
+}

@@ -1,0 +1,1 @@
+Reusable scratch bytes: direct_stack=2584, postfix_compile_and_run=6688 (excludes input, call frames and benchmark harness)

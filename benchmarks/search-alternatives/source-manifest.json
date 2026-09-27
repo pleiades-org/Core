@@ -1,0 +1,27 @@
+{
+  "Repository": "https://github.com/pleiades-org/Search",
+  "Commit": "fb1d7969450357955e23c344912c7856478716db",
+  "Sources": [
+    {
+      "File": "arena.rs",
+      "SHA256": "40F6263926B55F2C86126526D4A0CBF6A4BF9535241CCEC99D94B81B86FCE35F"
+    },
+    {
+      "File": "index.rs",
+      "SHA256": "20BBDEC0E1A577A754B85EE0D81A1D62FF31C601BCDA4B83A56F44EE56CE02F6"
+    },
+    {
+      "File": "search.rs",
+      "SHA256": "EB46AD4D7D8359B451BC9E9219D9CBA09C2F364C42604A4F2601909ED4834A7E"
+    },
+    {
+      "File": "walker.rs",
+      "SHA256": "02B602F84C027A5EFB4579A76F7EABB2303063A989288C2C61CF3EB90FF18B8B"
+    },
+    {
+      "File": "engine.rs",
+      "SHA256": "86C842B0F61412329C32889603619F8F165098E5EF6EA289790A36C8BFECA759"
+    }
+  ],
+  "Adaptation": "arena/index copied verbatim; filename search prefix unchanged except removal of two unused content-search imports. Deletion fixture preserves rebuild_subtree/path_within, with a panic stub for collection: tests only take the nonexistent-directory branch. No scanner/watch/cache/MFT is run."
+}

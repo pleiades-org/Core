@@ -1,0 +1,22 @@
+[
+  {
+    "Area": "window top edge",
+    "RGB": "000000"
+  },
+  {
+    "Area": "window left edge",
+    "RGB": "000000"
+  },
+  {
+    "Area": "background",
+    "RGB": "000000"
+  },
+  {
+    "Area": "former header divider",
+    "RGB": "000000"
+  },
+  {
+    "Area": "former footer divider",
+    "RGB": "000000"
+  }
+]

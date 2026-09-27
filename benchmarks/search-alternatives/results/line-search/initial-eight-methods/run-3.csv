@@ -1,0 +1,329 @@
+kind,case,samples,median_ns,p95_ns,allocation_calls,requested_bytes,retained_bytes,peak_bytes
+latency,synthetic/block_rarest/first12/a,101,500,600,0,0,0,0
+latency,synthetic/block_rarest/first12/::,101,126100,200500,0,0,0,0
+latency,synthetic/block_rarest/first12/return,101,400,400,0,0,0,0
+latency,synthetic/block_rarest/first12/let ,101,300,400,0,0,0,0
+latency,synthetic/block_rarest/first12/configure,101,400,400,0,0,0,0
+latency,synthetic/block_rarest/first12/needle_tag_7fd9,101,200,200,0,0,0,0
+latency,synthetic/block_rarest/first12/zzqxyw_no_such_content,101,100,100,0,0,0,0
+latency,synthetic/block_rarest/first12/abcd,101,124600,300900,0,0,0,0
+latency,synthetic/block_rarest/first12/café,101,400,400,0,0,0,0
+latency,synthetic/block_rarest/first12/normalize_search_text,101,100,100,0,0,0,0
+latency,synthetic/block_rarest/all/a,101,2892000,3299300,0,0,0,0
+latency,synthetic/block_rarest/all/::,101,82200,148500,0,0,0,0
+latency,synthetic/block_rarest/all/return,101,284800,461700,0,0,0,0
+latency,synthetic/block_rarest/all/let ,101,447700,666600,0,0,0,0
+latency,synthetic/block_rarest/all/configure,101,455100,673100,0,0,0,0
+latency,synthetic/block_rarest/all/needle_tag_7fd9,101,200,200,0,0,0,0
+latency,synthetic/block_rarest/all/zzqxyw_no_such_content,101,100,100,0,0,0,0
+latency,synthetic/block_rarest/all/abcd,101,120000,241700,0,0,0,0
+latency,synthetic/block_rarest/all/café,101,271900,448000,0,0,0,0
+latency,synthetic/block_rarest/all/normalize_search_text,101,100,100,0,0,0,0
+latency,synthetic/line_rarest/first12/a,101,600,700,0,0,0,0
+latency,synthetic/line_rarest/first12/::,101,77200,156500,0,0,0,0
+latency,synthetic/line_rarest/first12/return,101,200,200,0,0,0,0
+latency,synthetic/line_rarest/first12/let ,101,200,200,0,0,0,0
+latency,synthetic/line_rarest/first12/configure,101,200,400,0,0,0,0
+latency,synthetic/line_rarest/first12/needle_tag_7fd9,101,200,200,0,0,0,0
+latency,synthetic/line_rarest/first12/zzqxyw_no_such_content,101,100,100,0,0,0,0
+latency,synthetic/line_rarest/first12/abcd,101,113500,247800,0,0,0,0
+latency,synthetic/line_rarest/first12/café,101,200,200,0,0,0,0
+latency,synthetic/line_rarest/first12/normalize_search_text,101,100,100,0,0,0,0
+latency,synthetic/line_rarest/all/a,101,2901800,3284100,0,0,0,0
+latency,synthetic/line_rarest/all/::,101,81800,166900,0,0,0,0
+latency,synthetic/line_rarest/all/return,101,106100,212800,0,0,0,0
+latency,synthetic/line_rarest/all/let ,101,221000,441200,0,0,0,0
+latency,synthetic/line_rarest/all/configure,101,216900,472000,0,0,0,0
+latency,synthetic/line_rarest/all/needle_tag_7fd9,101,200,200,0,0,0,0
+latency,synthetic/line_rarest/all/zzqxyw_no_such_content,101,100,100,0,0,0,0
+latency,synthetic/line_rarest/all/abcd,101,111900,221500,0,0,0,0
+latency,synthetic/line_rarest/all/café,101,106300,216500,0,0,0,0
+latency,synthetic/line_rarest/all/normalize_search_text,101,100,100,0,0,0,0
+latency,synthetic/line_intersect/first12/a,101,500,600,0,0,0,0
+latency,synthetic/line_intersect/first12/::,101,82000,190600,0,0,0,0
+latency,synthetic/line_intersect/first12/return,101,10400,10500,0,0,0,0
+latency,synthetic/line_intersect/first12/let ,101,20500,45000,0,0,0,0
+latency,synthetic/line_intersect/first12/configure,101,20800,37600,0,0,0,0
+latency,synthetic/line_intersect/first12/needle_tag_7fd9,101,200,300,0,0,0,0
+latency,synthetic/line_intersect/first12/zzqxyw_no_such_content,101,100,100,0,0,0,0
+latency,synthetic/line_intersect/first12/abcd,101,10500,14200,0,0,0,0
+latency,synthetic/line_intersect/first12/café,101,10400,10500,0,0,0,0
+latency,synthetic/line_intersect/first12/normalize_search_text,101,100,100,0,0,0,0
+latency,synthetic/line_intersect/all/a,101,2971200,3280500,0,0,0,0
+latency,synthetic/line_intersect/all/::,101,82200,137200,0,0,0,0
+latency,synthetic/line_intersect/all/return,101,116000,234700,0,0,0,0
+latency,synthetic/line_intersect/all/let ,101,226200,441600,0,0,0,0
+latency,synthetic/line_intersect/all/configure,101,231800,401100,0,0,0,0
+latency,synthetic/line_intersect/all/needle_tag_7fd9,101,200,200,0,0,0,0
+latency,synthetic/line_intersect/all/zzqxyw_no_such_content,101,100,100,0,0,0,0
+latency,synthetic/line_intersect/all/abcd,101,10400,17500,0,0,0,0
+latency,synthetic/line_intersect/all/café,101,115200,219300,0,0,0,0
+latency,synthetic/line_intersect/all/normalize_search_text,101,100,100,0,0,0,0
+latency,synthetic/position_rarest/first12/a,101,600,700,0,0,0,0
+latency,synthetic/position_rarest/first12/::,101,77500,158900,0,0,0,0
+latency,synthetic/position_rarest/first12/return,101,300,400,0,0,0,0
+latency,synthetic/position_rarest/first12/let ,101,300,300,0,0,0,0
+latency,synthetic/position_rarest/first12/configure,101,300,400,0,0,0,0
+latency,synthetic/position_rarest/first12/needle_tag_7fd9,101,200,200,0,0,0,0
+latency,synthetic/position_rarest/first12/zzqxyw_no_such_content,101,0,100,0,0,0,0
+latency,synthetic/position_rarest/first12/abcd,101,24500,39300,0,0,0,0
+latency,synthetic/position_rarest/first12/café,101,300,400,0,0,0,0
+latency,synthetic/position_rarest/first12/normalize_search_text,101,0,100,0,0,0,0
+latency,synthetic/position_rarest/all/a,101,2969300,3240600,0,0,0,0
+latency,synthetic/position_rarest/all/::,101,81800,153500,0,0,0,0
+latency,synthetic/position_rarest/all/return,101,299300,573300,0,0,0,0
+latency,synthetic/position_rarest/all/let ,101,527800,833700,0,0,0,0
+latency,synthetic/position_rarest/all/configure,101,510900,773800,0,0,0,0
+latency,synthetic/position_rarest/all/needle_tag_7fd9,101,200,200,0,0,0,0
+latency,synthetic/position_rarest/all/zzqxyw_no_such_content,101,0,100,0,0,0,0
+latency,synthetic/position_rarest/all/abcd,101,23200,44100,0,0,0,0
+latency,synthetic/position_rarest/all/café,101,280300,475900,0,0,0,0
+latency,synthetic/position_rarest/all/normalize_search_text,101,100,100,0,0,0,0
+latency,synthetic/position_pair/first12/a,101,600,700,0,0,0,0
+latency,synthetic/position_pair/first12/::,101,81400,139500,0,0,0,0
+latency,synthetic/position_pair/first12/return,101,400,600,0,0,0,0
+latency,synthetic/position_pair/first12/let ,101,500,700,0,0,0,0
+latency,synthetic/position_pair/first12/configure,101,400,500,0,0,0,0
+latency,synthetic/position_pair/first12/needle_tag_7fd9,101,200,200,0,0,0,0
+latency,synthetic/position_pair/first12/zzqxyw_no_such_content,101,0,100,0,0,0,0
+latency,synthetic/position_pair/first12/abcd,101,76600,134400,0,0,0,0
+latency,synthetic/position_pair/first12/café,101,800,1100,0,0,0,0
+latency,synthetic/position_pair/first12/normalize_search_text,101,0,100,0,0,0,0
+latency,synthetic/position_pair/all/a,101,2936300,3255900,0,0,0,0
+latency,synthetic/position_pair/all/::,101,77800,119300,0,0,0,0
+latency,synthetic/position_pair/all/return,101,356000,658100,0,0,0,0
+latency,synthetic/position_pair/all/let ,101,690800,1005100,0,0,0,0
+latency,synthetic/position_pair/all/configure,101,680600,999500,0,0,0,0
+latency,synthetic/position_pair/all/needle_tag_7fd9,101,200,200,0,0,0,0
+latency,synthetic/position_pair/all/zzqxyw_no_such_content,101,0,100,0,0,0,0
+latency,synthetic/position_pair/all/abcd,101,76600,121900,0,0,0,0
+latency,synthetic/position_pair/all/café,101,399900,654800,0,0,0,0
+latency,synthetic/position_pair/all/normalize_search_text,101,0,100,0,0,0,0
+latency,synthetic/line_scan/first12/a,101,100,100,0,0,0,0
+latency,synthetic/line_scan/first12/::,101,413300,752800,0,0,0,0
+latency,synthetic/line_scan/first12/return,101,600,700,0,0,0,0
+latency,synthetic/line_scan/first12/let ,101,300,400,0,0,0,0
+latency,synthetic/line_scan/first12/configure,101,300,400,0,0,0,0
+latency,synthetic/line_scan/first12/needle_tag_7fd9,101,421100,795500,0,0,0,0
+latency,synthetic/line_scan/first12/zzqxyw_no_such_content,101,423400,792200,0,0,0,0
+latency,synthetic/line_scan/first12/abcd,101,438800,820600,0,0,0,0
+latency,synthetic/line_scan/first12/café,101,700,1300,0,0,0,0
+latency,synthetic/line_scan/first12/normalize_search_text,101,432700,798200,0,0,0,0
+latency,synthetic/line_scan/all/a,101,342300,628300,0,0,0,0
+latency,synthetic/line_scan/all/::,101,414700,689100,0,0,0,0
+latency,synthetic/line_scan/all/return,101,432000,821800,0,0,0,0
+latency,synthetic/line_scan/all/let ,101,430100,733900,0,0,0,0
+latency,synthetic/line_scan/all/configure,101,440400,830200,0,0,0,0
+latency,synthetic/line_scan/all/needle_tag_7fd9,101,415700,736500,0,0,0,0
+latency,synthetic/line_scan/all/zzqxyw_no_such_content,101,426100,780600,0,0,0,0
+latency,synthetic/line_scan/all/abcd,101,450600,812600,0,0,0,0
+latency,synthetic/line_scan/all/café,101,432500,812300,0,0,0,0
+latency,synthetic/line_scan/all/normalize_search_text,101,415800,755100,0,0,0,0
+latency,synthetic/buffer_scan/first12/a,101,500,600,0,0,0,0
+latency,synthetic/buffer_scan/first12/::,101,77800,143700,0,0,0,0
+latency,synthetic/buffer_scan/first12/return,101,700,900,0,0,0,0
+latency,synthetic/buffer_scan/first12/let ,101,600,700,0,0,0,0
+latency,synthetic/buffer_scan/first12/configure,101,600,600,0,0,0,0
+latency,synthetic/buffer_scan/first12/needle_tag_7fd9,101,99200,189400,0,0,0,0
+latency,synthetic/buffer_scan/first12/zzqxyw_no_such_content,101,93900,181500,0,0,0,0
+latency,synthetic/buffer_scan/first12/abcd,101,108300,179400,0,0,0,0
+latency,synthetic/buffer_scan/first12/café,101,600,700,0,0,0,0
+latency,synthetic/buffer_scan/first12/normalize_search_text,101,90900,149400,0,0,0,0
+latency,synthetic/buffer_scan/all/a,101,2953600,3296400,0,0,0,0
+latency,synthetic/buffer_scan/all/::,101,82200,191700,0,0,0,0
+latency,synthetic/buffer_scan/all/return,101,612100,845200,0,0,0,0
+latency,synthetic/buffer_scan/all/let ,101,1097600,1337700,0,0,0,0
+latency,synthetic/buffer_scan/all/configure,101,1008600,1389900,0,0,0,0
+latency,synthetic/buffer_scan/all/needle_tag_7fd9,101,98200,192600,0,0,0,0
+latency,synthetic/buffer_scan/all/zzqxyw_no_such_content,101,90400,176800,0,0,0,0
+latency,synthetic/buffer_scan/all/abcd,101,106300,158100,0,0,0,0
+latency,synthetic/buffer_scan/all/café,101,601100,864200,0,0,0,0
+latency,synthetic/buffer_scan/all/normalize_search_text,101,95000,191900,0,0,0,0
+latency,synthetic/file_rarest/first12/a,101,500,600,0,0,0,0
+latency,synthetic/file_rarest/first12/::,101,82500,198200,0,0,0,0
+latency,synthetic/file_rarest/first12/return,101,500,700,0,0,0,0
+latency,synthetic/file_rarest/first12/let ,101,600,600,0,0,0,0
+latency,synthetic/file_rarest/first12/configure,101,600,700,0,0,0,0
+latency,synthetic/file_rarest/first12/needle_tag_7fd9,101,1000,1000,0,0,0,0
+latency,synthetic/file_rarest/first12/zzqxyw_no_such_content,101,100,100,0,0,0,0
+latency,synthetic/file_rarest/first12/abcd,101,112800,182800,0,0,0,0
+latency,synthetic/file_rarest/first12/café,101,600,700,0,0,0,0
+latency,synthetic/file_rarest/first12/normalize_search_text,101,100,100,0,0,0,0
+latency,synthetic/file_rarest/all/a,101,2866000,3177500,0,0,0,0
+latency,synthetic/file_rarest/all/::,101,77700,142700,0,0,0,0
+latency,synthetic/file_rarest/all/return,101,371200,603500,0,0,0,0
+latency,synthetic/file_rarest/all/let ,101,548300,776900,0,0,0,0
+latency,synthetic/file_rarest/all/configure,101,539700,836400,0,0,0,0
+latency,synthetic/file_rarest/all/needle_tag_7fd9,101,1000,1000,0,0,0,0
+latency,synthetic/file_rarest/all/zzqxyw_no_such_content,101,100,100,0,0,0,0
+latency,synthetic/file_rarest/all/abcd,101,113800,195300,0,0,0,0
+latency,synthetic/file_rarest/all/café,101,338100,515800,0,0,0,0
+latency,synthetic/file_rarest/all/normalize_search_text,101,100,100,0,0,0,0
+build,synthetic/file,5,40812600,0,5844,1108404,519768,589312
+build,synthetic/block64,5,42615800,0,7405,4480764,1979952,2194432
+build,synthetic/line,5,54802200,0,9897,48752684,21010128,23221392
+build,synthetic/positional,5,58291800,0,9933,54304024,21547964,24302592
+latency,local_source/block_rarest/first12/a,101,500,900,0,0,0,0
+latency,local_source/block_rarest/first12/::,101,500,500,0,0,0,0
+latency,local_source/block_rarest/first12/return,101,700,700,0,0,0,0
+latency,local_source/block_rarest/first12/let ,101,300,400,0,0,0,0
+latency,local_source/block_rarest/first12/configure,101,700,800,0,0,0,0
+latency,local_source/block_rarest/first12/needle_tag_7fd9,101,100,100,0,0,0,0
+latency,local_source/block_rarest/first12/zzqxyw_no_such_content,101,100,100,0,0,0,0
+latency,local_source/block_rarest/first12/abcd,101,100,200,0,0,0,0
+latency,local_source/block_rarest/first12/café,101,100,100,0,0,0,0
+latency,local_source/block_rarest/first12/normalize_search_text,101,1400,1500,0,0,0,0
+latency,local_source/block_rarest/all/a,101,516600,744400,0,0,0,0
+latency,local_source/block_rarest/all/::,101,174300,314400,0,0,0,0
+latency,local_source/block_rarest/all/return,101,24200,50600,0,0,0,0
+latency,local_source/block_rarest/all/let ,101,80200,162300,0,0,0,0
+latency,local_source/block_rarest/all/configure,101,1700,2600,0,0,0,0
+latency,local_source/block_rarest/all/needle_tag_7fd9,101,100,100,0,0,0,0
+latency,local_source/block_rarest/all/zzqxyw_no_such_content,101,100,100,0,0,0,0
+latency,local_source/block_rarest/all/abcd,101,100,200,0,0,0,0
+latency,local_source/block_rarest/all/café,101,100,100,0,0,0,0
+latency,local_source/block_rarest/all/normalize_search_text,101,7100,8000,0,0,0,0
+latency,local_source/line_rarest/first12/a,101,400,500,0,0,0,0
+latency,local_source/line_rarest/first12/::,101,500,500,0,0,0,0
+latency,local_source/line_rarest/first12/return,101,300,400,0,0,0,0
+latency,local_source/line_rarest/first12/let ,101,300,300,0,0,0,0
+latency,local_source/line_rarest/first12/configure,101,500,600,0,0,0,0
+latency,local_source/line_rarest/first12/needle_tag_7fd9,101,100,200,0,0,0,0
+latency,local_source/line_rarest/first12/zzqxyw_no_such_content,101,100,200,0,0,0,0
+latency,local_source/line_rarest/first12/abcd,101,100,200,0,0,0,0
+latency,local_source/line_rarest/first12/café,101,100,100,0,0,0,0
+latency,local_source/line_rarest/first12/normalize_search_text,101,800,900,0,0,0,0
+latency,local_source/line_rarest/all/a,101,516500,717800,0,0,0,0
+latency,local_source/line_rarest/all/::,101,172900,254400,0,0,0,0
+latency,local_source/line_rarest/all/return,101,6000,6500,0,0,0,0
+latency,local_source/line_rarest/all/let ,101,32700,54100,0,0,0,0
+latency,local_source/line_rarest/all/configure,101,500,500,0,0,0,0
+latency,local_source/line_rarest/all/needle_tag_7fd9,101,100,100,0,0,0,0
+latency,local_source/line_rarest/all/zzqxyw_no_such_content,101,100,100,0,0,0,0
+latency,local_source/line_rarest/all/abcd,101,100,100,0,0,0,0
+latency,local_source/line_rarest/all/café,101,100,100,0,0,0,0
+latency,local_source/line_rarest/all/normalize_search_text,101,2300,2300,0,0,0,0
+latency,local_source/line_intersect/first12/a,101,400,500,0,0,0,0
+latency,local_source/line_intersect/first12/::,101,500,500,0,0,0,0
+latency,local_source/line_intersect/first12/return,101,900,900,0,0,0,0
+latency,local_source/line_intersect/first12/let ,101,3600,3700,0,0,0,0
+latency,local_source/line_intersect/first12/configure,101,300,400,0,0,0,0
+latency,local_source/line_intersect/first12/needle_tag_7fd9,101,100,200,0,0,0,0
+latency,local_source/line_intersect/first12/zzqxyw_no_such_content,101,100,200,0,0,0,0
+latency,local_source/line_intersect/first12/abcd,101,100,200,0,0,0,0
+latency,local_source/line_intersect/first12/café,101,100,100,0,0,0,0
+latency,local_source/line_intersect/first12/normalize_search_text,101,1100,1400,0,0,0,0
+latency,local_source/line_intersect/all/a,101,519800,750200,0,0,0,0
+latency,local_source/line_intersect/all/::,101,180900,292000,0,0,0,0
+latency,local_source/line_intersect/all/return,101,8600,17500,0,0,0,0
+latency,local_source/line_intersect/all/let ,101,35600,59500,0,0,0,0
+latency,local_source/line_intersect/all/configure,101,500,500,0,0,0,0
+latency,local_source/line_intersect/all/needle_tag_7fd9,101,100,100,0,0,0,0
+latency,local_source/line_intersect/all/zzqxyw_no_such_content,101,100,100,0,0,0,0
+latency,local_source/line_intersect/all/abcd,101,100,100,0,0,0,0
+latency,local_source/line_intersect/all/café,101,100,100,0,0,0,0
+latency,local_source/line_intersect/all/normalize_search_text,101,2000,2000,0,0,0,0
+latency,local_source/position_rarest/first12/a,101,400,500,0,0,0,0
+latency,local_source/position_rarest/first12/::,101,500,600,0,0,0,0
+latency,local_source/position_rarest/first12/return,101,300,300,0,0,0,0
+latency,local_source/position_rarest/first12/let ,101,300,400,0,0,0,0
+latency,local_source/position_rarest/first12/configure,101,400,500,0,0,0,0
+latency,local_source/position_rarest/first12/needle_tag_7fd9,101,100,100,0,0,0,0
+latency,local_source/position_rarest/first12/zzqxyw_no_such_content,101,0,100,0,0,0,0
+latency,local_source/position_rarest/first12/abcd,101,100,100,0,0,0,0
+latency,local_source/position_rarest/first12/café,101,0,100,0,0,0,0
+latency,local_source/position_rarest/first12/normalize_search_text,101,400,600,0,0,0,0
+latency,local_source/position_rarest/all/a,101,517900,753000,0,0,0,0
+latency,local_source/position_rarest/all/::,101,174400,269600,0,0,0,0
+latency,local_source/position_rarest/all/return,101,12300,16800,0,0,0,0
+latency,local_source/position_rarest/all/let ,101,49400,67700,0,0,0,0
+latency,local_source/position_rarest/all/configure,101,600,600,0,0,0,0
+latency,local_source/position_rarest/all/needle_tag_7fd9,101,0,100,0,0,0,0
+latency,local_source/position_rarest/all/zzqxyw_no_such_content,101,0,100,0,0,0,0
+latency,local_source/position_rarest/all/abcd,101,100,100,0,0,0,0
+latency,local_source/position_rarest/all/café,101,0,100,0,0,0,0
+latency,local_source/position_rarest/all/normalize_search_text,101,2900,3000,0,0,0,0
+latency,local_source/position_pair/first12/a,101,400,800,0,0,0,0
+latency,local_source/position_pair/first12/::,101,500,500,0,0,0,0
+latency,local_source/position_pair/first12/return,101,300,400,0,0,0,0
+latency,local_source/position_pair/first12/let ,101,300,400,0,0,0,0
+latency,local_source/position_pair/first12/configure,101,400,400,0,0,0,0
+latency,local_source/position_pair/first12/needle_tag_7fd9,101,0,100,0,0,0,0
+latency,local_source/position_pair/first12/zzqxyw_no_such_content,101,0,100,0,0,0,0
+latency,local_source/position_pair/first12/abcd,101,100,100,0,0,0,0
+latency,local_source/position_pair/first12/café,101,0,100,0,0,0,0
+latency,local_source/position_pair/first12/normalize_search_text,101,500,600,0,0,0,0
+latency,local_source/position_pair/all/a,101,516100,703000,0,0,0,0
+latency,local_source/position_pair/all/::,101,173100,289200,0,0,0,0
+latency,local_source/position_pair/all/return,101,18900,24700,0,0,0,0
+latency,local_source/position_pair/all/let ,101,68200,117900,0,0,0,0
+latency,local_source/position_pair/all/configure,101,700,800,0,0,0,0
+latency,local_source/position_pair/all/needle_tag_7fd9,101,0,100,0,0,0,0
+latency,local_source/position_pair/all/zzqxyw_no_such_content,101,0,100,0,0,0,0
+latency,local_source/position_pair/all/abcd,101,100,100,0,0,0,0
+latency,local_source/position_pair/all/café,101,0,100,0,0,0,0
+latency,local_source/position_pair/all/normalize_search_text,101,3900,4100,0,0,0,0
+latency,local_source/line_scan/first12/a,101,100,200,0,0,0,0
+latency,local_source/line_scan/first12/::,101,400,400,0,0,0,0
+latency,local_source/line_scan/first12/return,101,4900,10100,0,0,0,0
+latency,local_source/line_scan/first12/let ,101,700,700,0,0,0,0
+latency,local_source/line_scan/first12/configure,101,93100,168900,0,0,0,0
+latency,local_source/line_scan/first12/needle_tag_7fd9,101,270700,465300,0,0,0,0
+latency,local_source/line_scan/first12/zzqxyw_no_such_content,101,190100,281600,0,0,0,0
+latency,local_source/line_scan/first12/abcd,101,263600,418200,0,0,0,0
+latency,local_source/line_scan/first12/café,101,256200,442100,0,0,0,0
+latency,local_source/line_scan/first12/normalize_search_text,101,26000,28500,0,0,0,0
+latency,local_source/line_scan/all/a,101,299300,419400,0,0,0,0
+latency,local_source/line_scan/all/::,101,263400,418700,0,0,0,0
+latency,local_source/line_scan/all/return,101,272000,436400,0,0,0,0
+latency,local_source/line_scan/all/let ,101,278200,444500,0,0,0,0
+latency,local_source/line_scan/all/configure,101,320700,436400,0,0,0,0
+latency,local_source/line_scan/all/needle_tag_7fd9,101,269600,400900,0,0,0,0
+latency,local_source/line_scan/all/zzqxyw_no_such_content,101,199700,350100,0,0,0,0
+latency,local_source/line_scan/all/abcd,101,260300,419400,0,0,0,0
+latency,local_source/line_scan/all/café,101,254200,418400,0,0,0,0
+latency,local_source/line_scan/all/normalize_search_text,101,219300,348200,0,0,0,0
+latency,local_source/buffer_scan/first12/a,101,400,500,0,0,0,0
+latency,local_source/buffer_scan/first12/::,101,500,500,0,0,0,0
+latency,local_source/buffer_scan/first12/return,101,1100,1300,0,0,0,0
+latency,local_source/buffer_scan/first12/let ,101,500,700,0,0,0,0
+latency,local_source/buffer_scan/first12/configure,101,9200,9200,0,0,0,0
+latency,local_source/buffer_scan/first12/needle_tag_7fd9,101,16400,20800,0,0,0,0
+latency,local_source/buffer_scan/first12/zzqxyw_no_such_content,101,28600,28800,0,0,0,0
+latency,local_source/buffer_scan/first12/abcd,101,17300,31000,0,0,0,0
+latency,local_source/buffer_scan/first12/café,101,28200,32400,0,0,0,0
+latency,local_source/buffer_scan/first12/normalize_search_text,101,7500,7600,0,0,0,0
+latency,local_source/buffer_scan/all/a,101,513800,688500,0,0,0,0
+latency,local_source/buffer_scan/all/::,101,174400,265000,0,0,0,0
+latency,local_source/buffer_scan/all/return,101,54600,124400,0,0,0,0
+latency,local_source/buffer_scan/all/let ,101,130100,208500,0,0,0,0
+latency,local_source/buffer_scan/all/configure,101,19500,33700,0,0,0,0
+latency,local_source/buffer_scan/all/needle_tag_7fd9,101,16600,35600,0,0,0,0
+latency,local_source/buffer_scan/all/zzqxyw_no_such_content,101,15100,23100,0,0,0,0
+latency,local_source/buffer_scan/all/abcd,101,16500,54000,0,0,0,0
+latency,local_source/buffer_scan/all/café,101,17300,19200,0,0,0,0
+latency,local_source/buffer_scan/all/normalize_search_text,101,24300,36100,0,0,0,0
+latency,local_source/file_rarest/first12/a,101,500,500,0,0,0,0
+latency,local_source/file_rarest/first12/::,101,500,500,0,0,0,0
+latency,local_source/file_rarest/first12/return,101,1000,1000,0,0,0,0
+latency,local_source/file_rarest/first12/let ,101,400,400,0,0,0,0
+latency,local_source/file_rarest/first12/configure,101,2000,2000,0,0,0,0
+latency,local_source/file_rarest/first12/needle_tag_7fd9,101,100,100,0,0,0,0
+latency,local_source/file_rarest/first12/zzqxyw_no_such_content,101,100,100,0,0,0,0
+latency,local_source/file_rarest/first12/abcd,101,500,900,0,0,0,0
+latency,local_source/file_rarest/first12/café,101,100,100,0,0,0,0
+latency,local_source/file_rarest/first12/normalize_search_text,101,4300,5400,0,0,0,0
+latency,local_source/file_rarest/all/a,101,517600,722200,0,0,0,0
+latency,local_source/file_rarest/all/::,101,173500,245700,0,0,0,0
+latency,local_source/file_rarest/all/return,101,44300,69500,0,0,0,0
+latency,local_source/file_rarest/all/let ,101,109400,163000,0,0,0,0
+latency,local_source/file_rarest/all/configure,101,6400,6600,0,0,0,0
+latency,local_source/file_rarest/all/needle_tag_7fd9,101,100,100,0,0,0,0
+latency,local_source/file_rarest/all/zzqxyw_no_such_content,101,100,100,0,0,0,0
+latency,local_source/file_rarest/all/abcd,101,500,500,0,0,0,0
+latency,local_source/file_rarest/all/café,101,100,100,0,0,0,0
+latency,local_source/file_rarest/all/normalize_search_text,101,14100,15000,0,0,0,0
+build,local_source/file,5,15382600,0,50698,4542792,1278572,2639104
+build,local_source/block64,5,14390100,0,58368,6911428,1904360,3519648
+build,local_source/line,5,16430100,0,66125,13137980,3851664,6120112
+build,local_source/positional,5,17557200,0,66903,15982296,4255772,6879408

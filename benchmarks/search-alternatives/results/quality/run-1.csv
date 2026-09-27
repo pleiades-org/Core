@@ -1,0 +1,61 @@
+mode,query,samples,median_ns,p95_ns
+subsequence,visual studio code,201,92200,101500
+subsequence,windows term,201,100100,195400
+subsequence,firefox,201,76200,152000
+subsequence,code visual,201,138100,144100
+subsequence,player media windows,201,93300,113400
+subsequence,vsc,201,50300,66800
+subsequence,wt,201,48600,51600
+subsequence,wmp,201,49900,55300
+subsequence,gc,201,47600,122400
+subsequence,chorme,201,113400,117600
+subsequence,firefx,201,69400,131600
+subsequence,terrminal,201,96200,109000
+subsequence,excwl,201,103400,144200
+subsequence,photshop,201,87600,180200
+subsequence,café,201,59700,84100
+subsequence,café,201,59600,109100
+subsequence,東京,201,63700,78500
+subsequence,zzqxy,201,59000,64000
+subsequence,calcxyz,201,76400,147200
+subsequence,,201,0,100
+initials_and_typo,visual studio code,201,68900,75900
+initials_and_typo,windows term,201,76000,139100
+initials_and_typo,firefox,201,53200,61500
+initials_and_typo,code visual,201,60900,124800
+initials_and_typo,player media windows,201,111700,114700
+initials_and_typo,vsc,201,37000,99600
+initials_and_typo,wt,201,27900,28900
+initials_and_typo,wmp,201,29600,33600
+initials_and_typo,gc,201,27300,27700
+initials_and_typo,chorme,201,132400,250500
+initials_and_typo,firefx,201,123100,184900
+initials_and_typo,terrminal,201,162100,254100
+initials_and_typo,excwl,201,108800,211200
+initials_and_typo,photshop,201,147800,260400
+initials_and_typo,café,201,68400,72100
+initials_and_typo,café,201,38700,69900
+initials_and_typo,東京,201,42200,43600
+initials_and_typo,zzqxy,201,108700,206400
+initials_and_typo,calcxyz,201,134300,223700
+initials_and_typo,,201,0,100
+existing,visual studio code,201,70500,73800
+existing,windows term,201,77300,130700
+existing,firefox,201,53900,56900
+existing,code visual,201,61600,113600
+existing,player media windows,201,71200,75900
+existing,vsc,201,28600,29900
+existing,wt,201,27200,59200
+existing,wmp,201,56400,68000
+existing,gc,201,26800,52400
+existing,chorme,201,46600,47000
+existing,firefx,201,46100,96400
+existing,terrminal,201,75300,78100
+existing,excwl,201,38200,39000
+existing,photshop,201,61900,83000
+existing,café,201,37900,38300
+existing,café,201,37700,38000
+existing,東京,201,55700,89400
+existing,zzqxy,201,37900,40100
+existing,calcxyz,201,53400,67300
+existing,,201,0,100

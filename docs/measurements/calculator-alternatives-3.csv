@@ -1,0 +1,15 @@
+case,iterations_per_batch,batches,median_batch_ns_per_op,p95_batch_ns_per_op,allocation_calls_per_op,cumulative_requested_bytes_per_op
+short/pratt,30000,31,57.38,199.46,0.00,0.00
+short/direct_stack,30000,31,93.61,148.72,0.00,0.00
+short/postfix_compile_and_run,30000,31,82.62,123.88,0.00,0.00
+functions/pratt,30000,31,129.47,148.82,0.00,0.00
+functions/direct_stack,30000,31,190.55,257.62,0.00,0.00
+functions/postfix_compile_and_run,30000,31,176.45,219.11,0.00,0.00
+typing/pratt,30000,31,27.21,36.65,0.00,0.00
+typing/direct_stack,30000,31,39.37,63.69,0.00,0.00
+typing/postfix_compile_and_run,30000,31,35.48,50.95,0.00,0.00
+long_and_nested/pratt,30000,31,738.51,827.20,0.00,0.00
+long_and_nested/direct_stack,30000,31,1006.46,1204.39,0.00,0.00
+long_and_nested/postfix_compile_and_run,30000,31,1138.84,1601.32,0.00,0.00
+unchanged_program/postfix_run_only,30000,31,17.12,20.08,0.00,0.00
+unchanged_program/pratt_parse_and_run,30000,31,73.67,91.04,0.00,0.00

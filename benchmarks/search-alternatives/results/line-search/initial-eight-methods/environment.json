@@ -1,0 +1,12 @@
+{
+  "Date": "2026-09-19T19:48:59+01:00",
+  "Processor": "AMD Ryzen 7 7800X3D 8-Core Processor",
+  "OperatingSystem": "Microsoft Windows NT 10.0.26200.0",
+  "Rust": "rustc 1.95.0 (59807616e 2026-04-14)",
+  "Build": "release opt-level=3; thin LTO; codegen-units=1; no target-cpu=native",
+  "Runs": 3,
+  "Samples": 101,
+  "Warmups": 32,
+  "Contract": "case-sensitive UTF-8 byte literals; one result per matching line; deterministic document/line order; top12 and all separately; CRLF canonicalized to LF before timing",
+  "Limitations": "All content/indexes resident; no disk I/O, process startup, update cost, CPU affinity, parallel workers, regex, fuzzy or Unicode case folding; no whole-process memory measurement"
+}

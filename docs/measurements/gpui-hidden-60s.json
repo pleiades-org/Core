@@ -1,0 +1,10 @@
+{
+  "Date": "2026-09-19T20:30:14.2244876+01:00",
+  "Mode": "minimal GPUI static shell, hidden for 60 seconds",
+  "PrivateBytes": 68038656,
+  "WorkingSetBytes": 83546112,
+  "Threads": 24,
+  "Handles": 833,
+  "IdleSampleSeconds": 30.0195527,
+  "CpuPercentOfOneLogicalProcessor": 0.15613957132910797
+}

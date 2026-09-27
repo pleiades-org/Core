@@ -1,0 +1,616 @@
+use super::{parse_query, CommandKind, ParsedQuery};
+use super::{
+    power::power_results, recent_applications::recent_results, run_target, taskbar, terminal,
+    PowerAction, RunMode, ShellKind,
+};
+use crate::{
+    applications::{ApplicationCatalog, SearchScratch},
+    calculator::{
+        calendar::{parse_calendar, CalendarClock},
+        format_number, Calculation, CalculatorEngine,
+    },
+    conversions::{self, Conversion, ConversionContext, ExchangeRates},
+    time_conversion::{parse_time, recognizes_time, TimeConverter, TimeError},
+    VISIBLE_RESULT_LIMIT,
+};
+use std::sync::Arc;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Action {
+    LaunchApplication(Arc<str>),
+    CopyText(Arc<str>),
+    OpenUrl(Arc<str>),
+    OpenQuicklink(Arc<str>),
+    FillQuery(Arc<str>),
+    Power(PowerAction),
+    RevealTaskbar,
+    RunCommand {
+        command: Arc<str>,
+        shell: ShellKind,
+        mode: RunMode,
+    },
+    OpenRunTarget {
+        target: Arc<str>,
+        elevated: bool,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct SearchResult {
+    pub kind: ResultKind,
+    pub id: Arc<str>,
+    pub title: Arc<str>,
+    pub description: Arc<str>,
+    pub action: Action,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResultKind {
+    Application,
+    Quicklink,
+    Calculator,
+    Time,
+    Date,
+    Conversion,
+    Power,
+    Web,
+    Command,
+    System,
+    Terminal,
+    /// A recently used app, shown in the grid when nothing is typed.
+    Recent,
+}
+
+#[derive(Debug)]
+pub struct SearchBatch {
+    pub results: Vec<SearchResult>,
+    pub message: &'static str,
+}
+
+#[derive(Default)]
+pub struct SearchEngine {
+    calculator: CalculatorEngine,
+    scratch: SearchScratch,
+    time_converter: Option<Box<dyn TimeConverter>>,
+    calendar_clock: Option<Box<dyn CalendarClock>>,
+    exchange_rates: Option<Arc<ExchangeRates>>,
+    /// Application identifiers, most recent first, shown when nothing is typed.
+    recent_applications: Arc<[Arc<str>]>,
+}
+
+impl SearchEngine {
+    pub fn with_calendar_clock(mut self, clock: impl CalendarClock + 'static) -> Self {
+        self.calendar_clock = Some(Box::new(clock));
+        self
+    }
+    /// Rates are a shared snapshot; the launcher replaces it when a newer ECB file arrives.
+    pub fn set_exchange_rates(&mut self, rates: Option<Arc<ExchangeRates>>) {
+        self.exchange_rates = rates;
+    }
+
+    /// The launcher's recently used apps, most recent first; unknown identifiers are skipped.
+    pub fn set_recent_applications(&mut self, recent: Arc<[Arc<str>]>) {
+        self.recent_applications = recent;
+    }
+
+    pub fn with_time_converter(converter: impl TimeConverter + 'static) -> Self {
+        Self {
+            time_converter: Some(Box::new(converter)),
+            ..Self::default()
+        }
+    }
+
+    /// Search has no filesystem, network, clipboard or application-launch side effects.
+    pub fn search(&mut self, query: &str, catalog: &ApplicationCatalog) -> SearchBatch {
+        self.search_with_cancel(query, catalog, &|| false)
+    }
+
+    pub fn search_with_cancel(
+        &mut self,
+        query: &str,
+        catalog: &ApplicationCatalog,
+        cancelled: &impl Fn() -> bool,
+    ) -> SearchBatch {
+        self.search_catalogs(
+            query,
+            catalog,
+            catalog,
+            &ApplicationCatalog::default(),
+            cancelled,
+        )
+    }
+
+    pub fn search_catalogs(
+        &mut self,
+        query: &str,
+        catalog: &ApplicationCatalog,
+        combined: &ApplicationCatalog,
+        quicklinks: &ApplicationCatalog,
+        cancelled: &impl Fn() -> bool,
+    ) -> SearchBatch {
+        match parse_query(query) {
+            ParsedQuery::Search(payload) if PowerAction::parse(payload).is_some() => {
+                power_results(payload)
+            }
+            ParsedQuery::Command {
+                kind: CommandKind::Power,
+                payload,
+            } => power_results(payload),
+            ParsedQuery::Search(payload) if taskbar::matches_keyword(payload) => {
+                // Keep application matches (e.g. initials "tb") below the keyword result.
+                let mut batch = self.applications(payload, combined, cancelled);
+                batch.results.insert(0, taskbar::taskbar_result());
+                batch.results.truncate(VISIBLE_RESULT_LIMIT);
+                batch.message = taskbar::MESSAGE;
+                batch
+            }
+            ParsedQuery::Command {
+                kind: CommandKind::Shell(shell),
+                payload,
+            } => terminal::terminal_results(payload, shell),
+            ParsedQuery::Command {
+                kind: CommandKind::Run,
+                payload,
+            } => run_target::run_results(payload, true),
+            ParsedQuery::Search(payload) if run_target::is_run_target(payload) => {
+                run_target::run_results(payload, false)
+            }
+            ParsedQuery::Command {
+                kind: CommandKind::Taskbar,
+                ..
+            } => SearchBatch {
+                results: vec![taskbar::taskbar_result()],
+                message: taskbar::MESSAGE,
+            },
+            ParsedQuery::Search("") => recent_results(&self.recent_applications, catalog)
+                .unwrap_or_else(|| self.applications("", combined, cancelled)),
+            ParsedQuery::Search(payload) => self
+                .try_calculation(payload)
+                .unwrap_or_else(|| self.applications(payload, combined, cancelled)),
+            ParsedQuery::Command {
+                kind: CommandKind::Applications,
+                payload,
+            } => self.applications(payload, catalog, cancelled),
+            ParsedQuery::Command {
+                kind: CommandKind::Calculator,
+                payload,
+            } => self
+                .try_calculation(payload)
+                .unwrap_or_else(|| self.calculate(payload)),
+            ParsedQuery::Command {
+                kind: CommandKind::Time,
+                payload,
+            } => self.convert_time(payload),
+            ParsedQuery::Command {
+                kind: CommandKind::Web,
+                payload,
+            } => web_search(payload),
+            ParsedQuery::Command {
+                kind: CommandKind::Quicklinks,
+                payload,
+            } => {
+                let mut batch = self.applications(payload, quicklinks, cancelled);
+                if quicklinks.is_empty() {
+                    batch.message = "Add quicklinks in Settings → Quicklinks";
+                }
+                batch
+            }
+            ParsedQuery::CommandHints(prefix) => command_hints(prefix),
+            ParsedQuery::UnknownCommand(_) => SearchBatch {
+                results: Vec::new(),
+                message: "Unknown command · try @app, @calc, @time or @web",
+            },
+            ParsedQuery::Invalid(_) => SearchBatch {
+                results: Vec::new(),
+                message: "Query contains invalid characters or exceeds 4 KiB",
+            },
+        }
+    }
+
+    fn try_calculation(&mut self, payload: &str) -> Option<SearchBatch> {
+        if let Some(request) = parse_calendar(payload) {
+            let message = if matches!(
+                request,
+                Ok(crate::calculator::calendar::CalendarRequest::Difference { .. })
+            ) {
+                "Enter to copy number of days · Esc to hide"
+            } else {
+                "Enter to copy date / time · Esc to hide"
+            };
+            return Some(
+                match request.and_then(|request| request.evaluate(self.calendar_clock.as_deref())) {
+                    Ok(answer) => calculation_batch(answer, ResultKind::Date, message),
+                    Err(error) => SearchBatch {
+                        results: Vec::new(),
+                        message: error.message(),
+                    },
+                },
+            );
+        }
+        // A complete time-zone query wins; `9 pt to cup` (pints) falls through to units.
+        let time_query = recognizes_time(payload);
+        if time_query && parse_time(payload).is_ok() {
+            return Some(self.convert_time(payload));
+        }
+        let context = ConversionContext {
+            rates: self.exchange_rates.as_deref(),
+            clock: self.calendar_clock.as_deref(),
+        };
+        if let Some(outcome) = conversions::convert(payload, context) {
+            return Some(match outcome {
+                Ok(conversion) => conversion_batch(conversion),
+                Err(message) => SearchBatch {
+                    results: Vec::new(),
+                    message,
+                },
+            });
+        }
+        if time_query {
+            return Some(self.convert_time(payload));
+        }
+        self.calculator
+            .recognizes(payload)
+            .then(|| self.calculate(payload))
+    }
+
+    fn applications(
+        &mut self,
+        query: &str,
+        catalog: &ApplicationCatalog,
+        cancelled: &impl Fn() -> bool,
+    ) -> SearchBatch {
+        let results = catalog
+            .search_with_cancel(query, VISIBLE_RESULT_LIMIT, &mut self.scratch, cancelled)
+            .into_iter()
+            .map(|ranked| {
+                let application = ranked.application;
+                let quicklink = application.id.starts_with(crate::quicklinks::ID_PREFIX);
+                SearchResult {
+                    kind: if quicklink {
+                        ResultKind::Quicklink
+                    } else {
+                        ResultKind::Application
+                    },
+                    id: application.id.clone(),
+                    title: application.name.clone(),
+                    description: application.description.clone(),
+                    action: if quicklink {
+                        Action::OpenQuicklink(application.description.clone())
+                    } else {
+                        Action::LaunchApplication(application.id.clone())
+                    },
+                }
+            })
+            .collect();
+        SearchBatch {
+            results,
+            message: "Enter to open · ↑ ↓ to select · Esc to hide",
+        }
+    }
+
+    fn calculate(&self, payload: &str) -> SearchBatch {
+        match self.calculator.evaluate(payload) {
+            Ok(number) => {
+                let text: Arc<str> = format_number(number).into();
+                SearchBatch {
+                    results: vec![SearchResult {
+                        kind: ResultKind::Calculator,
+                        id: "calculator".into(),
+                        title: text.clone(),
+                        description: format!("= {payload}").into(),
+                        action: Action::CopyText(text),
+                    }],
+                    message: "Enter to copy answer · % divides by 100 · trig uses radians",
+                }
+            }
+            Err(error) => SearchBatch {
+                results: Vec::new(),
+                message: match error {
+                    crate::calculator::CalcError::Incomplete => "Finish the expression",
+                    crate::calculator::CalcError::DivisionByZero => "Cannot divide by zero",
+                    crate::calculator::CalcError::NonFinite => {
+                        "Result is outside the supported numeric range"
+                    }
+                    crate::calculator::CalcError::TooComplex => {
+                        "Expression is too long or deeply nested"
+                    }
+                    crate::calculator::CalcError::Invalid => {
+                        "Try 2+2, sqrt(81), 2 days from now, or 10 kg to lb"
+                    }
+                    crate::calculator::CalcError::Domain => {
+                        "That function is undefined for this input in real numbers"
+                    }
+                },
+            },
+        }
+    }
+}
+
+/// Each answer is its own row; Enter copies that row's value.
+fn conversion_batch(conversion: Conversion) -> SearchBatch {
+    let results = conversion
+        .answers
+        .into_iter()
+        .take(VISIBLE_RESULT_LIMIT)
+        .enumerate()
+        .map(|(index, answer)| SearchResult {
+            kind: ResultKind::Conversion,
+            id: format!("conversion-{index}").into(),
+            title: answer.title.into(),
+            description: answer.detail.into(),
+            action: Action::CopyText(answer.copy.into()),
+        })
+        .collect();
+    SearchBatch {
+        results,
+        message: conversion.message,
+    }
+}
+
+fn calculation_batch(answer: Calculation, kind: ResultKind, message: &'static str) -> SearchBatch {
+    SearchBatch {
+        results: vec![SearchResult {
+            kind,
+            id: "calculation".into(),
+            title: answer.title.into(),
+            description: answer.detail.into(),
+            action: Action::CopyText(answer.copy.into()),
+        }],
+        message,
+    }
+}
+
+impl SearchEngine {
+    fn convert_time(&mut self, payload: &str) -> SearchBatch {
+        let conversion = parse_time(payload).and_then(|request| {
+            let converter = self.time_converter.as_mut().ok_or(TimeError::Unavailable)?;
+            converter
+                .convert(request)
+                .map(|converted| (request, converted))
+        });
+        let (request, converted) = match conversion {
+            Ok(conversion) => conversion,
+            Err(error) => {
+                return SearchBatch {
+                    results: Vec::new(),
+                    message: error.message(),
+                }
+            }
+        };
+        let day_change = match converted.destination_date.cmp(&converted.source_date) {
+            std::cmp::Ordering::Greater => " · next day",
+            std::cmp::Ordering::Less => " · previous day",
+            std::cmp::Ordering::Equal => "",
+        };
+        let title = format!(
+            "{} {}{day_change}",
+            converted.time,
+            request.destination.label()
+        );
+        let copied = format!(
+            "{} {} on {}",
+            converted.time,
+            request.destination.label(),
+            converted.destination_date
+        );
+        let description = format!(
+            "{} {} on {} → {} · Enter to copy",
+            request.time,
+            request.source.label(),
+            converted.source_date,
+            converted.destination_date
+        );
+        SearchBatch {
+            results: vec![SearchResult {
+                kind: ResultKind::Time,
+                id: "time-conversion".into(),
+                title: title.into(),
+                description: description.into(),
+                action: Action::CopyText(copied.into()),
+            }],
+            message: if request.date.is_none() {
+                "Using today in the source zone · add on YYYY-MM-DD for another date"
+            } else {
+                "Date-aware time conversion · Enter to copy"
+            },
+        }
+    }
+}
+
+fn web_search(payload: &str) -> SearchBatch {
+    if payload.is_empty() {
+        return SearchBatch {
+            results: Vec::new(),
+            message: "Type a web search after @web",
+        };
+    }
+    const HEX: &[u8] = b"0123456789ABCDEF";
+    let mut url = String::with_capacity(40 + payload.len() * 3);
+    url.push_str("https://www.google.com/search?q=");
+    for byte in payload.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            url.push(byte as char);
+        } else {
+            url.push('%');
+            url.push(HEX[(byte >> 4) as usize] as char);
+            url.push(HEX[(byte & 15) as usize] as char);
+        }
+    }
+    SearchBatch {
+        results: vec![SearchResult {
+            kind: ResultKind::Web,
+            id: "web".into(),
+            title: format!("Search the web for {payload}").into(),
+            description: "Open in your default browser".into(),
+            action: Action::OpenUrl(url.into()),
+        }],
+        message: "Enter to search in your browser",
+    }
+}
+
+fn command_hints(prefix: &str) -> SearchBatch {
+    let normalized = prefix.to_ascii_lowercase();
+    let results = [
+        ("app", "Search applications"),
+        ("calc", "Calculate locally"),
+        ("time", "Convert time zones"),
+        ("web", "Search the web"),
+        ("power", "Power off, restart or sleep"),
+        ("quicklink", "Open saved websites, files and folders"),
+        ("taskbar", "Show the Windows taskbar"),
+        (
+            "run",
+            "Open a program, folder or URI like Win+R · / runs commands",
+        ),
+    ]
+    .into_iter()
+    .filter(|(command, _)| command.starts_with(&normalized))
+    .map(|(command, description)| SearchResult {
+        kind: ResultKind::Command,
+        id: command.into(),
+        title: format!("@{command}").into(),
+        description: description.into(),
+        action: Action::FillQuery(format!("@{command} ").into()),
+    })
+    .collect();
+    SearchBatch {
+        results,
+        message: "Choose a command",
+    }
+}
+
+#[cfg(test)]
+mod recent_tests {
+    use super::*;
+    use crate::applications::Application;
+
+    #[test]
+    fn an_empty_query_shows_recent_apps_and_typing_searches_as_before() {
+        let catalog = ApplicationCatalog::new(
+            ["Calculator", "Notepad"]
+                .into_iter()
+                .map(|name| Application {
+                    id: format!("id:{name}").into(),
+                    name: name.into(),
+                    description: "Programs".into(),
+                    pinned: false,
+                    launches: 0,
+                    aliases: Default::default(),
+                })
+                .collect(),
+        );
+        let mut engine = SearchEngine::default();
+        assert_eq!(
+            engine.search("", &catalog).results[0].kind,
+            ResultKind::Application
+        );
+        engine.set_recent_applications(Arc::from([Arc::from("id:Notepad")]));
+        let empty = engine.search("  ", &catalog);
+        assert_eq!(empty.results.len(), 1);
+        assert_eq!(empty.results[0].kind, ResultKind::Recent);
+        assert_eq!(&*empty.results[0].title, "Notepad");
+        let typed = engine.search("calc", &catalog);
+        assert_eq!(typed.results[0].kind, ResultKind::Application);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn web_search_encodes_reserved_characters_and_utf8() {
+        let batch =
+            SearchEngine::default().search("@web café & windows", &ApplicationCatalog::default());
+        assert_eq!(
+            batch.results[0].action,
+            Action::OpenUrl("https://www.google.com/search?q=caf%C3%A9%20%26%20windows".into())
+        );
+    }
+    #[test]
+    fn bare_constants_remain_searches_but_explicit_calculator_evaluates_them() {
+        let catalog = ApplicationCatalog::default();
+        let mut engine = SearchEngine::default();
+        for query in ["e", "E", "pi", "tau"] {
+            assert!(engine.try_calculation(query).is_none(), "{query}");
+        }
+        let result = engine.search("@calc pi", &catalog);
+        assert_eq!(result.results[0].kind, ResultKind::Calculator);
+        assert_eq!(result.results[0].action, Action::CopyText(format_number(std::f64::consts::PI).into()));
+    }
+    #[test]
+    fn incomplete_expressions_and_hints_never_create_launch_actions() {
+        let catalog = ApplicationCatalog::default();
+        let mut engine = SearchEngine::default();
+        assert!(engine.search("@calc 2+", &catalog).results.is_empty());
+        assert!(matches!(
+            engine.search("@cal", &catalog).results[0].action,
+            Action::FillQuery(_)
+        ));
+        assert_eq!(
+            engine.search("2+2", &catalog).results[0].action,
+            Action::CopyText("4".into())
+        );
+    }
+    #[test]
+    fn conversions_route_before_time_zones_and_arithmetic() {
+        let catalog = ApplicationCatalog::default();
+        let mut engine = SearchEngine::default();
+        // `pt` is both US pints and Pacific time: a unit destination decides.
+        let pints = engine.search("9 pt to cup", &catalog);
+        assert_eq!(pints.results[0].kind, ResultKind::Conversion);
+        assert_eq!(pints.results[0].action, Action::CopyText("18".into()));
+        let time = engine.search("9 pt to et", &catalog);
+        assert!(time
+            .results
+            .iter()
+            .all(|result| result.kind != ResultKind::Conversion));
+        // Multi-answer conversions become one copyable row each.
+        let colours = engine.search("#ff8800", &catalog);
+        assert_eq!(colours.results.len(), 3);
+        assert_eq!(
+            colours.results[2].action,
+            Action::CopyText("#FF8800".into())
+        );
+        assert_eq!(
+            engine.search("2 + 2", &catalog).results[0].action,
+            Action::CopyText("4".into())
+        );
+    }
+
+    #[test]
+    fn currency_needs_rates_and_uses_the_latest_snapshot() {
+        let catalog = ApplicationCatalog::default();
+        let mut engine = SearchEngine::default();
+        let unavailable = engine.search("110 usd to eur", &catalog);
+        assert!(unavailable.results.is_empty());
+        assert!(unavailable.message.contains("Exchange rates"));
+        let rates =
+            crate::conversions::ExchangeRates::from_ecb_xml(crate::conversions::SAMPLE_ECB_XML)
+                .unwrap();
+        engine.set_exchange_rates(Some(Arc::new(rates)));
+        assert_eq!(
+            engine.search("110 usd to eur", &catalog).results[0].action,
+            Action::CopyText("100.00".into())
+        );
+    }
+
+    #[test]
+    fn taskbar_keywords_and_commands_offer_the_taskbar_first() {
+        let catalog = ApplicationCatalog::default();
+        let mut engine = SearchEngine::default();
+        for query in ["tb", "Taskbar", "@tb", "@taskbar"] {
+            let batch = engine.search(query, &catalog);
+            assert_eq!(batch.results[0].action, Action::RevealTaskbar, "{query}");
+        }
+        assert!(engine
+            .search("tbx", &catalog)
+            .results
+            .iter()
+            .all(|result| result.action != Action::RevealTaskbar));
+        assert!(engine
+            .search("@ta", &catalog)
+            .results
+            .iter()
+            .any(|result| result.title.as_ref() == "@taskbar"));
+    }
+}

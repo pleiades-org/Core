@@ -1,0 +1,94 @@
+[
+  {
+    "Path": "crates\\launcher\\src\\windows\\execute_action.rs",
+    "Sha256": "4FB4E0945E9A71E6785FBAAD4CBECD8C5C783725138C7388D5DA71C9BDA3287F"
+  },
+  {
+    "Path": "crates\\launcher\\src\\main.rs",
+    "Sha256": "9B643B36CAF5BFDD46D5E84DA0221036E37656AFCA3A13C51B550631996BB4D7"
+  },
+  {
+    "Path": "crates\\launcher\\src\\windows\\view.rs",
+    "Sha256": "785D466E4261171A816FDA7817C4C616F7481577A3174C63D7C8D6A0433347B3"
+  },
+  {
+    "Path": "crates\\launcher\\src\\windows\\discover_applications.rs",
+    "Sha256": "11BCF659809112ED00BBB40687E3093B737D013596C2F12823C9F486ECBE2B6E"
+  },
+  {
+    "Path": "crates\\launcher\\src\\windows\\tray.rs",
+    "Sha256": "BB188C56C123FF76B6FBD56859A7921E8921BA4E7A087845E23936E3EA547FD3"
+  },
+  {
+    "Path": "crates\\launcher\\src\\windows\\launcher_state.rs",
+    "Sha256": "AD382839C7B50F8B409782B8BCB2E9575B50DF760EFCBB7C3DC4F26F2AFC75DB"
+  },
+  {
+    "Path": "crates\\launcher\\Cargo.toml",
+    "Sha256": "5A25A8E106CB032B548BC043EE2910344B3945BC97DDD0ED10F97F5DE1E97822"
+  },
+  {
+    "Path": "crates\\launcher\\src\\windows\\mod.rs",
+    "Sha256": "DEF00698F8DB24D644BCE915DC2EE8E171DE9BAA5E67B1F8711F402FD9757B3E"
+  },
+  {
+    "Path": "crates\\launcher\\src\\windows\\shell.rs",
+    "Sha256": "6B9F9270EAEAEEB6FD188A5E3E7336551792DBC0741CD93269D24C35BA562BF1"
+  },
+  {
+    "Path": "crates\\launcher\\src\\windows\\search_worker.rs",
+    "Sha256": "B7058EBFD9A78B392B7DE9F24D3FEAE83F1714A1AED8E7C8471587DFDA973B6B"
+  },
+  {
+    "Path": "crates\\launcher\\src\\bin\\gpui_probe.rs",
+    "Sha256": "AD9A35DCD68681A32E359C67E1F3ADFA849137231F213EDB1382611D8BC5318C"
+  },
+  {
+    "Path": "crates\\engine\\Cargo.toml",
+    "Sha256": "25AF15E251BA65521EE55B8F3B89912796DF6BDCF81E43B56ECE00FEFB796598"
+  },
+  {
+    "Path": "crates\\engine\\examples\\measure_search.rs",
+    "Sha256": "DED1717DB79381F65D892418583B0F594F613E529F7FD4ABE07C7CF1411814DA"
+  },
+  {
+    "Path": "crates\\engine\\src\\search\\parse_query.rs",
+    "Sha256": "48CBAA0AAB93FA3A2D89A4B4E91539B841D5BA24069B3CDEB90E81951EDA9B6D"
+  },
+  {
+    "Path": "crates\\engine\\src\\search\\normalize.rs",
+    "Sha256": "32D99C3448B3CE9AA3BFBC834F5759D773C71C3DDD99514E3A349CFDDAD57561"
+  },
+  {
+    "Path": "crates\\engine\\src\\search\\mod.rs",
+    "Sha256": "8480F88A7F7D1A2567DA04BD74F64FF94DA9A17A0DFF564FD64A8F2F7F2D95B1"
+  },
+  {
+    "Path": "crates\\engine\\src\\search\\execute_search.rs",
+    "Sha256": "5CC36B4D81E38D3B368C1F94A5EB1FA583A547612B1F0AA4F3F13BCBDADD16B2"
+  },
+  {
+    "Path": "crates\\engine\\src\\lib.rs",
+    "Sha256": "5B29C33BCB0CACCE483788F25617E347894616A9EBD38E5EE502320276CCD73B"
+  },
+  {
+    "Path": "crates\\engine\\src\\calculator\\mod.rs",
+    "Sha256": "61E05F738294337AEB851CDCDE7EDF4CA19BFD6A14A9676097B5624B1D4F36BD"
+  },
+  {
+    "Path": "crates\\engine\\src\\calculator\\evaluate.rs",
+    "Sha256": "E5078568CFE56B383A185903A66D9B8F481F865C3C3F16AC59ACF49A87655E72"
+  },
+  {
+    "Path": "crates\\engine\\src\\applications\\rank_applications.rs",
+    "Sha256": "7FC59F5643627364E2F8EE9300E070164E5F4ECDF2FB5A5445CCCBC561782802"
+  },
+  {
+    "Path": "crates\\engine\\src\\applications\\mod.rs",
+    "Sha256": "74CA284C1A74F58BD69B5FC4808DDD1A1A826E5D72660411FB27CC89E8A1F9F5"
+  },
+  {
+    "Path": "crates\\engine\\src\\applications\\candidate_index.rs",
+    "Sha256": "1782DC0459065DD745CD454F8E458F153A85D402E8F87F3EF0A98F28996E2C5A"
+  }
+]

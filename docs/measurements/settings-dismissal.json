@@ -1,0 +1,18 @@
+{
+  "Date": "2026-09-20T20:48:11.8314719+01:00",
+  "Passed": true,
+  "Sha256": "78B5CE99F95E552358B61D779BE75AC59104ED744F9F0851AD15B4F3659AF315",
+  "ReducedMotion": false,
+  "Samples": 12,
+  "MedianDismissalMilliseconds": 134.9939,
+  "MaximumDismissalMilliseconds": 136.2964,
+  "Scenarios": [
+    "outside native-window activation hides Core",
+    "Core does not steal foreground after dismissal",
+    "unknown observer notification does not hide focused Core",
+    "result-control click retains visibility",
+    "query preserved across 12 reopen cycles",
+    "deactivation during entrance can be reversed"
+  ],
+  "Limitations": "Native foreground changes between test-owned windows. Temporarily attaches the test input queue or uses hit-checked cursor clicks when Windows refuses background activation. Timings include the hide animation and 2 ms observation polling; not hardware input or compositor timing. External actions disabled. Owned-popup behavior is not certified: a separate cross-process popup fixture attached input queues and produced unstable activation. Core currently has no owned dialog."
+}

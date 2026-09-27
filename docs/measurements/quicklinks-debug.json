@@ -1,0 +1,21 @@
+{
+  "Date": "2026-09-21T21:15:34.3859603+01:00",
+  "Passed": true,
+  "PhysicalKeyboardChecked": false,
+  "Sha256": "072F3210F67F770E66DB408563C2A596AEFF68D6E7CC9AF2BFEACEFDD65A0C9B",
+  "Scenarios": [
+    "Link and Name table adds blank row after completion",
+    "scrolling beyond visible rows",
+    "31 rows without GDI growth",
+    "Unicode and website normalization",
+    "unsupported target and duplicate name rejection",
+    "rename and remove persisted",
+    "normal and scoped search",
+    "dry-run activation",
+    "partial row not persisted",
+    "process restart restores table and search",
+    "failed replacement preserves links and retry recovers"
+  ],
+  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\quicklinks-tests\\892bf938efd84e19985e6441c85fc26d",
+  "SideEffects": "Isolated settings file; external activation disabled by --dry-run."
+}

@@ -1,0 +1,61 @@
+mode,query,expected,actual,correct
+existing,visual studio code,Visual Studio Code,Visual Studio Code,true
+existing,windows term,Windows Terminal,Windows Terminal,true
+existing,firefox,Mozilla Firefox,Mozilla Firefox,true
+existing,code visual,Visual Studio Code,Visual Studio Code,true
+existing,player media windows,Windows Media Player,Windows Media Player,true
+existing,vsc,Visual Studio Code,<none>,false
+existing,wt,Windows Terminal,<none>,false
+existing,wmp,Windows Media Player,<none>,false
+existing,gc,Google Chrome,<none>,false
+existing,chorme,Google Chrome,<none>,false
+existing,firefx,Mozilla Firefox,<none>,false
+existing,terrminal,Windows Terminal,<none>,false
+existing,excwl,Microsoft Excel,<none>,false
+existing,photshop,Adobe Photoshop,<none>,false
+existing,café,Café Tools,Café Tools,true
+existing,CAFÉ,Café Tools,Café Tools,true
+existing,東京,東京 Maps,東京 Maps,true
+existing,zzqxy,<none>,<none>,true
+existing,calcxyz,<none>,<none>,true
+existing,,<none>,<none>,true
+subsequence,visual studio code,Visual Studio Code,Visual Studio Code,true
+subsequence,windows term,Windows Terminal,Windows Terminal,true
+subsequence,firefox,Mozilla Firefox,Mozilla Firefox,true
+subsequence,code visual,Visual Studio Code,Visual Studio Code,true
+subsequence,player media windows,Windows Media Player,Windows Media Player,true
+subsequence,vsc,Visual Studio Code,Visual Studio Code,true
+subsequence,wt,Windows Terminal,Windows Terminal,true
+subsequence,wmp,Windows Media Player,Windows Media Player,true
+subsequence,gc,Google Chrome,Google Chrome,true
+subsequence,chorme,Google Chrome,<none>,false
+subsequence,firefx,Mozilla Firefox,Mozilla Firefox,true
+subsequence,terrminal,Windows Terminal,<none>,false
+subsequence,excwl,Microsoft Excel,<none>,false
+subsequence,photshop,Adobe Photoshop,Adobe Photoshop,true
+subsequence,café,Café Tools,Café Tools,true
+subsequence,CAFÉ,Café Tools,Café Tools,true
+subsequence,東京,東京 Maps,東京 Maps,true
+subsequence,zzqxy,<none>,<none>,true
+subsequence,calcxyz,<none>,<none>,true
+subsequence,,<none>,<none>,true
+initials_and_typo,visual studio code,Visual Studio Code,Visual Studio Code,true
+initials_and_typo,windows term,Windows Terminal,Windows Terminal,true
+initials_and_typo,firefox,Mozilla Firefox,Mozilla Firefox,true
+initials_and_typo,code visual,Visual Studio Code,Visual Studio Code,true
+initials_and_typo,player media windows,Windows Media Player,Windows Media Player,true
+initials_and_typo,vsc,Visual Studio Code,Visual Studio Code,true
+initials_and_typo,wt,Windows Terminal,Windows Terminal,true
+initials_and_typo,wmp,Windows Media Player,Windows Media Player,true
+initials_and_typo,gc,Google Chrome,Google Chrome,true
+initials_and_typo,chorme,Google Chrome,Google Chrome,true
+initials_and_typo,firefx,Mozilla Firefox,Mozilla Firefox,true
+initials_and_typo,terrminal,Windows Terminal,Windows Terminal,true
+initials_and_typo,excwl,Microsoft Excel,Microsoft Excel,true
+initials_and_typo,photshop,Adobe Photoshop,Adobe Photoshop,true
+initials_and_typo,café,Café Tools,Café Tools,true
+initials_and_typo,CAFÉ,Café Tools,Café Tools,true
+initials_and_typo,東京,東京 Maps,東京 Maps,true
+initials_and_typo,zzqxy,<none>,<none>,true
+initials_and_typo,calcxyz,<none>,<none>,true
+initials_and_typo,,<none>,<none>,true

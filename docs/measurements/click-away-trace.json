@@ -1,0 +1,18 @@
+{
+  "Date": "2026-09-20T19:52:46.0137756+01:00",
+  "Passed": true,
+  "Sha256": "AA6581AEC31F566E5969B847C5A91B731FAE21B33BA2ECD0207D8300C2E5E09F",
+  "ReducedMotion": false,
+  "Samples": 12,
+  "MedianDismissalMilliseconds": 123.8809,
+  "MaximumDismissalMilliseconds": 139.9983,
+  "Scenarios": [
+    "outside native-window activation hides Core",
+    "outside target retains focus",
+    "stale activation notification does not hide reopened Core",
+    "child control and owned popup retain visibility",
+    "query preserved across 12 reopen cycles",
+    "deactivation during entrance can be reversed"
+  ],
+  "Limitations": "Native foreground changes between test-owned windows, equivalent to the activation caused by clicking another window. Timings include the hide animation and 2 ms observation polling; not physical mouse or compositor timing. External actions disabled."
+}

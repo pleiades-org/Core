@@ -1,0 +1,28 @@
+{
+  "Date": "2026-09-25T15:05:27.1109120+01:00",
+  "Passed": true,
+  "Interactive": false,
+  "Sha256": "570C257F1AA9872FA78E161693A74F9AF4B7B4AF5FE4BD64939DD84A46B9C99B",
+  "Scenarios": [
+    "lazy settings controls",
+    "left sidebar with right-side category controls",
+    "settings entry points and Tab navigation",
+    "all seven anchors and attached corner masks",
+    "edge anchoring after result height changes",
+    "custom and light background pixels",
+    "automatic saving without closing settings",
+    "Done retains saved appearance",
+    "invalid color rejected and Escape retains last valid settings",
+    "30 rapid edits without GDI growth",
+    "all five preferences survive process restart",
+    "failed autosave preserves prior settings",
+    "Retry recovers after denied replacement",
+    "dismissal and immediate reopen retain pending edit",
+    "close flushes typing debounce",
+    "unsupported settings preserved",
+    "corner rounding and screen-edge spacing sliders save, place and clip",
+    "default slider values omitted from the file"
+  ],
+  "Limitations": "Queued native control commands with UI completion acknowledgements, region checks and own-window bitmaps. Physical mixed-DPI monitor switching and screen-reader acceptance remain manual. Isolated settings file; no real user preferences changed.",
+  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\settings-tests\\4b87777643f84059b1bd45dfcdabc6af"
+}

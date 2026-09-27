@@ -1,0 +1,61 @@
+mode,query,samples,median_ns,p95_ns
+existing,visual studio code,201,112600,127500
+existing,windows term,201,76900,80100
+existing,firefox,201,53900,93100
+existing,code visual,201,61800,67800
+existing,player media windows,201,71500,145200
+existing,vsc,201,29500,31500
+existing,wt,201,27500,30300
+existing,wmp,201,28800,29000
+existing,gc,201,26800,82200
+existing,chorme,201,46900,51800
+existing,firefx,201,46100,50400
+existing,terrminal,201,72000,140800
+existing,excwl,201,38300,38500
+existing,photshop,201,68400,110700
+existing,café,201,38500,61500
+existing,café,201,38000,42500
+existing,東京,201,76200,158400
+existing,zzqxy,201,68600,76100
+existing,calcxyz,201,89500,147700
+existing,,201,0,100
+subsequence,visual studio code,201,92700,107000
+subsequence,windows term,201,99700,194500
+subsequence,firefox,201,75600,151800
+subsequence,code visual,201,84200,93900
+subsequence,player media windows,201,146300,172700
+subsequence,vsc,201,50100,66400
+subsequence,wt,201,48600,103200
+subsequence,wmp,201,49800,52100
+subsequence,gc,201,47500,51800
+subsequence,chorme,201,70200,135300
+subsequence,firefx,201,68800,71800
+subsequence,terrminal,201,96500,194800
+subsequence,excwl,201,61000,62500
+subsequence,photshop,201,87300,98800
+subsequence,café,201,60800,67200
+subsequence,café,201,59500,101900
+subsequence,東京,201,63200,68800
+subsequence,zzqxy,201,60500,132600
+subsequence,calcxyz,201,76400,80800
+subsequence,,201,0,100
+initials_and_typo,visual studio code,201,69900,130700
+initials_and_typo,windows term,201,75900,79800
+initials_and_typo,firefox,201,53300,101200
+initials_and_typo,code visual,201,60500,64600
+initials_and_typo,player media windows,201,70500,132600
+initials_and_typo,vsc,201,57800,59100
+initials_and_typo,wt,201,27600,27900
+initials_and_typo,wmp,201,29300,29400
+initials_and_typo,gc,201,27000,27600
+initials_and_typo,chorme,201,123300,143500
+initials_and_typo,firefx,201,122600,199300
+initials_and_typo,terrminal,201,162200,296400
+initials_and_typo,excwl,201,108200,208300
+initials_and_typo,photshop,201,147100,260800
+initials_and_typo,café,201,37600,42800
+initials_and_typo,café,201,38100,88500
+initials_and_typo,東京,201,73600,74100
+initials_and_typo,zzqxy,201,105200,201900
+initials_and_typo,calcxyz,201,135000,244100
+initials_and_typo,,201,0,100
