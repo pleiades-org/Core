@@ -1,14 +1,21 @@
 param(
     [string]$Candidate = '',
+    [string]$SigningKeyPath = $env:CORE_RELEASE_SIGNING_KEY,
     # Package from a background-only run (scripts\run-release-checks.ps1 without -Interactive).
     # Click-away dismissal and pointer hover are then untested; release-package.json records it.
     [switch]$SkipInteractive
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
+. "$PSScriptRoot\ReleaseSigning.ps1"
+if (-not $SigningKeyPath) { throw 'Set CORE_RELEASE_SIGNING_KEY or pass -SigningKeyPath with the external PKCS#8 release key.' }
+$metadata = cargo metadata --no-deps --format-version 1 --manifest-path "$projectRoot\Cargo.toml" | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { throw 'Could not read release version from Cargo.' }
+$version = ($metadata.packages | Where-Object name -eq 'core-launcher-v2').version
 if (-not $Candidate) { $Candidate = Join-Path $projectRoot 'target\styling\release\core-v2.exe' }
+if ((& $Candidate --version | Out-String).Trim() -ne "Core $version") { throw 'Candidate version does not match Cargo.toml.' }
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Candidate).Hash
-$required = @('release-controls','release-extensions','release-settings','release-shortcuts','release-integration','release-styling','release-quicklinks','release-commands')
+$required = @('release-controls','release-extensions','release-settings','release-shortcuts','release-integration','release-styling','release-quicklinks','release-commands','release-updates')
 if (-not $SkipInteractive) { $required += 'release-dismissal' }
 foreach ($name in $required) {
     $record = Get-Content -LiteralPath (Join-Path "$projectRoot\docs\measurements" "$name.json") -Raw | ConvertFrom-Json
@@ -18,10 +25,11 @@ foreach ($name in $required) {
         throw 'release-controls ran without pointer hover. Rerun scripts\run-release-checks.ps1 -Interactive, or package with -SkipInteractive.'
     }
 }
-$packageDirectory = Join-Path $projectRoot 'dist\Core-v2-windows-x64'
+$packageDirectory = Join-Path $projectRoot "dist\Core-$version-windows-x64"
 New-Item -ItemType Directory -Path $packageDirectory -Force | Out-Null
 Copy-Item -LiteralPath $Candidate -Destination "$packageDirectory\core-v2.exe" -Force
-Copy-Item -LiteralPath "$projectRoot\docs\RELEASE_2026_09_25.md" -Destination "$packageDirectory\RELEASE_NOTES.md" -Force
+Write-CoreUpdateManifest -Executable "$packageDirectory\core-v2.exe" -Version $version -SigningKeyPath $SigningKeyPath -PublicKeyPath "$projectRoot\crates\launcher\assets\release-key.bin" -OutputPath "$packageDirectory\core-update.txt"
+Copy-Item -LiteralPath "$projectRoot\docs\RELEASE_2.1.0.md" -Destination "$packageDirectory\RELEASE_NOTES.md" -Force
 @'
 Core v2 — Windows x64 portable alpha
 
@@ -45,7 +53,8 @@ taskbar or tb to reveal an auto-hidden Windows taskbar in that mode.
 Settings > Quicklinks has Link and Name columns. Fill both to append a blank row;
 scroll to add more and use the x button to remove a row. Completed valid entries
 save automatically. Search a name normally, or type > / @quicklink for links only.
-Links can be HTTP/HTTPS websites or absolute Windows file/folder paths.
+Links can be HTTP/HTTPS websites, app links such as steam://rungameid/1,
+or absolute Windows file/folder paths.
 Direct executable links start in the executable's own folder so relative data
 files can be found. Windows handles Steam and other shortcuts as before.
 Website icons come from Google's favicon service, falling back to the site;
@@ -104,17 +113,26 @@ Your preferences live in %APPDATA%\Pleiades\Core\v2\appearance.ini.
 Diagnostics are written to core.log in the same folder, and command history to
 command-history.txt (Settings > Behaviour > Clear command history deletes it).
 
-This release is unsigned. No installer, administrator account, browser runtime or
+Settings > Behaviour > Updates chooses Automatic (default), Notify or Off.
+Automatic checks GitHub when Core is shown, at most once a day (one-hour retry
+after errors), and downloads signed updates. Verified updates install on exit;
+type @update to restart now. Notify only checks and opens the release page.
+Off disables update checks and installation. Read-only folders use notify-only.
+Core keeps core-v2.previous.exe and rolls back if an updated restart fails to
+show its window within five seconds. Back up the external release-signing key.
+
+Updates use signed manifests; the executable does not have Authenticode signing.
+No installer, administrator account, browser runtime or
 network connection is required for local calculations and application search.
 See RELEASE_NOTES.md for tested behavior, benchmarks and remaining limitations.
 '@ | Set-Content -LiteralPath "$packageDirectory\README.txt" -Encoding utf8
-$checksums = foreach ($name in @('core-v2.exe','README.txt','RELEASE_NOTES.md')) {
+$checksums = foreach ($name in @('core-v2.exe','core-update.txt','README.txt','RELEASE_NOTES.md')) {
     $fileHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $packageDirectory $name)).Hash.ToLowerInvariant()
     "$fileHash  $name"
 }
 $checksums | Set-Content -LiteralPath "$packageDirectory\SHA256SUMS.txt" -Encoding ascii
-$archive = Join-Path $projectRoot 'dist\Core-v2-windows-x64.zip'
-Compress-Archive -LiteralPath "$packageDirectory\core-v2.exe","$packageDirectory\README.txt","$packageDirectory\RELEASE_NOTES.md","$packageDirectory\SHA256SUMS.txt" -DestinationPath $archive -Force -CompressionLevel Optimal
+$archive = Join-Path $projectRoot "dist\Core-$version-windows-x64.zip"
+Compress-Archive -LiteralPath "$packageDirectory\core-v2.exe","$packageDirectory\core-update.txt","$packageDirectory\README.txt","$packageDirectory\RELEASE_NOTES.md","$packageDirectory\SHA256SUMS.txt" -DestinationPath $archive -Force -CompressionLevel Optimal
 $opened = [IO.Compression.ZipFile]::OpenRead($archive)
 try {
     $entry = $opened.GetEntry('core-v2.exe')

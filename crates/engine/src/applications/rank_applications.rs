@@ -796,6 +796,43 @@ mod tests {
     }
 
     #[test]
+    fn two_letter_queries_without_name_prefixes_do_not_scan_the_catalog() {
+        use std::cell::Cell;
+
+        let mut applications: Vec<_> = (0..10_000)
+            .map(|index| application(&format!("app:{index}"), &format!("Editor {index}"), false))
+            .collect();
+        for (identifier, name) in [
+            ("acronym", "Visual Studio Code"),
+            ("word", "Tools Vscode"),
+            ("substring", "Navserver"),
+        ] {
+            applications.push(application(identifier, name, true));
+        }
+        let mut alias = application("alias", "Other Tool", false);
+        alias.aliases = Arc::from([Arc::from("qx")]);
+        applications.push(alias);
+        let (indexed, scanned) = indexed_and_scanned(applications);
+        let queries = ["vs", "qx", "zz"].map(String::from);
+        assert_same_results(&indexed, &scanned, &queries, &[1, 8, 20_000]);
+
+        let mut scratch = SearchScratch::default();
+        for query in &queries {
+            let checks = Cell::new(0);
+            indexed.search_with_cancel(query, 8, &mut scratch, &|| {
+                checks.set(checks.get() + 1);
+                false
+            });
+            // A full scan checks cancellation more than 150 times for this catalog.
+            assert!(checks.get() < 10, "query {query}: {} checks", checks.get());
+            assert!(indexed
+                .search_with_cancel(query, 8, &mut scratch, &|| true)
+                .is_empty());
+        }
+        assert_eq!(indexed.search("vs", 8, &mut scratch).len(), 3);
+    }
+
+    #[test]
     fn ten_thousand_apps_keep_an_index_within_budget() {
         let names = [
             "Visual Studio Code",
@@ -809,7 +846,10 @@ mod tests {
             .map(|index| {
                 let mut application = application(
                     &format!("app:{index}"),
-                    &format!("{} {index}", names[index % names.len()]),
+                    &format!(
+                        "{} Professional Extended Edition Portable {index}",
+                        names[index % names.len()]
+                    ),
                     index % 29 == 0,
                 );
                 application.launches = (index % 97) as u32;
@@ -831,6 +871,7 @@ mod tests {
             "visual",
             "code",
             "vsc",
+            "vs",
             "terminal 12",
             "ΣΊΣ",
             "東京",

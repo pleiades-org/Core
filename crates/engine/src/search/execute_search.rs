@@ -28,6 +28,7 @@ pub enum Action {
     FillQuery(Arc<str>),
     Power(PowerAction),
     RevealTaskbar,
+    Update,
     RunCommand {
         command: Arc<str>,
         shell: ShellKind,
@@ -139,6 +140,10 @@ impl SearchEngine {
         cancelled: &impl Fn() -> bool,
     ) -> SearchBatch {
         match parse_query(query) {
+            ParsedQuery::Command {
+                kind: CommandKind::Update,
+                payload,
+            } => update_results(payload),
             ParsedQuery::Search(payload) if PowerAction::parse(payload).is_some() => {
                 power_results(payload)
             }
@@ -496,6 +501,25 @@ fn web_search(payload: &str) -> SearchBatch {
     }
 }
 
+fn update_results(payload: &str) -> SearchBatch {
+    if !payload.is_empty() {
+        return SearchBatch {
+            results: Vec::new(),
+            message: "Use @update without arguments",
+        };
+    }
+    SearchBatch {
+        results: vec![SearchResult {
+            kind: ResultKind::System,
+            id: "core:update".into(),
+            title: "Core updates".into(),
+            description: "Check update status or restart to install".into(),
+            action: Action::Update,
+        }],
+        message: "Enter to check for updates",
+    }
+}
+
 fn command_hints(prefix: &str) -> SearchBatch {
     let normalized = prefix.to_ascii_lowercase();
     let results = [
@@ -510,9 +534,11 @@ fn command_hints(prefix: &str) -> SearchBatch {
             "run",
             "Open a program, folder or URI like Win+R · / runs commands",
         ),
+        ("update", "Check Core updates or restart to install"),
     ]
     .into_iter()
     .filter(|(command, _)| command.starts_with(&normalized))
+    .take(VISIBLE_RESULT_LIMIT)
     .map(|(command, description)| SearchResult {
         kind: ResultKind::Command,
         id: command.into(),
@@ -531,6 +557,30 @@ fn command_hints(prefix: &str) -> SearchBatch {
 mod recent_tests {
     use super::*;
     use crate::applications::Application;
+
+    #[test]
+    fn update_is_an_explicit_command_and_accepts_no_payload() {
+        let mut engine = SearchEngine::default();
+        let catalog = ApplicationCatalog::default();
+        for query in ["@update", "@UPDATE "] {
+            assert_eq!(
+                engine.search(query, &catalog).results[0].action,
+                Action::Update
+            );
+        }
+        assert!(engine
+            .search("@update run.exe", &catalog)
+            .results
+            .is_empty());
+        assert_eq!(
+            engine.search("@u", &catalog).results[0].title.as_ref(),
+            "@update"
+        );
+        assert_eq!(
+            engine.search("@", &catalog).results.len(),
+            VISIBLE_RESULT_LIMIT
+        );
+    }
 
     #[test]
     fn an_empty_query_shows_recent_apps_and_typing_searches_as_before() {

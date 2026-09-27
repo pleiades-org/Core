@@ -25,6 +25,7 @@ const COMMAND_NAMES: &[&str] = &[
     "bash",
     "shell",
     "terminal",
+    "update",
 ];
 
 use super::ShellKind;
@@ -38,6 +39,7 @@ pub enum CommandKind {
     Quicklinks,
     Power,
     Taskbar,
+    Update,
     /// A shell command: `/ipconfig`, `@pwsh Get-Process`.
     Shell(ShellKind),
     /// A Windows Run-dialog target: `@run notepad`.
@@ -114,6 +116,7 @@ fn parse_command<'query>(command: &'query str, payload: &'query str) -> ParsedQu
         "power" => CommandKind::Power,
         "taskbar" | "tb" => CommandKind::Taskbar,
         "run" => CommandKind::Run,
+        "update" => CommandKind::Update,
         "shell" | "terminal" => CommandKind::Shell(ShellKind::Default),
         "cmd" => CommandKind::Shell(ShellKind::Cmd),
         "ps" | "powershell" => CommandKind::Shell(ShellKind::WindowsPowerShell),

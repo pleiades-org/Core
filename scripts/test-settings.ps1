@@ -44,12 +44,17 @@ try {
     [SettingsHarness]::CheckSidebar($window, $true)
     [ExtensionsHarness]::SetShortcut($window, 'Ctrl+Shift+F11')
     [SettingsHarness]::Choose($window, 242, 1)
+    foreach ($mode in 0..2) {
+        [SettingsHarness]::Choose($window, 256, $mode)
+        [SettingsHarness]::WaitSaved($window)
+    }
     [SettingsHarness]::Click($window, 243)
     [SettingsHarness]::WaitSaved($window)
     if (-not [SettingsHarness]::IsOpen($window)) { throw 'Autosave closed settings.' }
     $displayLabel = [WindowsHarness]::Text([WindowsHarness]::GetDlgItem($window, 242))
     $saved = Get-Content -LiteralPath $settingsFile -Raw
     if ($saved -notmatch 'shortcut=Ctrl\+Shift\+F11' -or $saved -notmatch 'startup=true' -or $displayLabel.StartsWith('Active')) { throw 'Automatic behaviour save failed.' }
+    if ($saved -notmatch 'updates=Off') { throw 'Update preference did not save.' }
     Stop-TestCore
     Start-TestCore
     [WindowsHarness]::PostMessageW($window, 0x8007, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
@@ -57,6 +62,7 @@ try {
     [SettingsHarness]::CheckPosition($window, 4)
     if ([WindowsHarness]::Text([WindowsHarness]::GetDlgItem($window, 200)) -ne '#123456') { throw 'Background was lost when saving behaviour.' }
     [SettingsHarness]::Click($window, 231)
+    if ([WindowsHarness]::Text([WindowsHarness]::GetDlgItem($window, 256)) -ne 'Off') { throw 'Update preference did not survive restart.' }
     if ([WindowsHarness]::Text([WindowsHarness]::GetDlgItem($window, 240)) -ne 'Ctrl+Shift+F11' -or
         [WindowsHarness]::Text([WindowsHarness]::GetDlgItem($window, 242)) -ne $displayLabel -or
         -not [WindowsHarness]::Text([WindowsHarness]::GetDlgItem($window, 243)).EndsWith('On')) { throw 'Behaviour preferences did not survive process restart.' }

@@ -1,5 +1,6 @@
 param(
     [string]$Executable = '',
+    [string]$SigningKeyPath = $env:CORE_RELEASE_SIGNING_KEY,
     # Adds checks that use the real foreground, mouse pointer and screen: click-away dismissal and
     # pointer hover. Leave the computer alone while they run.
     [switch]$Interactive,
@@ -30,6 +31,11 @@ $runs = @(
 )
 if ($Interactive) {
     $runs += @{ Script = 'test-dismissal.ps1'; Label = 'release-dismissal'; Extra = @() }
+}
+if ($SigningKeyPath) {
+    $runs += @{ Script = 'test-updates.ps1'; Label = 'release-updates'; Extra = @('-SigningKeyPath', $SigningKeyPath) }
+} else {
+    'SKIP  test-updates.ps1 (requires external release key via -SigningKeyPath)'
 }
 $failed = 0
 foreach ($run in $runs) {

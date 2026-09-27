@@ -226,6 +226,11 @@ impl LauncherState {
             }
         }
         self.finish_settings_if_ready();
+        self.update_service
+            .set_mode(self.settings.saved.preferences.updates);
+        if self.visible {
+            self.update_service.refresh(window);
+        }
         if self.visible {
             self.queue_search();
         }

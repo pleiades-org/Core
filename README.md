@@ -1,6 +1,6 @@
 # Core v2
 
-A small Windows launcher written in Rust. This is the first working alpha of the new implementation. The previous Core project remains separate.
+A small Windows launcher written in Rust. Version **2.1.0** brings the native v2 implementation to this repository; the previous implementation remains in Git history and earlier release tags. See the [2.1.0 release notes](docs/RELEASE_2.1.0.md).
 
 The [second 22 September release notes](docs/RELEASE_2026_09_22_B.md) add [smart conversions](docs/SMART_CONVERSIONS.md) (currency, units, download time, percentages, tips, bases, colours, Unix time, screens, loans and BMI) and website quicklink icons. The [first 22 September release notes](docs/RELEASE_2026_09_22.md) describe the app and tray icons, taskbar command, corner rounding and edge spacing sliders, logging and reliability fixes. The [21 September release notes](docs/RELEASE_2026_09_21.md) describe the expanded calculator, power menu, configurable shortcuts, monitor/startup settings and packaged-app discovery. Earlier benchmarks remain available in the [feature/performance comparison](docs/FEATURE_AND_PERFORMANCE_DIFF.md); each measurement identifies its tested executable.
 
@@ -10,6 +10,7 @@ The footer shows one hint for the selected action, such as **Enter to copy** or 
 
 | Input | Action |
 | --- | --- |
+| `@update` | Check signed-update status, restart to install a ready update, or open its release page |
 | Nothing typed | Recently used apps as a grid, like Start: up to 18, six across. Apps opened from Core come first, then apps Windows has seen you start (read locally from Windows' own usage record). Arrow keys move, Enter or a click opens |
 | `code`, `vsc`, `studio code`, `xbox` | Search Start Menu and registered packaged apps by name, word prefix, initials and substring |
 | `cmd`, `wt`, `taskmgr`, `regedit` | Windows aliases: the program a Start Menu shortcut starts (`cmd` finds Command Prompt) and Store apps' command names (`wt` finds Windows Terminal) |
@@ -48,6 +49,13 @@ The bottom-right power icon opens a recessed inline menu. All four power icons h
 
 ## Build and verify
 
+**Updates:** Settings > Behaviour > **Updates (GitHub)** offers **Automatic** (default),
+**Notify**, and **Off**. Core checks GitHub when shown, at most once per day, with a one-hour
+retry after errors. Automatic downloads a newer signed executable and installs it on exit;
+`@update` restarts now. Notify downloads only the manifest; Off disables update checks and
+installation. A read-only folder falls back to notification. Local search and calculations
+work without a network connection. See [signed updates, release signing and rollback](docs/UPDATES.md).
+
 Requires Windows, the Rust MSVC toolchain and Visual Studio C++ build tools. `rust-toolchain.toml` pins Rust 1.95.0. Cargo downloads dependencies on the first build. The normal launcher uses the existing `windows` bindings; the engine has no external dependencies. GPUI is an optional measurement feature and is absent from the normal binary.
 
 ```powershell
@@ -73,14 +81,14 @@ By default, Core uses a rounded, borderless OLED palette: pure-black background 
 - `crates/engine`: borrowed command parsing into an enum, arithmetic evaluation, time-expression parsing, prepared application catalog and deterministic ranking.
 - `crates/launcher`: native Win32 controls, Start Menu discovery, hotkey/tray, Windows actions and a blocking message loop.
 - One search worker retains its scratch storage. One pending request replaces older pending work. Generation checks reject stale results and stale Enter actions; canceled scans stop at bounded checkpoints.
-- App names and initials are prepared once. Catalogs of at least 128 entries can use a flat rarest-trigram index with a separate initials lookup. An index budget of 512 KiB and a bounded build protect memory; short queries and catalogs outside that budget use complete scanning. Only eight selected rows reach the UI.
-- Discovery runs once in the background, with depth and entry limits. Application matching does no disk access. Time conversions read Windows time-zone rules on the search worker; they never make network requests. Searching never uses the network. Two background features may, only while Core is shown: website-quicklink icons and the daily ECB exchange-rate file (cached in `%LOCALAPPDATA%\Pleiades\Core\v2\exchange-rates.xml`, refreshed when older than 12 hours).
+- App names and initials are prepared once. Catalogs of at least 128 entries use bounded bigram/trigram postings with a separate initials lookup. The retained index stays within 512 KiB; common grams can fall back to prefix ranges or a complete scan. Only eight selected rows reach the UI.
+- Discovery runs once in the background, with depth and entry limits. Application matching does no disk access. Time conversions read Windows time-zone rules on the search worker; they never make network requests. Searching never uses the network. Background features may contact the network when Core is shown: signed GitHub updates, website-quicklink icons and the ECB exchange-rate file (cached in `%LOCALAPPDATA%\Pleiades\Core\v2\exchange-rates.xml`, refreshed when older than 12 hours).
 - Separate sleeping workers load actual icons only for visible results: one extracts Shell icons, the other downloads website icons, so a slow site never delays app icons. Each keeps a 64-entry LRU cache of icons and failed lookups, and the window keeps the 128 icons it showed most recently so results that come back while typing keep their icon; evictions release native handles. Missing icons use the small generic symbol. No icon extraction runs in input handling, painting or application matching. Hidden idle has no application timer or periodic polling.
 
 ## Current limits
 
 This is a usable alpha release, not the entire original plan. Favorites/recent persistence, custom app aliases, catalog refresh notifications and typo correction remain pending. Quicklinks now support saved websites, files and folders. Discovery covers supported Start Menu files and registered packaged apps; restart Core after installing applications.
 
-Rows have application icons and folder descriptions; fuller duplicate-name disambiguation remains pending. Windows-key-only mode preserves tested combinations on the normal desktop; shortcut replay into elevated applications can be restricted by Windows. Secure-desktop, physical mixed-DPI, IME-candidate and screen-reader acceptance testing remains manual. Explorer-restart tray recovery remains hardening work. The portable build has no installer, signing or old-data migration. Line search is excluded.
+Rows have application icons and folder descriptions; fuller duplicate-name disambiguation remains pending. Windows-key-only mode preserves tested combinations on the normal desktop; shortcut replay into elevated applications can be restricted by Windows. Secure-desktop, physical mixed-DPI, IME-candidate and screen-reader acceptance testing remains manual. Explorer-restart tray recovery remains hardening work. The portable build has signed update manifests but no installer, Authenticode signing or old-data migration. Line search is excluded.
 
 See the [current feature/performance comparison](docs/FEATURE_AND_PERFORMANCE_DIFF.md), [initial implementation measurements](docs/IMPLEMENTATION_STATUS.md) and the [full plan](CORE_V2_PLAN.md). The comparison distinguishes implemented features, experiments and uncompleted release gates, including current click-away measurements.

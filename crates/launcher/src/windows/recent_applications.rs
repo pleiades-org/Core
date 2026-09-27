@@ -69,12 +69,11 @@ impl ApplicationAliases {
 }
 
 /// Windows' record as Core's identifiers, kept between shows. The registry is read again only
-/// after Windows has changed it, or after Core's apps (and so their aliases) have changed.
+/// after Windows has changed it or a known-folder path, or after Core's apps have changed.
 #[derive(Default)]
 pub struct WindowsRecent {
     /// Created by the first read, so probes never watch the registry.
     watch: Option<UsageWatch>,
-    folders: KnownFolders,
     /// `None` until read, and after `invalidate`.
     identifiers: Option<Vec<Arc<str>>>,
 }
@@ -89,7 +88,7 @@ impl WindowsRecent {
     pub fn refresh(&mut self, aliases: &ApplicationAliases) {
         let changed = self.watch.get_or_insert_with(UsageWatch::new).changed();
         if changed || self.identifiers.is_none() {
-            self.identifiers = Some(windows_recent(aliases, &mut self.folders));
+            self.identifiers = Some(windows_recent(aliases));
         }
     }
 
@@ -99,11 +98,13 @@ impl WindowsRecent {
 }
 
 /// Apps Windows has seen started, most recent first, as Core's identifiers.
-fn windows_recent(aliases: &ApplicationAliases, folders: &mut KnownFolders) -> Vec<Arc<str>> {
+fn windows_recent(aliases: &ApplicationAliases) -> Vec<Arc<str>> {
+    // Share resolutions within this read only; a moved folder must resolve afresh next time.
+    let mut folders = KnownFolders::default();
     first_distinct(
         user_assist::recent_usage()
             .iter()
-            .filter_map(|usage| aliases.resolve(&usage.name, folders)),
+            .filter_map(|usage| aliases.resolve(&usage.name, &mut folders)),
     )
 }
 

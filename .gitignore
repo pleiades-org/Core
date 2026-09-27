@@ -1,3 +1,5 @@
 .firecrawl/
 /target/
 /dist/
+# Release signing keys belong outside this repository.
+*.p8

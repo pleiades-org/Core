@@ -23,6 +23,13 @@ const KEYS: [&str; 2] = [
     r"Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\Count",
     r"Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist\{F4E57C4B-2036-45F0-A9AB-443BCFE33D9F}\Count",
 ];
+/// Folder relocation changes how UserAssist's GUID-prefixed paths resolve.
+const WATCHED_KEYS: [&str; 4] = [
+    KEYS[0],
+    KEYS[1],
+    r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders",
+    r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
+];
 /// Each record holds a run count at byte 4 and the last run time (a FILETIME) at byte 60.
 const LAST_USED_OFFSET: usize = 60;
 const MAX_VALUES: u32 = 10_000;
@@ -108,7 +115,7 @@ pub struct UsageWatch {
 impl UsageWatch {
     /// Create it before the first read, so no change after that read is missed.
     pub fn new() -> Self {
-        Self::watching(&KEYS)
+        Self::watching(&WATCHED_KEYS)
     }
 
     fn watching(paths: &[&'static str]) -> Self {
@@ -120,7 +127,7 @@ impl UsageWatch {
         }
     }
 
-    /// True if either key changed since the last call, or cannot be watched. A signalled key is
+    /// True if any key changed since the last call, or cannot be watched. A signalled key is
     /// re-armed before this returns, so a change made while the caller reads is reported next.
     pub fn changed(&mut self) -> bool {
         let mut changed = false;
@@ -228,7 +235,7 @@ fn rot13(text: &str) -> String {
         .collect()
 }
 
-/// Expands a leading known-folder ID, as in `{GUID}\rest`, remembering each folder.
+/// Expands a leading known-folder ID, as in `{GUID}\rest`, caching folders for one record read.
 #[derive(Default)]
 pub struct KnownFolders {
     folders: HashMap<String, Option<PathBuf>>,

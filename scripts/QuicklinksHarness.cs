@@ -70,7 +70,7 @@ public static class QuicklinksHarness
             throw new InvalidOperationException("Completing a row did not append a blank row");
         SetField(window, 303, "C:\\My Files"); SetField(window, 304, "Project Files");
         SetField(window, 306, "example.com/reference"); SetField(window, 307, "Référence");
-        SetField(window, 309, "https://example.com/4"); SetField(window, 310, "Quicklink 04");
+        SetField(window, 309, "STEAM://rungameid/1"); SetField(window, 310, "Quicklink 04");
         SettingsHarness.WaitSaved(window);
         CaptureTable(window, Path.Combine(directory, "quicklinks-table.bmp"));
         if (!WindowsHarness.IsWindowVisible(WindowsHarness.GetDlgItem(window, 320))) throw new InvalidOperationException("Growing table needs its scrollbar");
@@ -105,8 +105,9 @@ public static class QuicklinksHarness
         Scroll(window, 7);
         SetField(window, 309, "javascript:alert(1)"); SetField(window, 310, "Rejected target");
         SettingsHarness.Click(window, 221);
-        if (!SettingsHarness.IsOpen(window) || !WindowsHarness.Text(WindowsHarness.GetDlgItem(window, 222)).Contains("HTTP/HTTPS"))
-            throw new InvalidOperationException("Unsupported target was accepted");
+        string validationMessage = WindowsHarness.Text(WindowsHarness.GetDlgItem(window, 222));
+        if (!SettingsHarness.IsOpen(window) || !validationMessage.Contains("That link type is not allowed."))
+            throw new InvalidOperationException("Blocked app link did not show its validation error: " + validationMessage);
         SetField(window, 309, "https://example.com/31"); SetField(window, 310, "Project Files");
         if (!WindowsHarness.Text(WindowsHarness.GetDlgItem(window, 222)).Contains("unique")) throw new InvalidOperationException("Duplicate name accepted");
         SetField(window, 310, "Quicklink 31"); SettingsHarness.WaitSaved(window);
@@ -123,6 +124,9 @@ public static class QuicklinksHarness
         Query(window, "@quicklink Référence", "Référence");
         WindowsHarness.Enter(window);
         WindowsHarness.WaitFor(() => WindowsHarness.Text(WindowsHarness.GetDlgItem(window, 102)).Contains("no side effect"), "Quicklink did not reach dry-run activation");
+        Query(window, "> Quicklink 04", "Quicklink 04");
+        WindowsHarness.Enter(window);
+        WindowsHarness.WaitFor(() => WindowsHarness.Text(WindowsHarness.GetDlgItem(window, 102)).Contains("no side effect"), "App link did not reach dry-run activation");
         WindowsHarness.Query(window, "> Project Files");
         WindowsHarness.WaitFor(() => WindowsHarness.Count(window) == 0, "Deleted quicklink remained searchable");
         SettingsHarness.Open(window); SettingsHarness.Click(window, 232); Scroll(window, 7);

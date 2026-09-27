@@ -6,6 +6,7 @@ use super::{
     BackgroundColor, CornerRadius, DisplayChoice, EdgeSpacing, Preferences, ScreenPosition,
     SettingsDocument, Shortcut,
 };
+use crate::windows::updates::UpdateMode;
 use crate::windows::{
     button_hover, painting,
     theme::{scale, Fonts, Palette},
@@ -52,10 +53,12 @@ const SHORTCUT_HELP_ID: usize = 246;
 const SHELL_ID: usize = 247;
 const CLEAR_HISTORY_ID: usize = 248;
 const COMMANDS_LABEL_ID: usize = 249;
+const UPDATES_ID: usize = 256;
+const UPDATES_LABEL_ID: usize = 257;
 
 /// The display and shell dropdowns, whose own keys (Enter, Esc, arrows) must reach them.
 pub fn is_dropdown(identifier: usize) -> bool {
-    matches!(identifier, DISPLAY_ID | SHELL_ID)
+    matches!(identifier, DISPLAY_ID | SHELL_ID | UPDATES_ID)
 }
 const RADIUS_LABEL_ID: usize = 250;
 const RADIUS_ID: usize = 251;
@@ -118,6 +121,7 @@ pub struct SettingsPage {
     display_choices: RefCell<Vec<DisplayChoice>>,
     startup: Cell<bool>,
     shell: Cell<ShellKind>,
+    updates: Cell<UpdateMode>,
     dpi: Cell<u32>,
     fonts: Cell<Fonts>,
     save_failed: Cell<bool>,
@@ -147,6 +151,7 @@ impl SettingsPage {
             display_choices: RefCell::new(Vec::new()),
             startup: Cell::new(false),
             shell: Cell::new(ShellKind::Default),
+            updates: Cell::new(UpdateMode::default()),
             dpi: Cell::new(0),
             fonts: Cell::new(Fonts::default()),
             save_failed: Cell::new(false),
@@ -197,6 +202,7 @@ impl SettingsPage {
         page.add_dropdown(parent, instance, "Display", DISPLAY_ID)?;
         page.add_button(parent, instance, "Start with Windows: Off", STARTUP_ID)?;
         page.add_dropdown(parent, instance, "Commands run in", SHELL_ID)?;
+        page.add_dropdown(parent, instance, "Updates (contacts GitHub)", UPDATES_ID)?;
         page.add_button(parent, instance, "Clear command history", CLEAR_HISTORY_ID)?;
         let shortcut = page.add(
             parent,
@@ -213,6 +219,7 @@ impl SettingsPage {
             (SHORTCUT_LABEL_ID, "Open Core shortcut"),
             (DISPLAY_LABEL_ID, "Display"),
             (COMMANDS_LABEL_ID, "Commands run in"),
+            (UPDATES_LABEL_ID, "Updates (GitHub)"),
             (
                 SHORTCUT_HELP_ID,
                 "Example: Ctrl+Alt+Space. Win replaces Start when tapped.",
@@ -337,7 +344,7 @@ impl SettingsPage {
         } else {
             w!("CFD")
         };
-        for identifier in [DISPLAY_ID, SHELL_ID] {
+        for identifier in [DISPLAY_ID, SHELL_ID, UPDATES_ID] {
             unsafe {
                 let _ = SetWindowTheme(self.control(identifier), theme, PCWSTR::null());
             }
@@ -376,6 +383,7 @@ impl SettingsPage {
         self.display.set(settings.display);
         self.startup.set(settings.startup);
         self.shell.set(settings.shell);
+        self.updates.set(settings.updates);
         self.set_text(self.control(SHORTCUT_ID), &settings.shortcut.to_string());
         match crate::windows::displays::connected() {
             Ok(displays) => *self.displays.borrow_mut() = displays,
@@ -407,6 +415,7 @@ impl SettingsPage {
                 display: self.display.get(),
                 startup: self.startup.get(),
                 shell: self.shell.get(),
+                updates: self.updates.get(),
                 corner_radius: CornerRadius::new(slider::position(self.control(RADIUS_ID))),
                 edge_spacing: EdgeSpacing::new(slider::position(self.control(SPACING_ID))),
             },
@@ -439,7 +448,7 @@ impl SettingsPage {
             }
             return SettingsAction::Edit;
         }
-        if matches!(identifier, DISPLAY_ID | SHELL_ID) {
+        if matches!(identifier, DISPLAY_ID | SHELL_ID | UPDATES_ID) {
             return if notification == CBN_SELCHANGE {
                 self.choose(identifier);
                 SettingsAction::Change
@@ -572,6 +581,7 @@ impl SettingsPage {
                 | STATUS_ID => true,
                 RETRY_ID => self.save_failed.get(),
                 SHORTCUT_ID..=COMMANDS_LABEL_ID => self.section.get() == Section::Behaviour,
+                UPDATES_ID | UPDATES_LABEL_ID => self.section.get() == Section::Behaviour,
                 _ => self.section.get() == Section::Appearance,
             };
             unsafe {
@@ -647,6 +657,15 @@ impl SettingsPage {
             .position(|shell| *shell == self.shell.get())
             .unwrap_or(0);
         self.set_items(SHELL_ID, &shells, shell);
+        let labels: Vec<_> = UpdateMode::ALL
+            .iter()
+            .map(|mode| mode.label().to_owned())
+            .collect();
+        let selected = UpdateMode::ALL
+            .iter()
+            .position(|mode| *mode == self.updates.get())
+            .unwrap_or(0);
+        self.set_items(UPDATES_ID, &labels, selected);
     }
 
     fn set_items(&self, identifier: usize, labels: &[String], selected: usize) {
@@ -676,6 +695,11 @@ impl SettingsPage {
             DISPLAY_ID => {
                 if let Some(choice) = self.display_choices.borrow().get(index) {
                     self.display.set(*choice);
+                }
+            }
+            UPDATES_ID => {
+                if let Some(mode) = UpdateMode::ALL.get(index) {
+                    self.updates.set(*mode);
                 }
             }
             _ => {
@@ -798,6 +822,18 @@ impl SettingsPage {
                 ),
                 SHORTCUT_HELP_ID => (content_left, SHORTCUT_HELP_TOP, content_width, 26),
                 DISPLAY_LABEL_ID => (content_left, DISPLAY_LABEL_TOP, LABEL_WIDTH, LABEL_HEIGHT),
+                UPDATES_LABEL_ID => (
+                    content_left + FIELD_WIDTH + 16,
+                    DISPLAY_LABEL_TOP,
+                    CLEAR_HISTORY_WIDTH,
+                    LABEL_HEIGHT,
+                ),
+                UPDATES_ID => (
+                    content_left + FIELD_WIDTH + 16,
+                    DISPLAY_TOP + DROPDOWN_OFFSET,
+                    CLEAR_HISTORY_WIDTH,
+                    DROPDOWN_LIST_HEIGHT,
+                ),
                 DISPLAY_ID => (
                     content_left,
                     DISPLAY_TOP + DROPDOWN_OFFSET,
@@ -840,6 +876,8 @@ impl SettingsPage {
                             | DISPLAY_LABEL_ID
                             | COMMANDS_LABEL_ID
                             | DISPLAY_ID
+                            | UPDATES_ID
+                            | UPDATES_LABEL_ID
                             | SHELL_ID
                             | RADIUS_LABEL_ID
                             | SPACING_LABEL_ID

@@ -2,6 +2,7 @@ mod command_flow;
 pub use command_flow::{run_mode, COMMAND_OUTPUT_TIMER};
 mod footer;
 mod settings_flow;
+mod update_flow;
 
 use super::{
     discover_applications::Discovery,
@@ -102,6 +103,8 @@ impl Options {
 }
 
 pub struct LauncherState {
+    pub update_service: super::updates::UpdateService,
+    pub restart_for_update: bool,
     pub view: Option<Rc<View>>,
     pub transition: VisibilityTransition,
     pub worker: Option<SearchWorker>,
@@ -168,6 +171,11 @@ impl LauncherState {
             None => RateSource::Disabled,
         };
         Self {
+            update_service: super::updates::UpdateService::new(
+                options.network && !options.dry_run && !options.probe,
+                settings.saved.preferences.updates,
+            ),
+            restart_for_update: false,
             view: None,
             transition: VisibilityTransition::new(options.motion),
             worker: None,
@@ -464,6 +472,7 @@ impl LauncherState {
             self.transition.set_visible(window, visible);
             if visible {
                 self.rate_service.refresh(window);
+                self.update_service.refresh(window);
                 self.queue_search();
                 if !self.options.background_for_test {
                     take_foreground(window);
@@ -541,6 +550,10 @@ impl LauncherState {
             return;
         }
         self.pending_action = Some(match action {
+            Action::Update => {
+                self.accept_update();
+                return;
+            }
             Action::LaunchApplication(identifier) => {
                 let Some(path) = self.targets.get(&identifier).cloned() else {
                     view.set_footer("This application is no longer available");

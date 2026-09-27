@@ -55,11 +55,17 @@ const TEST_QUEUE_FENCE: u32 = WM_APP + 10;
 struct WindowContext {
     state: RefCell<LauncherState>,
     view: OnceCell<Rc<View>>,
+    update_startup: RefCell<super::updates::handoff::Startup>,
 }
 
 pub fn run() -> windows::core::Result<()> {
     super::diagnostics::redirect_stderr_to_log();
-    let _apartment = UiApartment::initialize()?;
+    let update_error =
+        |error: super::updates::UpdateError| windows::core::Error::new(E_FAIL, error.to_string());
+    if super::updates::handoff::dispatch().map_err(update_error)? {
+        return Ok(());
+    }
+    super::updates::handoff::wait_for_previous().map_err(update_error)?;
     let options = Options::read();
     let _instance = if options.probe || options.dry_run {
         None
@@ -70,9 +76,14 @@ pub fn run() -> windows::core::Result<()> {
         }
         instance
     };
+    let update_startup =
+        super::updates::handoff::Startup::prepare(options.probe || options.dry_run)
+            .map_err(update_error)?;
+    let _apartment = UiApartment::initialize()?;
     let context = Box::new(WindowContext {
         state: RefCell::new(LauncherState::new(options)),
         view: OnceCell::new(),
+        update_startup: RefCell::new(update_startup),
     });
     let shell = &context.state;
     unsafe {
@@ -129,9 +140,17 @@ pub fn run() -> windows::core::Result<()> {
                 eprintln!("Core's tray icon is waiting for the taskbar: {error}");
             }
             shell.borrow_mut().tray = Some(tray);
-            if !options.hidden {
+            if !options.hidden || context.update_startup.borrow().pending() {
                 shell.borrow_mut().set_visible(window, true);
             }
+        }
+        if context.update_startup.borrow().pending() {
+            SetTimer(
+                Some(window),
+                super::updates::handoff::STARTUP_TIMER,
+                50,
+                None,
+            );
         }
         message_loop(window, shell)?;
         shell.borrow_mut().binding.take();
@@ -382,6 +401,9 @@ unsafe extern "system" fn window_proc(
                         state.close_after_save = true;
                         return LRESULT(0);
                     }
+                    if !state.finish_update_exit() {
+                        return LRESULT(0);
+                    }
                     state.worker.take();
                     state.icon_worker.take();
                     state.foreground_observer.take();
@@ -453,6 +475,25 @@ unsafe extern "system" fn window_proc(
         return DefWindowProcW(window, message, word, long);
     };
     let result = match message {
+        WM_QUERYENDSESSION => LRESULT(1),
+        WM_ENDSESSION if word.0 != 0 => {
+            shell.restart_for_update = false;
+            shell.flush_settings(window);
+            // Windows may end the process before an asynchronous preference save completes.
+            // Keep the stage for a later exit rather than install against a pending Off/Notify.
+            if !shell.settings.is_saving() {
+                shell.finish_update_exit();
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if word.0 == super::updates::handoff::STARTUP_TIMER => {
+            context.update_startup.borrow_mut().confirm_visible(window);
+            LRESULT(0)
+        }
+        super::updates::UPDATE_READY => {
+            shell.refresh_footer();
+            LRESULT(0)
+        }
         TEST_QUEUE_FENCE if shell.options.dry_run => {
             // Test commands are posted like user input. A posted acknowledgement avoids
             // inspecting a half-finished layout through reentrant SendMessage callbacks.

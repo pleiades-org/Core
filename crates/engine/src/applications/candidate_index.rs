@@ -1,10 +1,10 @@
-use std::cmp::Reverse;
+use std::{cmp::Reverse, collections::HashMap};
 
 const MIN_INDEXED_APPLICATIONS: usize = 128;
 const INDEX_BYTE_BUDGET: usize = 512 * 1024;
-const BUILD_PAIR_LIMIT: usize = 256 * 1024;
-/// Marks a gram left out of the postings because so many names contain it. Grams use only the
-/// low three bytes, so the top bit is free.
+const BIGRAM: u32 = 1 << 24;
+/// Marks a gram left out of the postings because so many names contain it. The top bit is
+/// separate from the gram bytes and the bigram tag.
 const UNINDEXED: u32 = 1 << 31;
 
 /// Where a gram's postings start; they end where the next gram's start.
@@ -24,68 +24,67 @@ pub(super) struct CandidateIndex {
 }
 
 impl CandidateIndex {
-    pub fn build<'name>(names: impl ExactSizeIterator<Item = &'name str>) -> Option<Self> {
+    pub fn build<'name>(names: impl ExactSizeIterator<Item = &'name str> + Clone) -> Option<Self> {
         if names.len() < MIN_INDEXED_APPLICATIONS || names.len() > usize::from(u16::MAX) {
             return None;
         }
         // The catalog's initials order shares the budget: four bytes per name.
         let budget = INDEX_BYTE_BUDGET.checked_sub(names.len() * std::mem::size_of::<u32>())?;
-        let mut pairs = Vec::new();
-        for (ordinal, name) in names.enumerate() {
-            for bytes in name.as_bytes().windows(3) {
-                if pairs.len() == BUILD_PAIR_LIMIT {
-                    return None;
-                }
-                pairs.push((gram(bytes), ordinal as u16));
-            }
-        }
-        pairs.sort_unstable();
-        pairs.dedup();
-        let mut counts: Vec<(u32, usize)> = Vec::new();
-        for &(gram, _) in &pairs {
-            match counts.last_mut() {
-                Some((last, count)) if *last == gram => *count += 1,
-                _ => counts.push((gram, 1)),
-            }
-        }
+        let counts = count_grams(names.clone(), budget)?;
         let unindexed = common_grams(&counts, budget)?;
+        Some(Self::with_postings(names, &counts, &unindexed))
+    }
+
+    /// Allocate only the postings that fit, then fill each range in catalog order.
+    fn with_postings<'name>(
+        names: impl Iterator<Item = &'name str>,
+        counts: &[(u32, usize)],
+        unindexed: &[bool],
+    ) -> Self {
         let mut ranges = Vec::with_capacity(counts.len());
-        let mut postings = Vec::with_capacity(pairs.len());
-        let mut pairs = pairs.into_iter();
-        for (&(gram, count), &unindexed) in counts.iter().zip(&unindexed) {
+        let mut cursors = HashMap::new();
+        let mut posting_count = 0;
+        for (&(gram, count), &unindexed) in counts.iter().zip(unindexed) {
             ranges.push(GramRange {
                 gram: if unindexed { gram | UNINDEXED } else { gram },
-                start: postings.len() as u32,
+                start: posting_count as u32,
             });
-            let ordinals = pairs.by_ref().take(count).map(|(_, ordinal)| ordinal);
-            if unindexed {
-                ordinals.for_each(drop);
-            } else {
-                postings.extend(ordinals);
+            if !unindexed {
+                cursors.insert(gram, (posting_count, usize::MAX));
+                posting_count += count;
             }
         }
-        Some(Self {
+        let mut postings = vec![0; posting_count];
+        for (ordinal, name) in names.enumerate() {
+            for gram in name_grams(name) {
+                if let Some((cursor, last_ordinal)) = cursors.get_mut(&gram) {
+                    if *last_ordinal != ordinal {
+                        postings[*cursor] = ordinal as u16;
+                        *cursor += 1;
+                        *last_ordinal = ordinal;
+                    }
+                }
+            }
+        }
+        Self {
             ranges: ranges.into_boxed_slice(),
             postings: postings.into_boxed_slice(),
-        })
+        }
     }
 
     pub fn memory_bytes(&self) -> usize {
         std::mem::size_of_val(&*self.ranges) + std::mem::size_of_val(&*self.postings)
     }
 
-    /// None requests another path: short words, or only grams too common to index. An empty
+    /// None requests another path: single-byte words, or only grams too common to index. An empty
     /// slice proves no strict match. Grams come from individual terms so reordered word queries
     /// remain complete.
     pub fn candidates(&self, query: &str) -> Option<&[u16]> {
         let mut shortest: Option<&[u16]> = None;
-        for bytes in query
-            .split_whitespace()
-            .flat_map(|word| word.as_bytes().windows(3))
-        {
+        for gram in query.split_whitespace().flat_map(query_grams) {
             let Ok(position) = self
                 .ranges
-                .binary_search_by_key(&gram(bytes), |range| range.gram & !UNINDEXED)
+                .binary_search_by_key(&gram, |range| range.gram & !UNINDEXED)
             else {
                 return Some(&[]);
             };
@@ -107,6 +106,45 @@ impl CandidateIndex {
     }
 }
 
+/// Count each gram once per name without retaining raw pairs. Only the distinct ranges can
+/// exhaust this budget; long names and repeated grams do not turn off the whole index.
+fn count_grams<'name>(
+    names: impl Iterator<Item = &'name str>,
+    budget: usize,
+) -> Option<Vec<(u32, usize)>> {
+    let mut counts = HashMap::new();
+    for (ordinal, name) in names.enumerate() {
+        for gram in name_grams(name) {
+            let (count, last_ordinal) = counts.entry(gram).or_insert((0, usize::MAX));
+            if *last_ordinal != ordinal {
+                *count += 1;
+                *last_ordinal = ordinal;
+            }
+            if counts.len() > budget / std::mem::size_of::<GramRange>() {
+                return None;
+            }
+        }
+    }
+    let mut counts: Vec<_> = counts
+        .into_iter()
+        .map(|(gram, (count, _))| (gram, count))
+        .collect();
+    counts.sort_unstable_by_key(|&(gram, _)| gram);
+    Some(counts)
+}
+
+fn name_grams(name: &str) -> impl Iterator<Item = u32> + '_ {
+    name.as_bytes()
+        .windows(3)
+        .map(gram)
+        .chain(name.as_bytes().windows(2).map(gram))
+}
+
+fn query_grams(word: &str) -> impl Iterator<Item = u32> + '_ {
+    let width = if word.len() == 2 { 2 } else { 3 };
+    word.as_bytes().windows(width).map(gram)
+}
+
 /// Which grams to leave out, most common first, so ranges and postings fit `budget` bytes.
 /// Every gram keeps its range, so an absent gram still proves no match. `None` if even the
 /// ranges alone do not fit.
@@ -117,7 +155,15 @@ fn common_grams(counts: &[(u32, usize)], budget: usize) -> Option<Vec<bool>> {
     let mut unindexed = vec![false; counts.len()];
     if range_bytes + posting_bytes > budget {
         let mut most_common: Vec<usize> = (0..counts.len()).collect();
-        most_common.sort_unstable_by_key(|&position| (Reverse(counts[position].1), position));
+        // Equal-frequency bigrams narrow less than trigrams and have the prefix fallback.
+        // Drop them first so adding short-query coverage does not displace useful trigrams.
+        most_common.sort_unstable_by_key(|&position| {
+            (
+                Reverse(counts[position].1),
+                Reverse(counts[position].0 & BIGRAM),
+                position,
+            )
+        });
         for position in most_common {
             if range_bytes + posting_bytes <= budget {
                 break;
@@ -130,7 +176,8 @@ fn common_grams(counts: &[(u32, usize)], budget: usize) -> Option<Vec<bool>> {
 }
 
 fn gram(bytes: &[u8]) -> u32 {
-    u32::from(bytes[0]) | (u32::from(bytes[1]) << 8) | (u32::from(bytes[2]) << 16)
+    let suffix = bytes.get(2).map_or(BIGRAM, |&byte| u32::from(byte) << 16);
+    u32::from(bytes[0]) | (u32::from(bytes[1]) << 8) | suffix
 }
 
 #[cfg(test)]
@@ -138,18 +185,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tiny_catalogs_and_excessive_build_work_use_the_scan_fallback() {
+    fn tiny_catalogs_scan_but_long_repeated_names_keep_an_index() {
         assert!(CandidateIndex::build(["small app"].into_iter()).is_none());
         let long_name = "x".repeat(3000);
-        assert!(CandidateIndex::build(std::iter::repeat_n(long_name.as_str(), 128)).is_none());
+        let index = CandidateIndex::build(std::iter::repeat_n(long_name.as_str(), 128)).unwrap();
+        assert_eq!(index.candidates("xxx").unwrap().len(), 128);
+        assert_eq!(index.candidates("xx").unwrap().len(), 128);
+        assert_eq!(index.candidates("xz"), Some(&[][..]));
     }
 
     #[test]
     fn the_most_common_grams_are_left_out_to_fit_the_budget() {
-        // 25 grams per name: about 500 KiB of postings, over the 472 KiB left beside the
-        // initials order.
+        // Long names exceed the old raw-pair limit and the retained posting budget, while
+        // their rare grams still fit alongside the initials order.
         let names: Vec<String> = (0..10_000)
-            .map(|index| format!("portableofficesuitepro{index:05}"))
+            .map(|index| format!("portableofficesuiteprofessionalextendededition{index:05}"))
             .collect();
         let index = CandidateIndex::build(names.iter().map(String::as_str)).expect("index");
         assert!(index.memory_bytes() + names.len() * 4 <= INDEX_BYTE_BUDGET);
@@ -157,16 +207,18 @@ mod tests {
             .ranges
             .iter()
             .filter(|range| range.gram & UNINDEXED != 0)
-            .map(|range| String::from_utf8(range.gram.to_le_bytes()[..3].to_vec()).unwrap())
+            .map(|range| {
+                let width = if range.gram & BIGRAM != 0 { 2 } else { 3 };
+                String::from_utf8(range.gram.to_le_bytes()[..width].to_vec()).unwrap()
+            })
             .collect();
         assert!(!unindexed.is_empty());
         // Every name contains them, so they narrow nothing; rarer grams still do.
         for gram in &unindexed {
             assert_eq!(index.candidates(gram), None, "{gram}");
         }
-        assert!(index.candidates("portable").is_some());
         assert!(index
-            .candidates("pro01234")
+            .candidates("edition01234")
             .is_some_and(|posting| posting.len() < 200 && posting.contains(&1234)));
         // An absent gram still proves there is no match.
         assert_eq!(index.candidates("zzz"), Some(&[][..]));
@@ -181,7 +233,8 @@ mod tests {
         assert_eq!(index.candidates("199").map(<[u16]>::len), Some(1));
         // `pp ` is followed by the digit grams; the last gram ends with the postings.
         let last = index.ranges.last().unwrap().gram & !UNINDEXED;
-        let last = String::from_utf8(last.to_le_bytes()[..3].to_vec()).unwrap();
+        let width = if last & BIGRAM != 0 { 2 } else { 3 };
+        let last = String::from_utf8(last.to_le_bytes()[..width].to_vec()).unwrap();
         assert!(index
             .candidates(&last)
             .is_some_and(|posting| !posting.is_empty()));

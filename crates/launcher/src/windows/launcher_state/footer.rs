@@ -5,6 +5,16 @@ impl LauncherState {
     /// Keep the footer tied to the selected action while preserving errors and run status.
     pub fn refresh_footer(&self) {
         let Some(view) = &self.view else { return };
+        if view.query().trim().eq_ignore_ascii_case("@update") {
+            view.set_footer(&self.update_hint());
+            return;
+        }
+        if view.query().is_empty() {
+            if let Some(notice) = self.update_notice() {
+                view.set_footer(&notice);
+                return;
+            }
+        }
         if view.output_visible() {
             if let Some(status) = self.command_status() {
                 view.set_footer(&status);
@@ -34,6 +44,7 @@ fn action_hint(action: &Action) -> &'static str {
         Action::FillQuery(_) => "Enter to select",
         Action::Power(_) => "Enter to confirm",
         Action::RevealTaskbar => "Enter to show taskbar",
+        Action::Update => "Enter to check for updates",
         Action::RunCommand {
             mode: RunMode::Elevated,
             ..
