@@ -1,7 +1,6 @@
 use super::candidate_index::CandidateIndex;
 use crate::search::{normalize, normalize_into};
 use std::{
-    cmp::Reverse,
     collections::HashMap,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -13,6 +12,12 @@ use std::{
 static NEXT_IDENTITY: AtomicU64 = AtomicU64::new(1);
 /// `SearchScratch::slots` value for an application with no candidate in the current search.
 const NO_SLOT: usize = usize::MAX;
+/// Launch counts above this rank the same.
+const LAUNCH_CAP: u32 = 1000;
+/// `Candidate` bit layout, low to high: ordinal, capped launches (10 bits), unpinned, class.
+const LAUNCH_SHIFT: u32 = 32;
+const UNPINNED_SHIFT: u32 = LAUNCH_SHIFT + 10;
+const CLASS_SHIFT: u32 = UNPINNED_SHIFT + 1;
 
 #[derive(Clone, Debug)]
 pub struct Application {
@@ -31,13 +36,51 @@ struct PreparedApplication {
     application: Application,
     normalized_name: String,
     initials: String,
+    /// Where each word of the normalized name starts, so searches need not split it again.
+    /// Empty for names too long for 16-bit offsets, which are split when searched.
+    word_starts: Box<[u16]>,
+}
+
+impl PreparedApplication {
+    /// Whether a word of the name (a run of letters and digits) starts with `term`. A term with
+    /// any other character can never start a word.
+    fn has_word_starting_with(&self, term: &str) -> bool {
+        let name = &self.normalized_name;
+        if !term.chars().all(char::is_alphanumeric) {
+            return false;
+        }
+        if name.len() > usize::from(u16::MAX) {
+            return name
+                .split(|character: char| !character.is_alphanumeric())
+                .any(|word| word.starts_with(term));
+        }
+        self.word_starts
+            .iter()
+            .any(|&start| name[usize::from(start)..].starts_with(term))
+    }
+}
+
+fn word_starts(name: &str) -> Box<[u16]> {
+    if name.len() > usize::from(u16::MAX) {
+        return Box::default();
+    }
+    let mut starts = Vec::new();
+    let mut in_word = false;
+    for (offset, character) in name.char_indices() {
+        let alphanumeric = character.is_alphanumeric();
+        if alphanumeric && !in_word {
+            starts.push(offset as u16);
+        }
+        in_word = alphanumeric;
+    }
+    starts.into_boxed_slice()
 }
 
 #[derive(Debug, Default)]
 pub struct ApplicationCatalog {
     applications: Vec<PreparedApplication>,
     index: Option<CandidateIndex>,
-    initials_order: Box<[usize]>,
+    initials_order: Box<[u32]>,
     /// Normalized alias and the application it belongs to, sorted by alias.
     aliases: Box<[(String, usize)]>,
     /// Identifier to the first ordinal listing it, for resolving recent apps.
@@ -55,12 +98,31 @@ enum MatchClass {
     Substring,
 }
 
+/// The ranking order packed into one integer: match class, then pinned first, then more
+/// launches, then catalog order (normalized name, then ID). Catalogs hold far fewer than
+/// 2^32 apps, so the ordinal fits the low 32 bits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct Candidate {
-    class: MatchClass,
-    unpinned: bool,
-    launches: Reverse<u32>,
-    ordinal: usize,
+struct Candidate(u64);
+
+impl Candidate {
+    fn new(class: MatchClass, pinned: bool, launches: u32, ordinal: usize) -> Self {
+        Self(
+            (class as u64) << CLASS_SHIFT
+                | u64::from(!pinned) << UNPINNED_SHIFT
+                | u64::from(LAUNCH_CAP - launches.min(LAUNCH_CAP)) << LAUNCH_SHIFT
+                | ordinal as u64,
+        )
+    }
+
+    fn ordinal(self) -> usize {
+        (self.0 & u64::from(u32::MAX)) as usize
+    }
+
+    /// Keeps the better of its class and `class`.
+    fn improve(&mut self, class: MatchClass) {
+        let class = (class as u64).min(self.0 >> CLASS_SHIFT);
+        self.0 = self.0 & ((1 << CLASS_SHIFT) - 1) | class << CLASS_SHIFT;
+    }
 }
 
 #[derive(Default)]
@@ -74,7 +136,7 @@ pub struct SearchScratch {
 impl SearchScratch {
     fn reset(&mut self, application_count: usize) {
         for candidate in &self.candidates {
-            self.slots[candidate.ordinal] = NO_SLOT;
+            self.slots[candidate.ordinal()] = NO_SLOT;
         }
         self.candidates.clear();
         if self.slots.len() < application_count {
@@ -105,6 +167,7 @@ impl ApplicationCatalog {
                     .collect();
                 PreparedApplication {
                     application,
+                    word_starts: word_starts(&normalized_name),
                     normalized_name,
                     initials,
                 }
@@ -120,15 +183,16 @@ impl ApplicationCatalog {
                 .iter()
                 .map(|prepared| prepared.normalized_name.as_str()),
         );
+        // The index exists only for catalogs of at most 65,535 names, so ordinals fit.
         let mut initials_order = if index.is_some() {
-            (0..applications.len()).collect::<Vec<_>>()
+            (0..applications.len() as u32).collect::<Vec<_>>()
         } else {
             Vec::new()
         };
         initials_order.sort_unstable_by(|&left, &right| {
-            applications[left]
+            applications[left as usize]
                 .initials
-                .cmp(&applications[right].initials)
+                .cmp(&applications[right as usize].initials)
                 .then(left.cmp(&right))
         });
         let mut aliases: Vec<(String, usize)> = applications
@@ -228,15 +292,19 @@ impl ApplicationCatalog {
         scratch: &mut SearchScratch,
         cancelled: &impl Fn() -> bool,
     ) -> Vec<RankedApplication<'catalog>> {
-        let candidates = self
+        let collected = match self
             .index
             .as_ref()
-            .and_then(|index| index.candidates(normalized));
-        if let Some(candidates) = candidates {
-            if !self.collect_indexed(normalized, candidates, scratch, cancelled) {
-                return Vec::new();
+            .map(|index| index.candidates(normalized))
+        {
+            Some(Some(candidates)) => {
+                self.collect_indexed(normalized, candidates, scratch, cancelled)
             }
-        } else if !self.collect_scanned(normalized, scratch, cancelled) {
+            // No gram narrows the search: one or two letters, or only very common grams.
+            Some(None) if self.collect_prefixed(normalized, limit, scratch, cancelled) => true,
+            _ => self.collect_scanned(normalized, scratch, cancelled),
+        };
+        if !collected {
             return Vec::new();
         }
         self.collect_aliases(normalized, scratch);
@@ -248,9 +316,45 @@ impl ApplicationCatalog {
         scratch.candidates[..count]
             .iter()
             .map(|candidate| RankedApplication {
-                application: &self.applications[candidate.ordinal].application,
+                application: &self.applications[candidate.ordinal()].application,
             })
             .collect()
+    }
+
+    /// Names starting with the query are one range of the sorted catalog, as are aliases, and
+    /// match exactly or as a prefix. Every other app ranks as a word prefix or lower, below
+    /// all of them, so when they number at least `limit` the rest of the catalog cannot place
+    /// and is not scanned. The whole range is still ranked, so pins and launch counts order it.
+    /// This differs from the alphabetical early exit that CORE_SEARCH_EXPERIMENTS.md rejects:
+    /// that one kept only the first `limit` names of the range, which pins and launches reorder.
+    /// False when the scan is still needed, with the scratch left empty for it.
+    fn collect_prefixed(
+        &self,
+        query: &str,
+        limit: usize,
+        scratch: &mut SearchScratch,
+        cancelled: &impl Fn() -> bool,
+    ) -> bool {
+        let start = self
+            .applications
+            .partition_point(|prepared| prepared.normalized_name.as_str() < query);
+        let length = self.applications[start..]
+            .partition_point(|prepared| prepared.normalized_name.starts_with(query));
+        for (checked, ordinal) in (start..start + length).enumerate() {
+            if checked % 64 == 0 && cancelled() {
+                scratch.reset(self.applications.len());
+                return false;
+            }
+            if let Some(class) = match_class(&self.applications[ordinal], query) {
+                self.push_candidate(ordinal, class, scratch);
+            }
+        }
+        self.collect_aliases(query, scratch);
+        if scratch.candidates.len() >= limit {
+            return true;
+        }
+        scratch.reset(self.applications.len());
+        false
     }
 
     fn collect_scanned(
@@ -273,7 +377,7 @@ impl ApplicationCatalog {
     fn collect_indexed(
         &self,
         query: &str,
-        candidates: &[u32],
+        candidates: &[u16],
         scratch: &mut SearchScratch,
         cancelled: &impl Fn() -> bool,
     ) -> bool {
@@ -284,26 +388,26 @@ impl ApplicationCatalog {
             if checked % 64 == 0 && cancelled() {
                 return false;
             }
-            if let Some(class) = match_class(&self.applications[ordinal as usize], query) {
+            if let Some(class) = match_class(&self.applications[usize::from(ordinal)], query) {
                 if class != MatchClass::Acronym {
-                    self.push_candidate(ordinal as usize, class, scratch);
+                    self.push_candidate(usize::from(ordinal), class, scratch);
                 }
             }
         }
         // Initials are a different match relation: exact query grams must not filter them out.
-        let start = self
-            .initials_order
-            .partition_point(|&ordinal| self.applications[ordinal].initials.as_str() < query);
+        let start = self.initials_order.partition_point(|&ordinal| {
+            self.applications[ordinal as usize].initials.as_str() < query
+        });
         for (checked, &ordinal) in self.initials_order[start..].iter().enumerate() {
             if checked % 64 == 0 && cancelled() {
                 return false;
             }
-            let prepared = &self.applications[ordinal];
+            let prepared = &self.applications[ordinal as usize];
             if !prepared.initials.starts_with(query) {
                 break;
             }
             if match_class(prepared, query) == Some(MatchClass::Acronym) {
-                self.push_candidate(ordinal, MatchClass::Acronym, scratch);
+                self.push_candidate(ordinal as usize, MatchClass::Acronym, scratch);
             }
         }
         true
@@ -328,10 +432,7 @@ impl ApplicationCatalog {
             };
             match scratch.slots[*ordinal] {
                 NO_SLOT => self.push_candidate(*ordinal, class, scratch),
-                slot => {
-                    let existing = &mut scratch.candidates[slot];
-                    existing.class = existing.class.min(class);
-                }
+                slot => scratch.candidates[slot].improve(class),
             }
         }
     }
@@ -339,12 +440,12 @@ impl ApplicationCatalog {
     fn push_candidate(&self, ordinal: usize, class: MatchClass, scratch: &mut SearchScratch) {
         let application = &self.applications[ordinal].application;
         scratch.slots[ordinal] = scratch.candidates.len();
-        scratch.candidates.push(Candidate {
+        scratch.candidates.push(Candidate::new(
             class,
-            unpinned: !application.pinned,
-            launches: Reverse(application.launches.min(1000)),
+            application.pinned,
+            application.launches,
             ordinal,
-        });
+        ));
     }
 }
 
@@ -356,10 +457,10 @@ fn match_class(prepared: &PreparedApplication, query: &str) -> Option<MatchClass
     if name.starts_with(query) {
         return Some(MatchClass::Prefix);
     }
-    if query.split_whitespace().all(|term| {
-        name.split(|character: char| !character.is_alphanumeric())
-            .any(|word| word.starts_with(term))
-    }) {
+    if query
+        .split_whitespace()
+        .all(|term| prepared.has_word_starting_with(term))
+    {
         return Some(MatchClass::WordPrefix);
     }
     if prepared.initials.starts_with(query) {
@@ -371,6 +472,7 @@ fn match_class(prepared: &PreparedApplication, query: &str) -> Option<MatchClass
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cmp::Reverse;
     fn application(identifier: &str, name: &str, pinned: bool) -> Application {
         Application {
             id: identifier.into(),
@@ -558,6 +660,233 @@ mod tests {
         assert!(results.is_empty());
         assert_eq!(checks.get(), 2);
         assert_eq!(catalog.search("editor", 8, &mut scratch).len(), 8);
+    }
+
+    /// The indexed catalog and a copy that always scans, which is the reference.
+    fn indexed_and_scanned(
+        applications: Vec<Application>,
+    ) -> (ApplicationCatalog, ApplicationCatalog) {
+        let indexed = ApplicationCatalog::new(applications.clone());
+        assert!(indexed.index.is_some());
+        let mut scanned = ApplicationCatalog::new(applications);
+        scanned.index = None;
+        (indexed, scanned)
+    }
+
+    fn assert_same_results(
+        indexed: &ApplicationCatalog,
+        scanned: &ApplicationCatalog,
+        queries: &[String],
+        limits: &[usize],
+    ) {
+        let mut indexed_scratch = SearchScratch::default();
+        let mut scanned_scratch = SearchScratch::default();
+        for query in queries {
+            for &limit in limits {
+                let indexed_ids: Vec<_> = indexed
+                    .search(query, limit, &mut indexed_scratch)
+                    .into_iter()
+                    .map(|ranked| ranked.application.id.clone())
+                    .collect();
+                let scanned_ids: Vec<_> = scanned
+                    .search(query, limit, &mut scanned_scratch)
+                    .into_iter()
+                    .map(|ranked| ranked.application.id.clone())
+                    .collect();
+                assert_eq!(indexed_ids, scanned_ids, "query {query:?}, limit {limit}");
+            }
+        }
+    }
+
+    #[test]
+    fn one_and_two_letter_queries_equal_the_scan() {
+        // Many names share a first letter, so the prefix range alone fills the results, while
+        // pinned and often launched apps elsewhere match only as word prefixes or substrings.
+        let names = [
+            "Visual Studio Code",
+            "Vim",
+            "Code Visual",
+            "Windows Terminal",
+            "Terminal Preview",
+            "Ab",
+            "A",
+            "Σίσυφος Editor",
+            "東京 Calendar",
+            "Editor-Portable",
+        ];
+        let applications: Vec<_> = (0..500)
+            .map(|index| {
+                let mut application = application(
+                    &format!("app:{index}"),
+                    &format!("{} {index}", names[index % names.len()]),
+                    index % 11 == 0,
+                );
+                application.launches = (index * 37 % 1500) as u32;
+                if index % 25 == 0 {
+                    application.aliases = Arc::from([Arc::from(format!("vx{index}"))]);
+                }
+                application
+            })
+            .collect();
+        let (indexed, scanned) = indexed_and_scanned(applications);
+        let mut characters: Vec<char> = names
+            .iter()
+            .flat_map(|name| name.chars())
+            .chain("0123456789 -x".chars())
+            .collect();
+        characters.sort_unstable();
+        characters.dedup();
+        let mut queries: Vec<String> = characters.iter().map(char::to_string).collect();
+        for first in &characters {
+            for second in &characters {
+                queries.push(format!("{first}{second}"));
+            }
+        }
+        assert_same_results(&indexed, &scanned, &queries, &[1, 8, 500]);
+    }
+
+    #[test]
+    fn ten_thousand_apps_keep_an_index_within_budget() {
+        let names = [
+            "Visual Studio Code",
+            "Windows Terminal",
+            "Firefox Developer Edition",
+            "PowerShell",
+            "Σίσυφος Editor",
+            "東京 Calendar",
+        ];
+        let applications: Vec<_> = (0..10_000)
+            .map(|index| {
+                let mut application = application(
+                    &format!("app:{index}"),
+                    &format!("{} {index}", names[index % names.len()]),
+                    index % 29 == 0,
+                );
+                application.launches = (index % 97) as u32;
+                application
+            })
+            .collect();
+        let (indexed, scanned) = indexed_and_scanned(applications);
+        let index_bytes = indexed
+            .index
+            .as_ref()
+            .map_or(0, CandidateIndex::memory_bytes);
+        assert!(index_bytes > 0);
+        assert!(indexed.index_memory_bytes() <= 512 * 1024);
+        let queries: Vec<String> = [
+            "",
+            "v",
+            "vi",
+            "vis",
+            "visual",
+            "code",
+            "vsc",
+            "terminal 12",
+            "ΣΊΣ",
+            "東京",
+            "9999",
+            "not-found",
+            "power shell",
+        ]
+        .map(String::from)
+        .into();
+        assert_same_results(&indexed, &scanned, &queries, &[1, 8]);
+    }
+
+    #[test]
+    fn grams_left_out_of_a_full_index_still_find_every_match() {
+        // Too many grams for the budget: the most common are left out rather than the index.
+        let applications: Vec<_> = (0..10_000)
+            .map(|index| {
+                application(
+                    &format!("app:{index}"),
+                    &format!("portableofficesuitepro{index:05}"),
+                    index % 13 == 0,
+                )
+            })
+            .collect();
+        let (indexed, scanned) = indexed_and_scanned(applications);
+        let queries: Vec<String> = [
+            "portable",
+            "office",
+            "suite",
+            "pro0",
+            "pro01234",
+            "tablesuite",
+            "ro012",
+            "p",
+            "po",
+            "ps",
+            "zz",
+        ]
+        .map(String::from)
+        .into();
+        assert_same_results(&indexed, &scanned, &queries, &[1, 8]);
+    }
+
+    #[test]
+    fn word_starts_match_splitting_the_name() {
+        for name in [
+            "visual studio code",
+            "--editor--portable",
+            "σίσυφος editor",
+            "東京 calendar",
+            "c++ tools",
+            "",
+        ] {
+            let prepared = PreparedApplication {
+                application: application("id", name, false),
+                normalized_name: name.into(),
+                initials: String::new(),
+                word_starts: word_starts(name),
+            };
+            for term in [
+                "v", "st", "code", "editor", "port", "σίσ", "東", "cal", "c", "c++", "tools", "x",
+                "--e", "e-",
+            ] {
+                let split = name
+                    .split(|character: char| !character.is_alphanumeric())
+                    .any(|word| word.starts_with(term));
+                assert_eq!(
+                    prepared.has_word_starting_with(term),
+                    split,
+                    "{name:?} {term:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn packed_candidates_order_like_their_fields() {
+        let fields = [
+            (MatchClass::Exact, false, 0, 9),
+            (MatchClass::Exact, true, 0, 9),
+            (MatchClass::Prefix, true, 5_000, 0),
+            (MatchClass::Prefix, true, 1_000, 1),
+            (MatchClass::Prefix, true, 999, 0),
+            (MatchClass::Substring, true, 0, 0),
+            (MatchClass::Prefix, false, 0, u32::MAX as usize),
+        ];
+        let key = |&(class, pinned, launches, ordinal): &(MatchClass, bool, u32, usize)| {
+            (class, !pinned, Reverse(launches.min(LAUNCH_CAP)), ordinal)
+        };
+        for left in &fields {
+            for right in &fields {
+                assert_eq!(
+                    Candidate::new(left.0, left.1, left.2, left.3)
+                        .cmp(&Candidate::new(right.0, right.1, right.2, right.3)),
+                    key(left).cmp(&key(right)),
+                    "{left:?} {right:?}"
+                );
+            }
+            let mut candidate = Candidate::new(left.0, left.1, left.2, left.3);
+            assert_eq!(candidate.ordinal(), left.3);
+            candidate.improve(MatchClass::Prefix);
+            assert_eq!(
+                candidate,
+                Candidate::new(left.0.min(MatchClass::Prefix), left.1, left.2, left.3)
+            );
+        }
     }
 
     #[test]
