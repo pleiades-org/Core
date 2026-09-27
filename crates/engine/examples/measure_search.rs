@@ -200,12 +200,12 @@ fn median_ns(mut run: impl FnMut()) -> f64 {
     batches[BATCHES / 2]
 }
 
-/// One keystroke at a time through the launcher's combined apps-and-quicklinks catalogs.
+/// One keystroke at a time through the launcher's apps and quicklinks, ranked as one list.
 fn measure_keystrokes(count: usize) {
     let applications = applications(count);
     let recent = recent(&applications);
     let catalog = ApplicationCatalog::new(applications);
-    let (quicklink_catalog, combined) = quicklinks::catalogs(&catalog, &quicklinks());
+    let (quicklink_catalog, general) = quicklinks::catalogs(&catalog, &quicklinks());
     let mut engine = SearchEngine::default();
     engine.set_recent_applications(recent);
     let mut scratch = SearchScratch::default();
@@ -214,14 +214,20 @@ fn measure_keystrokes(count: usize) {
             black_box(engine.search_catalogs(
                 black_box(query),
                 &catalog,
-                &combined,
+                &general,
                 &quicklink_catalog,
                 &|| false,
             ));
         });
         let ranking = ranked.map(|text| {
             median_ns(|| {
-                black_box(combined.search(black_box(text), VISIBLE_RESULT_LIMIT, &mut scratch));
+                black_box(general.search_merged(
+                    &quicklink_catalog,
+                    black_box(text),
+                    VISIBLE_RESULT_LIMIT,
+                    &mut scratch,
+                    &|| false,
+                ));
             })
         });
         println!(

@@ -80,9 +80,9 @@ pub struct SearchEngine {
     exchange_rates: Option<Arc<ExchangeRates>>,
     /// Application identifiers, most recent first, shown when nothing is typed.
     recent_applications: Arc<[Arc<str>]>,
-    /// Top results for an empty query per catalog identity; a catalog never changes, so these
-    /// stay valid until a different catalog is searched.
-    empty_query_results: Vec<(u64, Vec<SearchResult>)>,
+    /// Top results for an empty query per pair of catalog identities; a catalog never changes,
+    /// so these stay valid until different catalogs are searched.
+    empty_query_results: Vec<((u64, u64), Vec<SearchResult>)>,
 }
 
 impl SearchEngine {
@@ -127,11 +127,14 @@ impl SearchEngine {
         )
     }
 
+    /// `catalog` holds the apps: `@app` searches only them and recent apps come from them.
+    /// Plain queries rank `general` and `quicklinks` as one list without a combined catalog;
+    /// `>` searches only `quicklinks`.
     pub fn search_catalogs(
         &mut self,
         query: &str,
         catalog: &ApplicationCatalog,
-        combined: &ApplicationCatalog,
+        general: &ApplicationCatalog,
         quicklinks: &ApplicationCatalog,
         cancelled: &impl Fn() -> bool,
     ) -> SearchBatch {
@@ -145,7 +148,7 @@ impl SearchEngine {
             } => power_results(payload),
             ParsedQuery::Search(payload) if taskbar::matches_keyword(payload) => {
                 // Keep application matches (e.g. initials "tb") below the keyword result.
-                let mut batch = self.applications(payload, combined, cancelled);
+                let mut batch = self.applications(payload, general, quicklinks, cancelled);
                 batch.results.insert(0, taskbar::taskbar_result());
                 batch.results.truncate(VISIBLE_RESULT_LIMIT);
                 batch.message = taskbar::MESSAGE;
@@ -170,14 +173,14 @@ impl SearchEngine {
                 message: taskbar::MESSAGE,
             },
             ParsedQuery::Search("") => recent_results(&self.recent_applications, catalog)
-                .unwrap_or_else(|| self.applications("", combined, cancelled)),
+                .unwrap_or_else(|| self.applications("", general, quicklinks, cancelled)),
             ParsedQuery::Search(payload) => self
                 .try_calculation(payload)
-                .unwrap_or_else(|| self.applications(payload, combined, cancelled)),
+                .unwrap_or_else(|| self.applications(payload, general, quicklinks, cancelled)),
             ParsedQuery::Command {
                 kind: CommandKind::Applications,
                 payload,
-            } => self.applications(payload, catalog, cancelled),
+            } => self.applications(payload, catalog, &ApplicationCatalog::default(), cancelled),
             ParsedQuery::Command {
                 kind: CommandKind::Calculator,
                 payload,
@@ -196,7 +199,12 @@ impl SearchEngine {
                 kind: CommandKind::Quicklinks,
                 payload,
             } => {
-                let mut batch = self.applications(payload, quicklinks, cancelled);
+                let mut batch = self.applications(
+                    payload,
+                    quicklinks,
+                    &ApplicationCatalog::default(),
+                    cancelled,
+                );
                 if quicklinks.is_empty() {
                     batch.message = "Add quicklinks in Settings → Quicklinks";
                 }
@@ -260,18 +268,21 @@ impl SearchEngine {
             .then(|| self.calculate(payload))
     }
 
+    /// Ranks `catalog` and `quicklinks` as one list; either may be empty.
     fn applications(
         &mut self,
         query: &str,
         catalog: &ApplicationCatalog,
+        quicklinks: &ApplicationCatalog,
         cancelled: &impl Fn() -> bool,
     ) -> SearchBatch {
         let empty_query = query.trim().is_empty();
+        let identities = (catalog.identity(), quicklinks.identity());
         if empty_query {
             let cached = self
                 .empty_query_results
                 .iter()
-                .find(|(identity, _)| *identity == catalog.identity());
+                .find(|(cached, _)| *cached == identities);
             if let Some((_, results)) = cached {
                 return SearchBatch {
                     results: results.clone(),
@@ -280,7 +291,13 @@ impl SearchEngine {
             }
         }
         let results: Vec<SearchResult> = catalog
-            .search_with_cancel(query, VISIBLE_RESULT_LIMIT, &mut self.scratch, cancelled)
+            .search_merged(
+                quicklinks,
+                query,
+                VISIBLE_RESULT_LIMIT,
+                &mut self.scratch,
+                cancelled,
+            )
             .into_iter()
             .map(|ranked| {
                 let application = ranked.application;
@@ -307,8 +324,7 @@ impl SearchEngine {
             if self.empty_query_results.len() == EMPTY_QUERY_CATALOGS {
                 self.empty_query_results.remove(0);
             }
-            self.empty_query_results
-                .push((catalog.identity(), results.clone()));
+            self.empty_query_results.push((identities, results.clone()));
         }
         SearchBatch {
             results,

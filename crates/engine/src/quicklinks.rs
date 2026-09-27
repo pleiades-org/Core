@@ -155,19 +155,26 @@ fn validate_app_link(link: &str, scheme: &str) -> Result<String, String> {
     Ok(format!("{scheme}{}", &link[scheme.len()..]))
 }
 
-pub fn catalogs(
-    applications: &ApplicationCatalog,
+/// The catalog plain queries rank quicklinks with: the apps themselves, borrowed. Search ranks
+/// the two separately and merges them, so the apps are never copied into a combined catalog.
+pub struct General<'apps>(&'apps ApplicationCatalog);
+
+impl std::ops::Deref for General<'_> {
+    type Target = ApplicationCatalog;
+
+    fn deref(&self) -> &ApplicationCatalog {
+        self.0
+    }
+}
+
+/// The quicklinks' own catalog, and the catalog plain queries rank them with.
+pub fn catalogs<'apps>(
+    applications: &'apps ApplicationCatalog,
     links: &[Quicklink],
-) -> (ApplicationCatalog, ApplicationCatalog) {
-    let quicklinks: Vec<_> = links.iter().map(Quicklink::application).collect();
-    let combined = applications
-        .entries()
-        .cloned()
-        .chain(quicklinks.iter().cloned())
-        .collect();
+) -> (ApplicationCatalog, General<'apps>) {
     (
-        ApplicationCatalog::new(quicklinks),
-        ApplicationCatalog::new(combined),
+        ApplicationCatalog::new(links.iter().map(Quicklink::application).collect()),
+        General(applications),
     )
 }
 
