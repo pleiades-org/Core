@@ -74,6 +74,8 @@ struct LayoutKey {
     output_height: i32,
     terminal: bool,
     grid: bool,
+    /// The settings page has its own size and controls.
+    settings: bool,
 }
 
 impl LayoutKey {
@@ -84,6 +86,7 @@ impl LayoutKey {
         output_height: 0,
         terminal: false,
         grid: false,
+        settings: false,
     };
 }
 
@@ -313,6 +316,7 @@ impl View {
             output_height,
             terminal,
             grid,
+            ..
         } = key;
         let row_count = count.max(1) as i32;
         let preferences = self.preferences.get();
@@ -463,6 +467,7 @@ impl View {
             output_height,
             terminal,
             grid,
+            settings: settings_open,
         }
     }
 
@@ -597,15 +602,15 @@ impl View {
         Ok(())
     }
 
-    /// Runs each time Core is shown. Everything is repainted: controls that were moved or
-    /// resized while Core was hidden may otherwise show the blank pixels they had then.
+    /// Runs each time Core is shown. Layout runs again only on another screen area, but
+    /// everything is repainted: controls that were moved or resized while Core was hidden may
+    /// otherwise show the blank pixels they had then.
     pub fn position_on_monitor(&self, reference: HWND) -> windows::core::Result<()> {
         self.monitor_reference.set(reference);
-        self.screen.set(super::displays::screen_area(
-            self.preferences.get().display,
-            reference,
-        )?);
-        self.invalidate_layout();
+        let screen = super::displays::screen_area(self.preferences.get().display, reference)?;
+        if self.screen.replace(screen) != screen {
+            self.invalidate_layout();
+        }
         self.layout()?;
         unsafe {
             let _ = RedrawWindow(

@@ -2,7 +2,7 @@
 //! first, then the rest filled from Windows' own record of what the person starts elsewhere.
 use super::{
     packaged_applications::DesktopEntry,
-    user_assist::{self, KnownFolders},
+    user_assist::{self, KnownFolders, UsageWatch},
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -68,23 +68,63 @@ impl ApplicationAliases {
     }
 }
 
+/// Windows' record as Core's identifiers, kept between shows. The registry is read again only
+/// after Windows has changed it, or after Core's apps (and so their aliases) have changed.
+#[derive(Default)]
+pub struct WindowsRecent {
+    /// Created by the first read, so probes never watch the registry.
+    watch: Option<UsageWatch>,
+    folders: KnownFolders,
+    /// `None` until read, and after `invalidate`.
+    identifiers: Option<Vec<Arc<str>>>,
+}
+
+impl WindowsRecent {
+    /// Core's apps changed: the next `refresh` reads the record again.
+    pub fn invalidate(&mut self) {
+        self.identifiers = None;
+    }
+
+    /// Reads the record if Windows may have changed it since the last read.
+    pub fn refresh(&mut self, aliases: &ApplicationAliases) {
+        let changed = self.watch.get_or_insert_with(UsageWatch::new).changed();
+        if changed || self.identifiers.is_none() {
+            self.identifiers = Some(windows_recent(aliases, &mut self.folders));
+        }
+    }
+
+    pub fn identifiers(&self) -> &[Arc<str>] {
+        self.identifiers.as_deref().unwrap_or_default()
+    }
+}
+
 /// Apps Windows has seen started, most recent first, as Core's identifiers.
-pub fn windows_recent(aliases: &ApplicationAliases) -> Vec<Arc<str>> {
-    let mut folders = KnownFolders::default();
-    user_assist::recent_usage()
-        .iter()
-        .filter_map(|usage| aliases.resolve(&usage.name, &mut folders))
+fn windows_recent(aliases: &ApplicationAliases, folders: &mut KnownFolders) -> Vec<Arc<str>> {
+    first_distinct(
+        user_assist::recent_usage()
+            .iter()
+            .filter_map(|usage| aliases.resolve(&usage.name, folders)),
+    )
+}
+
+/// The first `CANDIDATE_LIMIT` distinct identifiers; later ones are never resolved. `merge` never
+/// reaches them whatever Core's own list holds: these alone already fill every place before them.
+fn first_distinct(identifiers: impl Iterator<Item = Arc<str>>) -> Vec<Arc<str>> {
+    let mut seen = HashSet::new();
+    identifiers
+        .filter(|identifier| seen.insert(identifier.clone()))
+        .take(CANDIDATE_LIMIT)
         .collect()
 }
 
 /// Core's launches first, then Windows' record, without repeats.
-pub fn merge(core: &[Arc<str>], windows: Vec<Arc<str>>) -> Arc<[Arc<str>]> {
+pub fn merge(core: &[Arc<str>], windows: &[Arc<str>]) -> Arc<[Arc<str>]> {
     let mut seen = HashSet::new();
     core.iter()
-        .cloned()
         .chain(windows)
-        .filter(|identifier| seen.insert(identifier.clone()))
+        .filter(|&identifier| seen.insert(identifier.clone()))
         .take(CANDIDATE_LIMIT)
+        .cloned()
         .collect()
 }
 
@@ -146,9 +186,45 @@ mod tests {
     fn core_launches_come_first_without_repeats() {
         let merged = merge(
             &[Arc::from("b"), Arc::from("a")],
-            vec![Arc::from("a"), Arc::from("c"), Arc::from("b")],
+            &[Arc::from("a"), Arc::from("c"), Arc::from("b")],
         );
         let merged: Vec<&str> = merged.iter().map(|identifier| &**identifier).collect();
         assert_eq!(merged, ["b", "a", "c"]);
+    }
+
+    fn identifiers(numbers: impl IntoIterator<Item = usize>) -> Vec<Arc<str>> {
+        numbers
+            .into_iter()
+            .map(|number| Arc::from(format!("app:{number}")))
+            .collect()
+    }
+
+    #[test]
+    fn resolving_stops_after_the_first_distinct_candidates() {
+        // Windows often names one app twice (its shortcut and its app ID).
+        let windows = identifiers((0..200).map(|index| index / 2));
+        let mut resolved = 0;
+        let first = first_distinct(windows.iter().cloned().inspect(|_| resolved += 1));
+        assert_eq!(first, identifiers(0..CANDIDATE_LIMIT));
+        assert_eq!(resolved, CANDIDATE_LIMIT * 2 - 1);
+    }
+
+    #[test]
+    fn the_first_distinct_candidates_merge_like_the_whole_record() {
+        // Repeats, then a long tail beyond the limit.
+        let windows = identifiers((0..300).map(|index| (index * 7) % 90 + index / 150 * 100));
+        let first = first_distinct(windows.iter().cloned());
+        for core in [
+            identifiers([]),
+            identifiers([5]),
+            identifiers(0..10),
+            identifiers((0..30).map(|index| index * 3)),
+            identifiers(1_000..1_047),
+            identifiers(1_000..1_048),
+            identifiers((0..50).rev()),
+            identifiers((0..25).chain(1_000..1_025)),
+        ] {
+            assert_eq!(merge(&core, &windows), merge(&core, &first), "{core:?}");
+        }
     }
 }

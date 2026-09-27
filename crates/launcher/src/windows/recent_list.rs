@@ -32,6 +32,8 @@ pub struct RecentList {
     path: Option<PathBuf>,
     max_entries: usize,
     entries: Arc<[Arc<str>]>,
+    /// `record_unsaved` changed the entries; `save_pending` writes them.
+    unsaved: bool,
 }
 
 impl RecentList {
@@ -53,6 +55,7 @@ impl RecentList {
             path,
             max_entries: kind.max_entries,
             entries: entries.into(),
+            unsaved: false,
         }
     }
 
@@ -62,9 +65,32 @@ impl RecentList {
 
     /// Moves `entry` to the front, dropping duplicates and the oldest entries.
     pub fn record(&mut self, entry: &str) -> Result<(), String> {
+        if self.remember(entry) {
+            self.save()
+        } else {
+            Ok(())
+        }
+    }
+
+    /// As `record`, but the file is written by a later `save_pending`, so the caller's action
+    /// does not wait for the disk.
+    pub fn record_unsaved(&mut self, entry: &str) {
+        self.unsaved |= self.remember(entry);
+    }
+
+    /// Writes what `record_unsaved` changed, if anything.
+    pub fn save_pending(&mut self) -> Result<(), String> {
+        if !std::mem::take(&mut self.unsaved) {
+            return Ok(());
+        }
+        self.save()
+    }
+
+    /// Moves `entry` to the front in memory; false if it is not a valid entry.
+    fn remember(&mut self, entry: &str) -> bool {
         let entry = entry.trim();
         if entry.is_empty() || entry.len() > MAX_ENTRY_LENGTH || entry.contains(['\r', '\n']) {
-            return Ok(());
+            return false;
         }
         let entries: Vec<Arc<str>> = std::iter::once(Arc::from(entry))
             .chain(
@@ -76,11 +102,12 @@ impl RecentList {
             .take(self.max_entries)
             .collect();
         self.entries = entries.into();
-        self.save()
+        true
     }
 
     pub fn clear(&mut self) -> Result<(), String> {
         self.entries = Arc::from([]);
+        self.unsaved = false;
         match &self.path {
             Some(path) => match fs::remove_file(path) {
                 Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
@@ -149,6 +176,33 @@ mod tests {
         assert!(RecentList::load(Some(&folder), RecentKind::COMMANDS)
             .entries
             .is_empty());
+        let _ = fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn unsaved_launches_are_written_only_when_saved() {
+        let folder = folder("pending");
+        let mut launches = RecentList::load(Some(&folder), RecentKind::APPLICATIONS);
+        launches.record_unsaved("app:a");
+        launches.record_unsaved("app:b");
+        launches.record_unsaved(" ");
+        assert_eq!(&*launches.entries()[0], "app:b");
+        assert!(!folder.join("recent-applications.txt").exists());
+        launches.save_pending().unwrap();
+        let reloaded = RecentList::load(Some(&folder), RecentKind::APPLICATIONS);
+        let entries: Vec<&str> = reloaded.entries.iter().map(|entry| &**entry).collect();
+        assert_eq!(entries, ["app:b", "app:a"]);
+        // Nothing new: nothing is written, not even over a file changed since.
+        fs::remove_file(folder.join("recent-applications.txt")).unwrap();
+        launches.save_pending().unwrap();
+        launches.record_unsaved("");
+        launches.save_pending().unwrap();
+        assert!(!folder.join("recent-applications.txt").exists());
+        // Clearing drops a pending write.
+        launches.record_unsaved("app:c");
+        launches.clear().unwrap();
+        launches.save_pending().unwrap();
+        assert!(!folder.join("recent-applications.txt").exists());
         let _ = fs::remove_dir_all(&folder);
     }
 
