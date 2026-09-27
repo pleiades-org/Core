@@ -86,11 +86,41 @@ fn measure(count: usize, queries: &[String], reuse_engine: bool) {
     );
 }
 
+/// One keystroke's query repeated: converters and the calculator run before app ranking.
+/// Batches smooth over the timer's ~100 ns resolution on Windows.
+fn measure_query(count: usize, query: &str) {
+    const BATCHES: usize = 200;
+    const BATCH_SIZE: u32 = 100;
+    let catalog = catalog(count);
+    let mut engine = SearchEngine::default();
+    black_box(engine.search(query, &catalog));
+    let mut batches: Vec<f64> = (0..BATCHES)
+        .map(|_| {
+            let start = Instant::now();
+            for _ in 0..BATCH_SIZE {
+                black_box(engine.search(black_box(query), &catalog));
+            }
+            start.elapsed().as_nanos() as f64 / f64::from(BATCH_SIZE)
+        })
+        .collect();
+    batches.sort_unstable_by(f64::total_cmp);
+    println!(
+        "{query:?},{count},{:.0},{:.0}",
+        batches[BATCHES / 2],
+        batches[0]
+    );
+}
+
 fn main() {
     let queries = queries();
     println!("applications,reused_engine,index_bytes,samples,p50_us,p95_us,p99_us,max_us");
     for count in [200, 2_000, 10_000] {
         measure(count, &queries, true);
         measure(count, &queries, false);
+    }
+    println!();
+    println!("query,applications,median_ns_per_search,min_ns_per_search");
+    for query in ["code", "vsc", "visual studio code"] {
+        measure_query(2_000, query);
     }
 }

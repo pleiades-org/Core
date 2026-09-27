@@ -1,7 +1,7 @@
 //! Tips and bill splitting: `tip 15% on 80`, `80 tip 20% split 4`, `split 120 3 ways`.
 use super::{
     format::{grouped, plain},
-    phrase::{tokenize, Token, Token::*},
+    phrase::{Token, Token::*},
     Conversion, Outcome,
 };
 use crate::calculator::Calculation;
@@ -9,12 +9,12 @@ use crate::calculator::Calculation;
 const MESSAGE: &str = "Enter to copy amount · Esc to hide";
 const MAX_PEOPLE: f64 = 1_000.;
 
-pub fn calculate_tip(input: &str) -> Outcome {
-    let tokens = tokenize(input)?;
-    if let Some(outcome) = split_only(&tokens) {
+/// `tokens` come from [`super::phrase::tokenize`], shared with the other sentence converters.
+pub fn calculate_tip(tokens: &[Token]) -> Outcome {
+    if let Some(outcome) = split_only(tokens) {
         return Some(outcome);
     }
-    let (core, people) = split_clause(&tokens);
+    let (core, people) = split_clause(tokens);
     let (bill, rate) = match core {
         [tip, Percent(rate), on, Number(bill)] if tip.is("tip") && (on.is("on") || on.is("of")) => {
             (*bill, *rate)
@@ -38,7 +38,7 @@ pub fn calculate_tip(input: &str) -> Outcome {
 
 /// Removes a trailing `split 4`, `split 4 ways`, `for 4 people`, `between 4` or `4 ways`.
 /// The count is `None` when present but not a sensible number of people.
-fn split_clause(tokens: &[Token]) -> (&[Token], Option<f64>) {
+fn split_clause<'a>(tokens: &'a [Token<'a>]) -> (&'a [Token<'a>], Option<f64>) {
     let people_word = |token: &Token| token.is("ways") || token.is("people") || token.is("persons");
     let (core, count) = match tokens {
         [core @ .., intro, Number(count), tail] if is_split_word(intro) && people_word(tail) => {
@@ -126,6 +126,12 @@ fn money(value: f64, detail: String) -> Calculation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Tokenizes like `convert()` does, then calls the converter.
+    fn calculate_tip(input: &str) -> Outcome {
+        let mut text = String::new();
+        super::calculate_tip(&super::super::phrase::tokenize(input, &mut text)?)
+    }
 
     fn titles(query: &str) -> Vec<String> {
         calculate_tip(query)
