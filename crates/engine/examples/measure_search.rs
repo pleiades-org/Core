@@ -237,7 +237,7 @@ fn main() {
         "applications,reused_engine,index_bytes,samples,p50_us,p95_us,p99_us,max_us,\
          ranking_p50_us,ranking_p95_us"
     );
-    for count in [200, 2_000, 10_000] {
+    for count in [400, 2_000, 10_000] {
         measure(count, &queries, true);
         measure(count, &queries, false);
     }
