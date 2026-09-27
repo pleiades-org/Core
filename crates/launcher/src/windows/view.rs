@@ -83,6 +83,7 @@ pub struct View {
     pub input: HWND,
     pub results: HWND,
     pub footer: HWND,
+    footer_text: RefCell<String>,
     clock: HWND,
     clock_active: Cell<bool>,
     /// The console window, which shows command output.
@@ -129,6 +130,7 @@ impl View {
             input: HWND::default(),
             results: HWND::default(),
             footer: HWND::default(),
+            footer_text: RefCell::new("Type to search".into()),
             clock: HWND::default(),
             clock_active: Cell::new(false),
             output: console.window(),
@@ -562,10 +564,16 @@ impl View {
     }
 
     pub fn set_footer(&self, text: &str) {
-        let text = wide(text);
-        if let Err(error) = unsafe { SetWindowTextW(self.footer, PCWSTR(text.as_ptr())) } {
-            eprintln!("Could not update launcher status: {error}");
+        if *self.footer_text.borrow() == text {
+            return;
         }
+        let wide_text = wide(text);
+        if let Err(error) = unsafe { SetWindowTextW(self.footer, PCWSTR(wide_text.as_ptr())) } {
+            eprintln!("Could not update launcher status: {error}");
+            return;
+        }
+        self.footer_text.borrow_mut().clear();
+        self.footer_text.borrow_mut().push_str(text);
     }
 
     pub fn set_icons(&self, icons: &[LoadedIcon]) {
@@ -661,4 +669,47 @@ pub(super) unsafe fn child(
         Some(instance),
         None,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identical_footer_text_does_not_send_another_native_update() {
+        let _serial = crate::windows::GUI_RESOURCE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let instance = unsafe { windows::Win32::System::LibraryLoader::GetModuleHandleW(None) }
+            .unwrap()
+            .into();
+        let parent = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!(""),
+                WS_POPUP,
+                0,
+                0,
+                100,
+                100,
+                None,
+                None,
+                Some(instance),
+                None,
+            )
+        }
+        .unwrap();
+        let view = View::create(parent, instance).unwrap();
+        view.set_footer("Esc to stop");
+        assert_eq!(control_text(view.footer), "Esc to stop");
+        unsafe { SetWindowTextW(view.footer, w!("native sentinel")) }.unwrap();
+        view.set_footer("Esc to stop");
+        assert_eq!(control_text(view.footer), "native sentinel");
+        view.set_footer("");
+        assert_eq!(control_text(view.footer), "");
+        view.set_footer("Finished");
+        assert_eq!(control_text(view.footer), "Finished");
+        unsafe { DestroyWindow(parent) }.unwrap();
+    }
 }

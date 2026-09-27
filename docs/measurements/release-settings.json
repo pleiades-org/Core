@@ -1,8 +1,8 @@
 {
-  "Date": "2026-09-25T15:05:27.1109120+01:00",
+  "Date": "2026-09-27T06:42:47.0354411+01:00",
   "Passed": true,
   "Interactive": false,
-  "Sha256": "570C257F1AA9872FA78E161693A74F9AF4B7B4AF5FE4BD64939DD84A46B9C99B",
+  "Sha256": "556622CE83FAD9863A5DD1651195F62CCAB1E1D3075066F8ACADE8C1749580CD",
   "Scenarios": [
     "lazy settings controls",
     "left sidebar with right-side category controls",
@@ -24,5 +24,5 @@
     "default slider values omitted from the file"
   ],
   "Limitations": "Queued native control commands with UI completion acknowledgements, region checks and own-window bitmaps. Physical mixed-DPI monitor switching and screen-reader acceptance remain manual. Isolated settings file; no real user preferences changed.",
-  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\settings-tests\\4b87777643f84059b1bd45dfcdabc6af"
+  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\settings-tests\\b66b930f56264c26897b25582f6905a1"
 }

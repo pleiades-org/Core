@@ -82,12 +82,14 @@ impl ConsoleView {
             let prompt = self.prompt.get();
             unsafe {
                 let _ = SetFocus(Some(prompt));
-                SendMessageW(
-                    prompt,
-                    WM_CHAR,
-                    Some(WPARAM(unit as usize)),
-                    Some(LPARAM(0)),
-                );
+                for unit in character.encode_utf16(&mut [0; 2]) {
+                    SendMessageW(
+                        prompt,
+                        WM_CHAR,
+                        Some(WPARAM(*unit as usize)),
+                        Some(LPARAM(0)),
+                    );
+                }
             }
         }
     }

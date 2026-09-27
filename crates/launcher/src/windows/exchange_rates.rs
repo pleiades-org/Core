@@ -6,7 +6,7 @@ use std::{
     fs,
     path::PathBuf,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 use windows::{
     core::PCWSTR,
@@ -20,6 +20,7 @@ use windows::{
 pub const RATES_READY: u32 = WM_APP + 13;
 const ECB_HOST: &str = "www.ecb.europa.eu";
 const ECB_PATH: &str = "/stats/eurofxref/eurofxref-daily.xml";
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RATE_FILE_BYTES: usize = 64 * 1024;
 /// The ECB publishes once per working day, around 16:00 CET.
 const REFRESH_AFTER: Duration = Duration::from_secs(12 * 60 * 60);
@@ -48,6 +49,7 @@ struct Shared {
     latest: Option<Arc<ExchangeRates>>,
     working: bool,
     loaded_cache: bool,
+    cache_updated: Option<SystemTime>,
     last_download: Option<Instant>,
     shutdown: bool,
 }
@@ -77,7 +79,7 @@ impl ExchangeRateService {
         {
             let mut shared = self.shared.lock().expect("exchange rate lock");
             let stale = download
-                && cache_age(&path).is_none_or(|age| age >= REFRESH_AFTER)
+                && cache_stale(shared.cache_updated, SystemTime::now())
                 && shared
                     .last_download
                     .is_none_or(|attempt| attempt.elapsed() >= RETRY_AFTER);
@@ -110,15 +112,26 @@ impl ExchangeRateService {
                 let loaded = shared.lock().expect("exchange rate lock").loaded_cache;
                 if !loaded {
                     match read_rates(&path) {
-                        Ok(rates) => publish(rates),
+                        Ok(rates) => {
+                            shared.lock().expect("exchange rate lock").cache_updated =
+                                fs::metadata(&path)
+                                    .and_then(|metadata| metadata.modified())
+                                    .ok();
+                            publish(rates);
+                        }
                         Err(error) if download => eprintln!("No cached exchange rates: {error}"),
                         Err(error) => eprintln!("Could not load exchange rates: {error}"),
                     }
                     shared.lock().expect("exchange rate lock").loaded_cache = true;
                 }
-                if download && cache_age(&path).is_none_or(|age| age >= REFRESH_AFTER) {
+                let updated = shared.lock().expect("exchange rate lock").cache_updated;
+                if download && cache_stale(updated, SystemTime::now()) {
                     match download_rates(&path) {
-                        Ok(rates) => publish(rates),
+                        Ok(rates) => {
+                            shared.lock().expect("exchange rate lock").cache_updated =
+                                Some(SystemTime::now());
+                            publish(rates);
+                        }
                         Err(error) => eprintln!("Could not download exchange rates: {error}"),
                     }
                 }
@@ -159,15 +172,8 @@ fn post_ready(address: usize) {
     }
 }
 
-fn cache_age(path: &PathBuf) -> Option<Duration> {
-    Some(
-        fs::metadata(path)
-            .ok()?
-            .modified()
-            .ok()?
-            .elapsed()
-            .unwrap_or_default(),
-    )
+fn cache_stale(updated: Option<SystemTime>, now: SystemTime) -> bool {
+    updated.is_none_or(|updated| now.duration_since(updated).unwrap_or_default() >= REFRESH_AFTER)
 }
 
 fn read_rates(path: &PathBuf) -> Result<ExchangeRates, String> {
@@ -177,13 +183,16 @@ fn read_rates(path: &PathBuf) -> Result<ExchangeRates, String> {
 
 /// Downloads, validates and atomically replaces the cache file.
 fn download_rates(path: &PathBuf) -> Result<ExchangeRates, String> {
-    let response = http::get(http::Request {
-        secure: true,
-        host: ECB_HOST,
-        port: 443,
-        path: ECB_PATH,
-        max_bytes: MAX_RATE_FILE_BYTES,
-    })
+    let response = http::get(
+        http::Request {
+            secure: true,
+            host: ECB_HOST,
+            port: 443,
+            path: ECB_PATH,
+            max_bytes: MAX_RATE_FILE_BYTES,
+        },
+        Instant::now() + DOWNLOAD_TIMEOUT,
+    )
     .map_err(|error| error.to_string())?;
     if response.status != http::STATUS_OK {
         return Err(format!("the ECB answered HTTP {}", response.status));
@@ -222,6 +231,19 @@ mod tests {
         assert!(rates.per_euro("GBP").is_some_and(|rate| rate > 0.));
         assert_eq!(read_rates(&path).unwrap(), rates);
         fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn cache_staleness_uses_the_last_known_time() {
+        let now = SystemTime::now();
+        assert!(cache_stale(None, now));
+        assert!(!cache_stale(Some(now), now));
+        assert!(!cache_stale(Some(now + Duration::from_secs(1)), now));
+        assert!(!cache_stale(
+            Some(now - REFRESH_AFTER + Duration::from_secs(1)),
+            now
+        ));
+        assert!(cache_stale(Some(now - REFRESH_AFTER), now));
     }
 
     #[test]

@@ -38,7 +38,7 @@ struct Point {
 }
 
 /// Text selected with the mouse, from where the drag started to where it is now.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Selection {
     anchor: Point,
     head: Point,
@@ -48,6 +48,25 @@ impl Selection {
     /// The first selected position and the position just past the last.
     fn range(self) -> (Point, Point) {
         (self.anchor.min(self.head), self.anchor.max(self.head))
+    }
+
+    fn discard_lines(self, count: usize, header: usize) -> Option<Self> {
+        let shift = |point: Point| {
+            if point.line < header {
+                return Some(point);
+            }
+            Some(Point {
+                line: point
+                    .line
+                    .checked_sub(count)
+                    .filter(|line| *line >= header)?,
+                ..point
+            })
+        };
+        Some(Self {
+            anchor: shift(self.anchor)?,
+            head: shift(self.head)?,
+        })
     }
 
     fn contains(self, point: Point) -> bool {
@@ -78,8 +97,9 @@ pub struct ConsoleView {
     follow: Cell<bool>,
     selection: Cell<Option<Selection>>,
     selecting: Cell<bool>,
-    /// The terminal's dropped line count when the selection was made; lines moving invalidates it.
+    /// The terminal's dropped line count at the last output update.
     dropped: Cell<usize>,
+    scrollbar: Cell<Option<(usize, usize, usize)>>,
     /// The first half of a character outside the Basic Multilingual Plane, typed as two keys.
     high_surrogate: Cell<Option<u16>>,
 }
@@ -124,6 +144,7 @@ impl ConsoleView {
             selection: Cell::new(None),
             selecting: Cell::new(false),
             dropped: Cell::new(0),
+            scrollbar: Cell::new(None),
             high_surrogate: Cell::new(None),
         });
         // The box keeps the view at a fixed address for the window's lifetime.
@@ -225,8 +246,16 @@ impl ConsoleView {
             (terminal.take_responses(), terminal.dropped())
         };
         self.write(&responses);
-        if dropped != self.dropped.replace(dropped) {
-            self.selection.set(None);
+        let delta = dropped.saturating_sub(self.dropped.replace(dropped));
+        if delta > 0 {
+            if !self.follow.get() {
+                self.top.set(self.top.get().saturating_sub(delta));
+            }
+            self.selection.set(
+                self.selection
+                    .get()
+                    .and_then(|selection| selection.discard_lines(delta, self.header_lines())),
+            );
         }
         self.update_scrollbar();
         self.invalidate();
@@ -346,7 +375,17 @@ impl ConsoleView {
 
     /// The scroll bar appears only when the output is taller than the view.
     fn update_scrollbar(&self) {
-        let (count, visible, top) = (self.line_count(), self.visible_lines(), self.first_line());
+        let (count, visible) = (self.line_count(), self.visible_lines());
+        let last_top = count.saturating_sub(visible);
+        let top = if self.follow.get() {
+            last_top
+        } else {
+            self.top.get().min(last_top)
+        };
+        let key = (count, visible, top);
+        if self.scrollbar.replace(Some(key)) == Some(key) {
+            return;
+        }
         let information = SCROLLINFO {
             cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
             fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
@@ -425,10 +464,11 @@ impl ConsoleView {
         } else if y >= client.bottom {
             self.scroll_by(1);
         }
-        self.selection.set(Some(Selection {
-            head: self.point_at(x, y.clamp(0, (client.bottom - 1).max(0))),
-            ..selection
-        }));
+        let head = self.point_at(x, y.clamp(0, (client.bottom - 1).max(0)));
+        if head == selection.head {
+            return;
+        }
+        self.selection.set(Some(Selection { head, ..selection }));
         self.invalidate();
     }
 
@@ -623,6 +663,148 @@ unsafe extern "system" fn console_proc(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn with_console(check: impl FnOnce(&ConsoleView)) {
+        let _serial = crate::windows::GUI_RESOURCE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let instance = unsafe { windows::Win32::System::LibraryLoader::GetModuleHandleW(None) }
+            .unwrap()
+            .into();
+        let parent = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!(""),
+                WS_POPUP,
+                0,
+                0,
+                100,
+                100,
+                None,
+                None,
+                Some(instance),
+                None,
+            )
+        }
+        .unwrap();
+        let console = ConsoleView::create(parent, instance, 1).unwrap();
+        check(&console);
+        unsafe { DestroyWindow(parent) }.unwrap();
+    }
+
+    #[test]
+    fn scrollback_eviction_keeps_the_view_and_selection_on_the_same_text() {
+        with_console(|console| {
+            console.start("prompt", 20, 2);
+            for index in 0..5_010 {
+                console.feed(format!("line {index}\r\n").as_bytes());
+            }
+            console.scroll_to(100);
+            console.selection.set(Some(Selection {
+                anchor: Point {
+                    line: 100,
+                    column: 0,
+                },
+                head: Point {
+                    line: 101,
+                    column: 4,
+                },
+            }));
+            let selected = console.selected_text();
+            let shown = console.line_characters(console.first_line());
+            console.feed(b"next\r\n");
+            assert_eq!(console.top.get(), 99);
+            assert_eq!(console.selected_text(), selected);
+            assert_eq!(console.line_characters(console.first_line()), shown);
+            console.feed(&b"next\r\n".repeat(98));
+            assert!(console.selection.get().is_some());
+            console.feed(b"next\r\n");
+            assert_eq!(console.top.get(), 0);
+            assert!(console.selection.get().is_none());
+            console.scroll_to(usize::MAX);
+            console.feed(b"newest\r\n");
+            assert!(console.follow.get());
+            assert_eq!(
+                console.first_line(),
+                console.line_count().saturating_sub(console.visible_lines())
+            );
+        });
+    }
+
+    #[test]
+    fn unchanged_scrollbar_and_selection_skip_native_updates() {
+        with_console(|console| {
+            console.start("prompt", 20, 2);
+            console.feed(&b"line\r\n".repeat(20));
+            console.scroll_to(3);
+            let key = console.scrollbar.get();
+            let information = SCROLLINFO {
+                cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+                fMask: SIF_POS,
+                nPos: 1,
+                ..Default::default()
+            };
+            unsafe {
+                SetScrollInfo(console.window, SB_VERT, &information, false);
+            }
+            console.update_scrollbar();
+            assert_eq!(console.scrollbar.get(), key);
+            let mut actual = SCROLLINFO {
+                fMask: SIF_POS,
+                ..information
+            };
+            unsafe { GetScrollInfo(console.window, SB_VERT, &mut actual) }.unwrap();
+            assert_eq!(actual.nPos, 1, "unchanged state did not call SetScrollInfo");
+            console.scroll_to(4);
+            unsafe { GetScrollInfo(console.window, SB_VERT, &mut actual) }.unwrap();
+            assert_eq!(actual.nPos, 4);
+            console.selection.set(Some(Selection {
+                anchor: console.point_at(0, 0),
+                head: console.point_at(0, 0),
+            }));
+            console.selecting.set(true);
+            unsafe {
+                let _ = ValidateRect(Some(console.window), None);
+            }
+            console.extend_selection(0, 0);
+            assert!(!unsafe { GetUpdateRect(console.window, None, false) }.as_bool());
+            console.extend_selection(1, 0);
+            assert_ne!(console.selection.get().unwrap().head.column, 0);
+        });
+    }
+
+    #[test]
+    fn finished_output_forwards_bmp_and_surrogate_pairs_to_the_prompt() {
+        with_console(|console| {
+            let prompt = unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE(0),
+                    w!("EDIT"),
+                    w!(""),
+                    WS_CHILD,
+                    0,
+                    0,
+                    100,
+                    20,
+                    Some(GetParent(console.window).unwrap()),
+                    None,
+                    None,
+                    None,
+                )
+            }
+            .unwrap();
+            console.set_prompt(prompt);
+            console.character('a' as u16, false);
+            console.character(0xD83D, false);
+            assert_eq!(crate::windows::view::control_text(prompt), "a");
+            console.character(0xDE00, false);
+            assert_eq!(crate::windows::view::control_text(prompt), "a😀");
+            console.character(0xDE00, false);
+            console.character('\r' as u16, false);
+            assert_eq!(crate::windows::view::control_text(prompt), "a😀");
+        });
+    }
 
     #[test]
     fn the_prompt_line_wraps_at_the_console_width() {

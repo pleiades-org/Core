@@ -1,8 +1,8 @@
 {
-  "Date": "2026-09-25T15:05:56.3875020+01:00",
+  "Date": "2026-09-27T06:43:16.3543401+01:00",
   "Passed": true,
   "Interactive": false,
-  "Sha256": "570C257F1AA9872FA78E161693A74F9AF4B7B4AF5FE4BD64939DD84A46B9C99B",
+  "Sha256": "556622CE83FAD9863A5DD1651195F62CCAB1E1D3075066F8ACADE8C1749580CD",
   "Scenarios": [
     "typing / enters command mode with the / hidden; result rows hidden; output streams into Core's terminal with no PowerShell CLIXML",
     "the command is cleared after running and command mode stays",
@@ -19,6 +19,6 @@
     "@run and bare Run-dialog URIs offer open and administrator rows",
     "dry run never opens Run-dialog targets"
   ],
-  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\commands-tests\\42bfdec30bed45538be1c76657f59b92",
+  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\commands-tests\\7bb9528786b844be91d6884e660fd00b",
   "SideEffects": "Dry run with --test-commands: hidden echo, exit, cd, set /p, choice, ping and edit commands only; no terminal, administrator prompt or Run-dialog target is opened."
 }

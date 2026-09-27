@@ -19,7 +19,7 @@ use std::{
     rc::Rc,
 };
 use windows::Win32::UI::Controls::{
-    DRAWITEMSTRUCT, EM_SETSEL, MEASUREITEMSTRUCT, NMCUSTOMDRAW, WM_MOUSELEAVE,
+    DRAWITEMSTRUCT, EM_SETSEL, MEASUREITEMSTRUCT, NMCUSTOMDRAW, NMHDR, NM_CUSTOMDRAW, WM_MOUSELEAVE,
 };
 use windows::{
     core::{w, PCWSTR},
@@ -27,6 +27,9 @@ use windows::{
         Foundation::*,
         Graphics::Gdi::*,
         System::{
+            Com::{
+                CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+            },
             LibraryLoader::GetModuleHandleW,
             RemoteDesktop::{
                 WTSRegisterSessionNotification, WTSUnRegisterSessionNotification,
@@ -56,6 +59,7 @@ struct WindowContext {
 
 pub fn run() -> windows::core::Result<()> {
     super::diagnostics::redirect_stderr_to_log();
+    let _apartment = UiApartment::initialize()?;
     let options = Options::read();
     let _instance = if options.probe || options.dry_run {
         None
@@ -664,7 +668,7 @@ unsafe extern "system" fn window_proc(
                     }
                 }
             }
-            if let Some(view) = &shell.view {
+            if let Some(view) = shell.view.as_ref().filter(|_| shell.visible) {
                 if let Err(error) = view.position_on_monitor(window) {
                     view.set_footer(&format!("Could not update screen position: {error}"));
                 }
@@ -746,7 +750,14 @@ unsafe fn paint_message(
         WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX | WM_CTLCOLORSTATIC => {
             Some(view.color_control(HDC(word.0 as *mut _), HWND(long.0 as *mut _)))
         }
-        WM_NOTIFY => view.custom_draw(&*(long.0 as *const NMCUSTOMDRAW)),
+        WM_NOTIFY => {
+            let header = (long.0 as *const NMHDR).as_ref()?;
+            if header.code == NM_CUSTOMDRAW {
+                view.custom_draw(&*(long.0 as *const NMCUSTOMDRAW))
+            } else {
+                None
+            }
+        }
         WM_PAINT => {
             let mut paint = PAINTSTRUCT::default();
             let context = BeginPaint(window, &mut paint);
@@ -797,13 +808,34 @@ unsafe fn owns_window(launcher: HWND, candidate: HWND) -> bool {
         || (!candidate.0.is_null() && GetAncestor(candidate, GA_ROOTOWNER) == launcher)
 }
 
+struct UiApartment(bool);
+impl UiApartment {
+    fn initialize() -> windows::core::Result<Self> {
+        let status =
+            unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
+        if status == RPC_E_CHANGED_MODE {
+            return Ok(Self(false));
+        }
+        status.ok()?;
+        Ok(Self(true))
+    }
+}
+impl Drop for UiApartment {
+    fn drop(&mut self) {
+        if self.0 {
+            unsafe { CoUninitialize() };
+        }
+    }
+}
+
 struct WindowLifetime(HWND);
 impl Drop for WindowLifetime {
     fn drop(&mut self) {
-        // Window callbacks still borrow the boxed state here. Close before that state is dropped.
+        // Window callbacks still borrow the boxed state here. Destroy synchronously before
+        // that state and its COM apartment are dropped; WM_CLOSE can defer for a settings save.
         unsafe {
             if IsWindow(Some(self.0)).as_bool() {
-                SendMessageW(self.0, WM_CLOSE, None, None);
+                let _ = DestroyWindow(self.0);
             }
         }
     }
@@ -850,5 +882,90 @@ impl Drop for SingleInstance {
         unsafe {
             let _ = CloseHandle(self.0);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::System::Com::COINIT_MULTITHREADED;
+
+    #[test]
+    fn ui_apartment_balances_success_and_leaves_a_different_mode_owned() {
+        std::thread::spawn(|| {
+            let outer = UiApartment::initialize().unwrap();
+            let nested = UiApartment::initialize().unwrap();
+            assert!(outer.0 && nested.0);
+            drop(nested);
+            assert_eq!(
+                unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) },
+                RPC_E_CHANGED_MODE
+            );
+            drop(outer);
+            unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
+                .ok()
+                .unwrap();
+            let borrowed = UiApartment::initialize().unwrap();
+            assert!(!borrowed.0);
+            drop(borrowed);
+            assert_eq!(
+                unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) },
+                RPC_E_CHANGED_MODE
+            );
+            unsafe { CoUninitialize() };
+            assert!(UiApartment::initialize().unwrap().0);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn window_lifetime_destroys_a_window_that_defers_close() {
+        unsafe extern "system" fn defer_close(
+            window: HWND,
+            message: u32,
+            word: WPARAM,
+            long: LPARAM,
+        ) -> LRESULT {
+            if message == WM_CLOSE {
+                return LRESULT(0);
+            }
+            DefWindowProcW(window, message, word, long)
+        }
+        let _serial = super::super::GUI_RESOURCE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let instance = unsafe { GetModuleHandleW(None) }.unwrap().into();
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(defer_close),
+            hInstance: instance,
+            lpszClassName: w!("Core.Test.DeferredClose"),
+            ..Default::default()
+        };
+        assert_ne!(unsafe { RegisterClassW(&class) }, 0);
+        let window = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                class.lpszClassName,
+                w!(""),
+                WS_POPUP,
+                0,
+                0,
+                1,
+                1,
+                None,
+                None,
+                Some(instance),
+                None,
+            )
+        }
+        .unwrap();
+        unsafe {
+            SendMessageW(window, WM_CLOSE, None, None);
+        }
+        assert!(unsafe { IsWindow(Some(window)) }.as_bool());
+        drop(WindowLifetime(window));
+        assert!(!unsafe { IsWindow(Some(window)) }.as_bool());
+        unsafe { UnregisterClassW(class.lpszClassName, Some(instance)) }.unwrap();
     }
 }

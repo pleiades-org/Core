@@ -1,9 +1,9 @@
 {
-  "Date": "2026-09-25T15:05:52.5995588+01:00",
+  "Date": "2026-09-27T06:43:12.5507483+01:00",
   "Passed": true,
   "Interactive": false,
   "PhysicalKeyboardChecked": false,
-  "Sha256": "570C257F1AA9872FA78E161693A74F9AF4B7B4AF5FE4BD64939DD84A46B9C99B",
+  "Sha256": "556622CE83FAD9863A5DD1651195F62CCAB1E1D3075066F8ACADE8C1749580CD",
   "Scenarios": [
     "Link and Name table adds blank row after completion",
     "scrolling beyond visible rows",
@@ -17,6 +17,6 @@
     "process restart restores table and search",
     "failed replacement preserves links and retry recovers"
   ],
-  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\quicklinks-tests\\7ffc63177fa74f08b6f8763c06062054",
+  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\quicklinks-tests\\171fa334d98e4ac784b032e7d81f61da",
   "SideEffects": "Isolated settings file and dry-run activation. Click-away suppressed only for table data checks by --test-stay-open; tested separately."
 }

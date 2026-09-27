@@ -1,5 +1,5 @@
 use std::time::{Duration, Instant};
-use windows::Win32::{Foundation::*, UI::WindowsAndMessaging::*};
+use windows::Win32::{Foundation::*, Graphics::Gdi::UpdateWindow, UI::WindowsAndMessaging::*};
 
 pub const TRANSITION_TIMER: usize = 40;
 const FRAME_INTERVAL_MS: u32 = 15;
@@ -59,11 +59,15 @@ impl VisibilityTransition {
         } else {
             HIDE_DURATION_MS
         });
-        self.set_opacity(window, self.alpha);
         if visible {
+            let first_frame = Duration::from_millis(u64::from(FRAME_INTERVAL_MS));
+            self.set_opacity(window, self.opacity_at(first_frame));
             unsafe {
                 let _ = ShowWindow(window, SW_SHOWNOACTIVATE);
+                let _ = UpdateWindow(window);
             }
+        } else {
+            self.set_opacity(window, self.alpha);
         }
         self.running =
             unsafe { SetTimer(Some(window), TRANSITION_TIMER, FRAME_INTERVAL_MS, None) } != 0;
@@ -89,11 +93,21 @@ impl VisibilityTransition {
             self.finish(window);
             return;
         }
+        let elapsed = if self.target_alpha > 0 {
+            self.started
+                .elapsed()
+                .max(Duration::from_millis(u64::from(FRAME_INTERVAL_MS)))
+        } else {
+            self.started.elapsed()
+        };
+        self.set_opacity(window, self.opacity_at(elapsed));
+    }
+
+    fn opacity_at(&self, elapsed: Duration) -> u8 {
+        let progress = (elapsed.as_secs_f32() / self.duration.as_secs_f32()).min(1.);
         let eased = 1. - (1. - progress).powi(3);
-        let alpha = (self.start_alpha as f32
-            + (self.target_alpha as f32 - self.start_alpha as f32) * eased)
-            .round() as u8;
-        self.set_opacity(window, alpha);
+        (self.start_alpha as f32 + (self.target_alpha as f32 - self.start_alpha as f32) * eased)
+            .round() as u8
     }
 
     fn finish(&mut self, window: HWND) {
@@ -142,4 +156,22 @@ fn animations_enabled() -> bool {
     }
     .is_ok()
         && enabled.as_bool()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_show_frame_is_visible_and_the_final_frame_is_opaque() {
+        let transition = VisibilityTransition {
+            target_alpha: 255,
+            duration: Duration::from_millis(SHOW_DURATION_MS),
+            ..Default::default()
+        };
+        assert_eq!(transition.opacity_at(Duration::ZERO), 0);
+        assert!(transition.opacity_at(Duration::from_millis(u64::from(FRAME_INTERVAL_MS))) > 0);
+        assert_eq!(transition.opacity_at(transition.duration), 255);
+        assert!(!VisibilityTransition::new(MotionPreference::Reduced).animations_enabled());
+    }
 }

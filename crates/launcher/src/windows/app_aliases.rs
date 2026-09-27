@@ -3,6 +3,7 @@
 //! Store apps register in `%LOCALAPPDATA%\Microsoft\WindowsApps`.
 use std::{
     collections::HashMap,
+    mem::ManuallyDrop,
     os::windows::ffi::OsStrExt,
     path::{Path, PathBuf},
     sync::Arc,
@@ -49,8 +50,8 @@ const MAX_REPARSE_BYTES: usize = 16 * 1024;
 
 /// Reads the program behind Start Menu shortcuts. One per discovery pass.
 pub struct ShortcutReader {
-    link: IShellLinkW,
-    file: IPersistFile,
+    link: ManuallyDrop<IShellLinkW>,
+    file: ManuallyDrop<IPersistFile>,
     /// The apartment this reader opened, closed when it is dropped.
     initialized: bool,
 }
@@ -66,8 +67,8 @@ impl ShortcutReader {
         })();
         match reader {
             Some((link, file)) => Some(Self {
-                link,
-                file,
+                link: ManuallyDrop::new(link),
+                file: ManuallyDrop::new(file),
                 initialized,
             }),
             None => {
@@ -96,6 +97,11 @@ impl ShortcutReader {
 
 impl Drop for ShortcutReader {
     fn drop(&mut self) {
+        // Release the interfaces while their apartment still exists.
+        unsafe {
+            ManuallyDrop::drop(&mut self.file);
+            ManuallyDrop::drop(&mut self.link);
+        }
         if self.initialized {
             unsafe { CoUninitialize() };
         }
