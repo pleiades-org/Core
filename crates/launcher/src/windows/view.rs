@@ -1,4 +1,5 @@
 use super::{
+    application_icon::ApplicationIcon,
     button_hover,
     icon_worker::LoadedIcon,
     painting::{self, DisplayRow, ResultKind},
@@ -13,7 +14,10 @@ use super::{
     wide, window_placement,
 };
 use core_engine::{search::SearchResult, RECENT_APPLICATION_LIMIT, VISIBLE_RESULT_LIMIT};
-use std::cell::{Cell, OnceCell, RefCell};
+use std::{
+    cell::{Cell, OnceCell, RefCell},
+    sync::Arc,
+};
 use windows::{
     core::{w, PCWSTR},
     Win32::{
@@ -38,7 +42,10 @@ mod footer;
 mod output;
 mod paint;
 mod power;
+mod preference_changes;
 mod settings_bridge;
+
+use preference_changes::PreferenceChanges;
 
 pub use footer::CLOCK_TIMER;
 pub use output::OUTPUT_ID;
@@ -48,6 +55,8 @@ pub const INPUT_ID: usize = 100;
 pub const RESULTS_ID: usize = 101;
 pub const FOOTER_ID: usize = 102;
 pub const SETTINGS_ID: usize = 104;
+/// Top of the section label ("APPLICATIONS"); from here down, the window shows the results.
+const SECTION_LABEL_TOP: i32 = 83;
 /// Rows, or the larger recently used grid.
 const ROW_LIMIT: usize = if RECENT_APPLICATION_LIMIT > VISIBLE_RESULT_LIMIT {
     RECENT_APPLICATION_LIMIT
@@ -114,17 +123,21 @@ pub struct View {
     dpi: Cell<u32>,
     width: Cell<i32>,
     height: Cell<i32>,
+    /// The window's screen rectangle from the last layout, which corner clipping needs.
+    bounds: Cell<RECT>,
+    /// The shape of the window region that is set, if any.
+    clip_shape: Cell<Option<window_placement::ClipShape>>,
     layout_key: Cell<LayoutKey>,
     rows: RefCell<Vec<DisplayRow>>,
 }
 
 impl View {
-    pub fn create(parent: HWND, instance: HINSTANCE) -> windows::core::Result<Self> {
-        let screen = window_placement::screen_area(parent)?;
-        let background = unsafe { CreateSolidBrush(theme::BACKGROUND) };
-        if background.0.is_null() {
-            return Err(windows::core::Error::from_win32());
-        }
+    /// Starts with the saved preferences, so the first appearance is applied and laid out once.
+    pub fn create(
+        parent: HWND,
+        instance: HINSTANCE,
+        preferences: Preferences,
+    ) -> windows::core::Result<Self> {
         let console = console::ConsoleView::create(parent, instance, OUTPUT_ID)?;
         let mut view = Self {
             input: HWND::default(),
@@ -144,11 +157,11 @@ impl View {
             power_menu: OnceCell::new(),
             parent,
             settings_button: HWND::default(),
-            background: Cell::new(background),
+            background: Cell::new(HBRUSH::default()),
             selected_brush: Cell::new(HBRUSH::default()),
             palette: Cell::new(Palette::default()),
-            preferences: Cell::new(Preferences::default()),
-            screen: Cell::new(screen),
+            preferences: Cell::new(preferences),
+            screen: Cell::new(window_placement::ScreenArea::default()),
             monitor_reference: Cell::new(parent),
             settings_page: OnceCell::new(),
             settings_open: Cell::new(false),
@@ -156,6 +169,8 @@ impl View {
             dpi: Cell::new(96),
             width: Cell::new(0),
             height: Cell::new(0),
+            bounds: Cell::new(RECT::default()),
+            clip_shape: Cell::new(None),
             layout_key: Cell::new(LayoutKey::STALE),
             rows: RefCell::new(Vec::new()),
         };
@@ -235,12 +250,22 @@ impl View {
                 Some(LPARAM(cue.as_ptr() as isize)),
             );
         }
-        view.set_dpi(unsafe { GetDpiForWindow(parent) })?;
-        view.apply_preferences(Preferences::default())?;
+        view.set_fonts(unsafe { GetDpiForWindow(parent) })?;
+        // Saved preferences that cannot be applied (a display that cannot be read) must not
+        // stop Core from starting; it opens with the defaults instead.
+        if let Err(error) = view.apply(preferences, PreferenceChanges::ALL) {
+            eprintln!("Could not apply saved appearance: {error}");
+            view.apply(Preferences::default(), PreferenceChanges::ALL)?;
+        }
         Ok(view)
     }
 
     pub fn set_dpi(&self, dpi: u32) -> windows::core::Result<()> {
+        self.set_fonts(dpi)?;
+        self.layout()
+    }
+
+    fn set_fonts(&self, dpi: u32) -> windows::core::Result<()> {
         let fonts = Fonts::create(dpi)?;
         let previous = self.fonts.replace(fonts);
         self.dpi.set(dpi);
@@ -269,49 +294,26 @@ impl View {
             );
         }
         previous.delete();
-        self.layout()
+        Ok(())
     }
 
     fn layout(&self) -> windows::core::Result<()> {
-        let dpi = self.dpi.get();
+        let key = self.current_layout_key();
+        let previous = self.layout_key.get();
         let settings_open = self.settings_open.get();
-        let terminal = self.terminal.get() && !settings_open;
-        // Terminal mode shows output in place of rows, so rows do not affect its size.
-        let count = if terminal {
-            0
-        } else {
-            self.rows.borrow().len()
-        };
-        let row_height = if self
-            .rows
-            .borrow()
-            .first()
-            .is_some_and(|row| painting::is_answer(row.kind))
-        {
-            theme::ANSWER_HEIGHT
-        } else {
-            theme::ROW_HEIGHT
-        };
-        let grid = self.grid();
-        let output_height = if terminal && self.output_visible.get() {
-            self.fitted_output_height()
-        } else {
-            0
-        };
-        let key = LayoutKey {
+        if previous == key {
+            // Only what the rows show may have changed.
+            self.invalidate_below_search(settings_open);
+            return Ok(());
+        }
+        let LayoutKey {
             dpi,
             count,
             row_height,
             output_height,
             terminal,
             grid,
-        };
-        if self.layout_key.get() == key {
-            unsafe {
-                let _ = InvalidateRect(Some(self.parent), None, false);
-            }
-            return Ok(());
-        }
+        } = key;
         let row_count = count.max(1) as i32;
         let preferences = self.preferences.get();
         let spacing = scale(preferences.edge_spacing.logical(), dpi);
@@ -346,8 +348,14 @@ impl View {
         let bounds = window_placement::bounds(area, width, height, preferences.position);
         let client_width = bounds.right - bounds.left;
         let client_height = bounds.bottom - bounds.top;
+        // The search box row keeps its pixels unless its width, scale or page changed.
+        let keeps_search_row = !settings_open
+            && previous != LayoutKey::STALE
+            && previous.dpi == dpi
+            && self.width.get() == client_width;
         self.width.set(client_width);
         self.height.set(client_height);
+        self.bounds.set(bounds);
         let search = SearchLayout::new(client_width, client_height, dpi);
         unsafe {
             SendMessageW(
@@ -365,19 +373,14 @@ impl View {
                 bounds.bottom - bounds.top,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             )?;
-            window_placement::clip_to_edges(
-                self.parent,
-                bounds,
-                self.screen.get().edges(spacing),
-                scale(preferences.corner_radius.logical(), dpi),
-            )?;
+            self.clip()?;
             if settings_open {
                 self.settings_page
                     .get()
                     .expect("open settings page")
                     .layout(settings_dpi)?;
             }
-            for (control, area) in [
+            let controls = [
                 (self.input, search.input),
                 (self.settings_button, search.settings),
                 (self.results, search.results),
@@ -385,9 +388,13 @@ impl View {
                 (self.clock, search.clock),
                 (self.power_button, search.power),
                 (self.output, search.output),
-            ] {
+            ];
+            // One batch moves every control together, with a single repaint.
+            let mut batch = BeginDeferWindowPos(controls.len() as i32)?;
+            for (control, area) in controls {
                 // Moved controls repaint rather than reuse pixels from where they were.
-                SetWindowPos(
+                batch = DeferWindowPos(
+                    batch,
                     control,
                     None,
                     area.left,
@@ -397,6 +404,7 @@ impl View {
                     SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS,
                 )?;
             }
+            EndDeferWindowPos(batch)?;
             let _ = ShowWindow(
                 self.results,
                 if settings_open || terminal || grid || self.rows.borrow().is_empty() {
@@ -405,13 +413,75 @@ impl View {
                     SW_SHOWNA
                 },
             );
-            let _ = InvalidateRect(Some(self.parent), None, false);
         }
-        if let Some(menu) = self.power_menu.get() {
+        if keeps_search_row {
+            self.invalidate_below_search(false);
+        } else {
+            unsafe {
+                let _ = InvalidateRect(Some(self.parent), None, false);
+            }
+        }
+        // A closed menu is hidden; opening it lays out again first.
+        if let Some(menu) = self.power_menu.get().filter(|menu| menu.is_open()) {
             menu.layout(client_width, client_height, dpi)?;
         }
         self.layout_key.set(key);
         Ok(())
+    }
+
+    /// What the window's size and control positions depend on right now.
+    fn current_layout_key(&self) -> LayoutKey {
+        let dpi = self.dpi.get();
+        let settings_open = self.settings_open.get();
+        let terminal = self.terminal.get() && !settings_open;
+        // Terminal mode shows output in place of rows, so rows do not affect its size.
+        let count = if terminal {
+            0
+        } else {
+            self.rows.borrow().len()
+        };
+        let row_height = if self
+            .rows
+            .borrow()
+            .first()
+            .is_some_and(|row| painting::is_answer(row.kind))
+        {
+            theme::ANSWER_HEIGHT
+        } else {
+            theme::ROW_HEIGHT
+        };
+        let grid = self.grid();
+        let output_height = if terminal && self.output_visible.get() {
+            self.fitted_output_height()
+        } else {
+            0
+        };
+        LayoutKey {
+            dpi,
+            count,
+            row_height,
+            output_height,
+            terminal,
+            grid,
+        }
+    }
+
+    /// Repaints everything below the search box: the section label, the rows or tiles, the
+    /// output and the footer. The settings page is repainted whole.
+    fn invalidate_below_search(&self, settings_open: bool) {
+        let area = painting::rectangle(
+            0,
+            scale(SECTION_LABEL_TOP, self.dpi.get()),
+            self.width.get(),
+            self.height.get(),
+        );
+        unsafe {
+            let _ = InvalidateRect(
+                Some(self.parent),
+                (!settings_open).then_some(&area as *const RECT),
+                false,
+            );
+        }
     }
 
     /// Lays out again after a change `set_rows` does not make, such as entering terminal mode.
@@ -421,74 +491,109 @@ impl View {
         }
     }
 
+    /// Updates only what differs from the current preferences.
     pub fn apply_preferences(&self, preferences: Preferences) -> windows::core::Result<()> {
-        let palette = Palette::for_background(preferences.background);
-        let background = unsafe { CreateSolidBrush(palette.background) };
-        if background.0.is_null() {
-            return Err(windows::core::Error::from_win32());
-        }
-        let selected = unsafe { CreateSolidBrush(palette.selected) };
-        if selected.0.is_null() {
-            unsafe {
-                let _ = DeleteObject(background.into());
+        self.apply(
+            preferences,
+            PreferenceChanges::between(self.preferences.get(), preferences),
+        )
+    }
+
+    fn apply(
+        &self,
+        preferences: Preferences,
+        changes: PreferenceChanges,
+    ) -> windows::core::Result<()> {
+        if changes.palette {
+            let palette = Palette::for_background(preferences.background);
+            let background = unsafe { CreateSolidBrush(palette.background) };
+            if background.0.is_null() {
+                return Err(windows::core::Error::from_win32());
             }
-            return Err(windows::core::Error::from_win32());
-        }
-        for old in [
-            self.background.replace(background),
-            self.selected_brush.replace(selected),
-        ] {
-            if !old.0.is_null() {
+            let selected = unsafe { CreateSolidBrush(palette.selected) };
+            if selected.0.is_null() {
                 unsafe {
-                    let _ = DeleteObject(old.into());
+                    let _ = DeleteObject(background.into());
+                }
+                return Err(windows::core::Error::from_win32());
+            }
+            for old in [
+                self.background.replace(background),
+                self.selected_brush.replace(selected),
+            ] {
+                if !old.0.is_null() {
+                    unsafe {
+                        let _ = DeleteObject(old.into());
+                    }
                 }
             }
+            self.palette.set(palette);
+            self.console.set_palette(palette);
         }
-        self.palette.set(palette);
-        self.console.set_palette(palette);
         self.preferences.set(preferences);
-        // Dark scroll bars for the command output on dark backgrounds.
-        let theme = if palette.is_dark() {
-            w!("DarkMode_Explorer")
-        } else {
-            w!("Explorer")
-        };
-        unsafe {
-            let _ = SetWindowTheme(self.output, theme, PCWSTR::null());
+        if changes.theme {
+            let palette = self.palette.get();
+            // Dark scroll bars for the command output on dark backgrounds.
+            let theme = if palette.is_dark() {
+                w!("DarkMode_Explorer")
+            } else {
+                w!("Explorer")
+            };
+            unsafe {
+                let _ = SetWindowTheme(self.output, theme, PCWSTR::null());
+            }
+            if let Some(page) = self.settings_page.get() {
+                page.apply_theme(palette);
+            }
         }
-        if let Some(page) = self.settings_page.get() {
-            page.apply_theme(palette);
+        if changes.screen {
+            self.screen.set(super::displays::screen_area(
+                preferences.display,
+                self.monitor_reference.get(),
+            )?);
         }
-        self.screen.set(super::displays::screen_area(
-            preferences.display,
-            self.monitor_reference.get(),
-        )?);
-        self.invalidate_layout();
-        self.layout()?;
-        unsafe {
-            let _ = RedrawWindow(
-                Some(self.parent),
-                None,
-                None,
-                RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE,
-            );
+        if changes.layout {
+            self.invalidate_layout();
+            self.layout()?;
+        } else if changes.corners {
+            // Rounding changes neither the window's size nor any control's position.
+            self.clip()?;
+            unsafe {
+                let _ = InvalidateRect(Some(self.parent), None, false);
+            }
+        }
+        if changes.palette {
+            // Controls take their colors from the brushes, so every one repaints.
+            unsafe {
+                let _ = RedrawWindow(
+                    Some(self.parent),
+                    None,
+                    None,
+                    RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE,
+                );
+            }
         }
         Ok(())
     }
 
-    pub fn preview_preferences(&self, preferences: Preferences) -> windows::core::Result<()> {
-        if self.preferences.get() != preferences {
-            return self.apply_preferences(preferences);
+    /// Rounds the corners that float; corners touching a screen edge stay square.
+    /// An unchanged shape keeps the current region instead of replacing and redrawing it.
+    fn clip(&self) -> windows::core::Result<()> {
+        let dpi = self.dpi.get();
+        let preferences = self.preferences.get();
+        let spacing = scale(preferences.edge_spacing.logical(), dpi);
+        let shape = window_placement::ClipShape::new(
+            self.bounds.get(),
+            self.screen.get().edges(spacing),
+            scale(preferences.corner_radius.logical(), dpi),
+        );
+        if self.clip_shape.get() == Some(shape) {
+            return Ok(());
         }
-        // Table edits only need repainting; avoid recreating brushes and repositioning every control.
-        unsafe {
-            let _ = RedrawWindow(
-                Some(self.parent),
-                None,
-                None,
-                RDW_INVALIDATE | RDW_ALLCHILDREN,
-            );
-        }
+        // Forget the old shape first: a failure leaves the region unknown, so it is retried.
+        self.clip_shape.set(None);
+        window_placement::clip_to_edges(self.parent, shape)?;
+        self.clip_shape.set(Some(shape));
         Ok(())
     }
 
@@ -528,20 +633,29 @@ impl View {
     }
 
     pub fn set_rows(&self, results: &[SearchResult]) {
-        self.grid_hover.set(None);
-        let previous = self.rows.take();
-        *self.rows.borrow_mut() = results
+        let mut rows: Vec<DisplayRow> = results
             .iter()
             .take(ROW_LIMIT)
-            .map(|result| {
-                let mut row = DisplayRow::new(result);
-                row.icon = previous
-                    .iter()
-                    .find(|old| old.identifier == row.identifier)
-                    .and_then(|old| old.icon.clone());
-                row
-            })
+            .map(DisplayRow::new)
             .collect();
+        // The same results again (an exchange-rate refresh, a repeated search): the list,
+        // its selection and the window already show them.
+        if same_rows(&self.rows.borrow(), &rows)
+            && self.layout_key.get() == self.current_layout_key()
+        {
+            // As a reset would, clear the hover; the pointer's next move restores it.
+            self.leave_grid();
+            return;
+        }
+        self.grid_hover.set(None);
+        let previous = self.rows.take();
+        for row in &mut rows {
+            row.icon = previous
+                .iter()
+                .find(|old| old.identifier == row.identifier)
+                .and_then(|old| old.icon.clone());
+        }
+        *self.rows.borrow_mut() = rows;
         unsafe {
             SendMessageW(self.results, WM_SETREDRAW, Some(WPARAM(0)), None);
             SendMessageW(self.results, LB_RESETCONTENT, None, None);
@@ -577,13 +691,19 @@ impl View {
     }
 
     pub fn set_icons(&self, icons: &[LoadedIcon]) {
+        let mut changed = false;
         for row in self.rows.borrow_mut().iter_mut() {
             if let Some(loaded) = icons
                 .iter()
                 .find(|loaded| loaded.identifier == row.identifier)
             {
+                changed |= !same_icon(&row.icon, &loaded.icon);
                 row.icon = loaded.icon.clone();
             }
+        }
+        // A failed icon for a row that has none, or an icon it already shows, changes nothing.
+        if !changed {
+            return;
         }
         // In the grid, tiles are painted by the window itself; the hidden list never repaints.
         let target = if self.grid() {
@@ -635,6 +755,25 @@ impl Drop for View {
             let _ = DeleteObject(self.background.get().into());
             let _ = DeleteObject(self.selected_brush.get().into());
         }
+    }
+}
+
+/// Rows that draw the same: same results, titles, details and kinds. Icons are carried over.
+fn same_rows(current: &[DisplayRow], next: &[DisplayRow]) -> bool {
+    current.len() == next.len()
+        && current.iter().zip(next).all(|(current, next)| {
+            current.identifier == next.identifier
+                && current.title == next.title
+                && current.detail == next.detail
+                && current.kind == next.kind
+        })
+}
+
+fn same_icon(current: &Option<Arc<ApplicationIcon>>, next: &Option<Arc<ApplicationIcon>>) -> bool {
+    match (current, next) {
+        (Some(current), Some(next)) => Arc::ptr_eq(current, next),
+        (None, None) => true,
+        _ => false,
     }
 }
 
@@ -700,7 +839,7 @@ mod tests {
             )
         }
         .unwrap();
-        let view = View::create(parent, instance).unwrap();
+        let view = View::create(parent, instance, Preferences::default()).unwrap();
         view.set_footer("Esc to stop");
         assert_eq!(control_text(view.footer), "Esc to stop");
         unsafe { SetWindowTextW(view.footer, w!("native sentinel")) }.unwrap();
@@ -711,5 +850,87 @@ mod tests {
         view.set_footer("Finished");
         assert_eq!(control_text(view.footer), "Finished");
         unsafe { DestroyWindow(parent) }.unwrap();
+    }
+
+    use core_engine::search::{Action, ResultKind};
+
+    fn row(kind: ResultKind, id: &str, title: &str, description: &str) -> DisplayRow {
+        DisplayRow::new(&SearchResult {
+            kind,
+            id: id.into(),
+            title: title.into(),
+            description: description.into(),
+            action: Action::CopyText(title.into()),
+        })
+    }
+
+    fn rows() -> Vec<DisplayRow> {
+        vec![
+            row(
+                ResultKind::Application,
+                "app:1",
+                "Code",
+                r"C:\Programs\Code",
+            ),
+            row(
+                ResultKind::Conversion,
+                "convert",
+                "5 USD",
+                "€4.60 · rates of today",
+            ),
+        ]
+    }
+
+    #[test]
+    fn identical_results_are_the_same_rows_whatever_their_icons() {
+        let mut current = rows();
+        assert!(same_rows(&current, &rows()));
+        assert!(same_rows(&[], &[]));
+        // Icons are carried over from the current rows, so a missing one is not a change.
+        current[0].icon = None;
+        assert!(same_rows(&current, &rows()));
+        assert!(same_icon(&None, &None));
+    }
+
+    #[test]
+    fn any_difference_in_id_title_detail_kind_or_count_is_a_change() {
+        let current = rows();
+        for changed in [
+            row(
+                ResultKind::Application,
+                "app:2",
+                "Code",
+                r"C:\Programs\Code",
+            ),
+            row(
+                ResultKind::Application,
+                "app:1",
+                "Code - Insiders",
+                r"C:\Programs\Code",
+            ),
+            row(
+                ResultKind::Application,
+                "app:1",
+                "Code",
+                r"C:\Programs\Tools",
+            ),
+            // Same app among recent tiles: drawn as a grid instead of a row.
+            row(ResultKind::Recent, "app:1", "Code", r"C:\Programs\Code"),
+        ] {
+            let mut next = rows();
+            next[0] = changed;
+            assert!(!same_rows(&current, &next));
+        }
+        // A new exchange rate changes only the detail.
+        let mut refreshed = rows();
+        refreshed[1] = row(
+            ResultKind::Conversion,
+            "convert",
+            "5 USD",
+            "€4.61 · rates of today",
+        );
+        assert!(!same_rows(&current, &refreshed));
+        assert!(!same_rows(&current, &current[..1]));
+        assert!(!same_rows(&[], &current));
     }
 }

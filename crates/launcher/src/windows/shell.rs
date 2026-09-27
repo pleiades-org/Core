@@ -466,7 +466,9 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_CREATE => {
-            match GetModuleHandleW(None).and_then(|instance| View::create(window, instance.into()))
+            let preferences = shell.settings.saved.preferences;
+            match GetModuleHandleW(None)
+                .and_then(|instance| View::create(window, instance.into(), preferences))
             {
                 Ok(view) => {
                     let view = Rc::new(view);
@@ -474,12 +476,6 @@ unsafe extern "system" fn window_proc(
                         return LRESULT(-1);
                     }
                     shell.view = Some(view);
-                    if let Some(view) = &shell.view {
-                        if let Err(error) = view.apply_preferences(shell.settings.saved.preferences)
-                        {
-                            eprintln!("Could not apply saved appearance: {error}");
-                        }
-                    }
                     shell.render_results();
                 }
                 Err(error) => {
@@ -593,7 +589,8 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_TIMER if word.0 == super::settings::AUTO_SAVE_TIMER => {
-            shell.save_queued_settings(window);
+            // Quicklink typing leaves the full check to this pause, so the draft is read again.
+            shell.flush_settings(window);
             LRESULT(0)
         }
         WM_HOTKEY => {
@@ -761,7 +758,7 @@ unsafe fn paint_message(
         WM_PAINT => {
             let mut paint = PAINTSTRUCT::default();
             let context = BeginPaint(window, &mut paint);
-            view.paint(context);
+            view.paint(context, &paint.rcPaint);
             let _ = EndPaint(window, &paint);
             Some(LRESULT(0))
         }
@@ -776,7 +773,7 @@ unsafe fn paint_message(
             None
         }
         WM_PRINTCLIENT => {
-            view.paint(HDC(word.0 as *mut _));
+            view.paint(HDC(word.0 as *mut _), &view.client_area());
             Some(LRESULT(0))
         }
         _ => None,

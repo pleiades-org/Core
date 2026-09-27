@@ -60,6 +60,10 @@ impl LauncherState {
                 self.auto_save.done_when_saved = false;
                 self.change_settings(window, true);
             }
+            SettingsAction::EditQuicklink(row) => {
+                self.auto_save.done_when_saved = false;
+                self.edit_quicklink(window, row);
+            }
             SettingsAction::Change | SettingsAction::Retry => {
                 self.auto_save.done_when_saved = false;
                 self.change_settings(window, false);
@@ -94,7 +98,8 @@ impl LauncherState {
         if draft.quicklinks == self.settings.saved.quicklinks {
             draft.quicklinks = self.settings.saved.quicklinks.clone();
         }
-        if let Err(error) = view.preview_preferences(draft.preferences) {
+        // Only what changed is redone; the quicklink table repaints its own rows.
+        if let Err(error) = view.apply_preferences(draft.preferences) {
             self.settings_error(format!("Could not apply settings: {error}"));
             return;
         }
@@ -106,6 +111,25 @@ impl LauncherState {
             return;
         }
         self.save_queued_settings(window);
+    }
+
+    /// Quicklink typing reports the edited row's problem at once. Checking every row against
+    /// the saved list waits for the typing pause, whose timer flushes the whole draft.
+    fn edit_quicklink(&mut self, window: HWND, row: Result<(), String>) {
+        self.auto_save.cancel_timer(window);
+        self.auto_save.queued = None;
+        if let Err(error) = row {
+            self.settings_error(error);
+            return;
+        }
+        self.auto_save.error = None;
+        if let Some(view) = &self.view {
+            view.settings_save_error(false);
+            view.settings_status("Saving changes…");
+        }
+        if !self.auto_save.defer(window) {
+            self.change_settings(window, false);
+        }
     }
 
     /// Flush a valid edit on Done, dismissal, or exit instead of losing the typing debounce.

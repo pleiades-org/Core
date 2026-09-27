@@ -43,7 +43,14 @@ pub fn significant(value: f64, digits: i32) -> f64 {
         return value;
     }
     let magnitude = value.abs().log10().floor() as i32;
-    let factor = 10_f64.powi(digits - 1 - magnitude);
+    let exponent = digits - 1 - magnitude;
+    // Powers of ten above 1e22 are inexact, so tiny values would round to noise such as
+    // 1.0000000000000001e-303; decimal formatting rounds them exactly instead.
+    if exponent > 22 {
+        let precision = (digits - 1).max(0) as usize;
+        return format!("{value:.precision$e}").parse().unwrap_or(value);
+    }
+    let factor = 10_f64.powi(exponent);
     if !factor.is_finite() {
         return value;
     }
