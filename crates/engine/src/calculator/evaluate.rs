@@ -149,7 +149,13 @@ impl Parser<'_> {
                 b'+' | b'-' => (1, 2, 1),
                 b'*' | b'/' => (3, 4, 1),
                 b'^' => (6, 6, 1),
-                b'o' if self.bytes.get(self.cursor..self.cursor + 2).is_some_and(|name| name.eq_ignore_ascii_case(b"of")) => (3, 4, 2),
+                b'o' if self
+                    .bytes
+                    .get(self.cursor..self.cursor + 2)
+                    .is_some_and(|name| name.eq_ignore_ascii_case(b"of")) =>
+                {
+                    (3, 4, 2)
+                }
                 _ => break,
             };
             if left_binding < minimum_binding {
