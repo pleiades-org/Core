@@ -29,7 +29,7 @@ const RETRY_AFTER: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Clone)]
 pub enum RateSource {
-    /// Cached in AppData and refreshed from the ECB.
+    /// Cached in Local AppData and refreshed from the ECB.
     Online(PathBuf),
     /// A fixed file (tests or offline use); never downloads.
     File(PathBuf),
@@ -38,9 +38,7 @@ pub enum RateSource {
 
 impl RateSource {
     pub fn online() -> Self {
-        std::env::var_os("APPDATA").map_or(Self::Disabled, |root| {
-            Self::Online(PathBuf::from(root).join("Pleiades/Core/v2/exchange-rates.xml"))
-        })
+        super::local_cache::path("exchange-rates.xml").map_or(Self::Disabled, Self::Online)
     }
 }
 

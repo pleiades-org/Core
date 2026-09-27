@@ -39,7 +39,7 @@ Notes:
 - `k`, `m` and `bn` scale amounts: `1.5k`, `2m`, `3bn`.
 - `pounds` counts as sterling only when the other side is clearly a currency, so `10 pounds to kg` stays a mass conversion.
 - Rates are the European Central Bank's daily euro reference rates: the euro plus the 29 currencies published on 22 September 2026. Currencies the ECB does not publish (such as the Bulgarian lev) are recognised and explained rather than guessed. Each answer shows the rate and its publication date.
-- When Core is shown, it loads cached rates from `%APPDATA%\Pleiades\Core\v2\exchange-rates.xml`. It downloads a fresh file from `www.ecb.europa.eu` only when the cache is more than 12 hours old, and waits 15 minutes after a failed attempt. Nothing is downloaded while Core is hidden, and searching itself never uses the network.
+- When Core is shown, it loads cached rates from `%LOCALAPPDATA%\Pleiades\Core\v2\exchange-rates.xml`. It downloads a fresh file from `www.ecb.europa.eu` only when the cache is more than 12 hours old, and waits 15 minutes after a failed attempt. Nothing is downloaded while Core is hidden, and searching itself never uses the network.
 - `--exchange-rates-file <path>` uses a fixed ECB file and never downloads. `--dry-run` never downloads unless `--test-network` is given.
 - Reference rates are indicative mid-market rates, not the rates a bank or card will charge.
 

@@ -2,13 +2,13 @@
 //! Google's favicon service is asked first because it also finds icons declared only in a page's
 //! HTML; the site's own `/favicon.ico` is the fallback. Private hosts (`localhost`, IP addresses,
 //! intranet names) are never sent to Google. No cookies or credentials are sent anywhere.
-use super::{application_icon::ApplicationIcon, http};
+use super::{application_icon::ApplicationIcon, http, local_cache};
 use std::{
     collections::BTreeMap,
     fs,
     ops::Range,
     path::PathBuf,
-    sync::{Mutex, MutexGuard},
+    sync::{Mutex, MutexGuard, OnceLock},
     time::{Duration, Instant},
 };
 use windows::Win32::UI::WindowsAndMessaging::{CreateIconFromResourceEx, LR_DEFAULTCOLOR};
@@ -168,7 +168,9 @@ fn cached_icon(path: &PathBuf) -> Option<Option<ApplicationIcon>> {
 }
 
 fn cache_folder() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|root| PathBuf::from(root).join("Pleiades/Core/v2/favicons"))
+    // Resolved once, so icons left in Roaming AppData are moved on first use only.
+    static FOLDER: OnceLock<Option<PathBuf>> = OnceLock::new();
+    FOLDER.get_or_init(|| local_cache::path("favicons")).clone()
 }
 
 fn fresh_cache(path: &PathBuf) -> Option<Vec<u8>> {
