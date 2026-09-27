@@ -535,7 +535,10 @@ mod tests {
         }
         let result = engine.search("@calc pi", &catalog);
         assert_eq!(result.results[0].kind, ResultKind::Calculator);
-        assert_eq!(result.results[0].action, Action::CopyText(format_number(std::f64::consts::PI).into()));
+        assert_eq!(
+            result.results[0].action,
+            Action::CopyText(format_number(std::f64::consts::PI).into())
+        );
     }
     #[test]
     fn incomplete_expressions_and_hints_never_create_launch_actions() {
