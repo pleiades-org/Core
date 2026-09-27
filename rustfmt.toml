@@ -1,0 +1,2 @@
+# Keep each file's existing line endings instead of converting reformatted CRLF files to LF.
+newline_style = "Auto"

@@ -30,10 +30,12 @@ try {
     [QuicklinksHarness]::Verify($window, $testDirectory, $process.Handle, -not $SkipKeyboard)
     Stop-TestCore
     $saved = Get-Content -LiteralPath $settingsFile -Raw
+    if (-not $saved.Contains('steam://rungameid/1') -or $saved.Contains('STEAM:')) { throw 'App-link scheme was not normalized and persisted.' }
     if (($saved -split "`n" | Where-Object { $_.StartsWith('quicklink=') }).Count -ne 30 -or $saved.Contains('incomplete') -or $saved.Contains('javascript:') -or $saved.Contains('Project Files')) { throw 'Persisted quicklinks do not match completed rows.' }
     Start-TestCore
     [QuicklinksHarness]::Query($window, '> Core Documentation', 'Core Documentation')
     [QuicklinksHarness]::Query($window, '> Quicklink 31', 'Quicklink 31')
+    [QuicklinksHarness]::Query($window, '> Quicklink 04', 'Quicklink 04')
     [SettingsHarness]::Open($window)
     [SettingsHarness]::Click($window, 232)
     if ([WindowsHarness]::Text([WindowsHarness]::GetDlgItem($window, 301)) -ne 'Core Documentation') { throw 'Quicklink rows did not survive restart.' }

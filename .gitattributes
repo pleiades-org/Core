@@ -1,0 +1,4 @@
+# Signature fixtures are verified byte-for-byte and must retain canonical LF endings.
+crates/launcher/src/windows/updates/fixtures/manifest.txt text eol=lf
+# Raw public-key coordinates must never undergo text or line-ending conversion.
+*.bin binary

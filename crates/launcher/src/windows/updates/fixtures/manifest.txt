@@ -1,0 +1,4 @@
+version=9.8.7
+path=/pleiades-org/Core/releases/download/v9.8.7/core-v2.exe
+sha256=813ca5285c28ccee5cab8b10ebda9c908fd6d78ed9dc94cc65ea6cb67a7f13ae
+signature=XvLXgkw3VTw3jiHyce4SEZta1+P0UvMNIDchlcPQKimqBX2onXyTcmYel+ABcboEPuSvoIZFS/oOgMgJ6qkZ1Q==

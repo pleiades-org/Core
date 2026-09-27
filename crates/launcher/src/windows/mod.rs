@@ -30,6 +30,7 @@ mod taskbar;
 mod theme;
 mod time_converter;
 mod tray;
+mod updates;
 mod user_assist;
 mod view;
 mod window_placement;

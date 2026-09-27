@@ -70,7 +70,7 @@ public static class SettingsHarness
             throw new InvalidOperationException("Settings categories are not in a left sidebar beside their controls");
         if (WindowsHarness.IsWindowVisible(WindowsHarness.GetDlgItem(window, behaviour ? 200 : 240)))
             throw new InvalidOperationException("Inactive settings category is still visible");
-        int[] identifiers = behaviour ? new[] {230, 231, 240, 241, 242, 243, 247, 248, 222, 221} : new[] {230, 231, 200, 201, 202, 203, 210, 211, 212, 213, 214, 215, 216, 251, 254, 222, 221};
+        int[] identifiers = behaviour ? new[] {230, 231, 240, 241, 242, 243, 247, 248, 256, 257, 222, 221} : new[] {230, 231, 200, 201, 202, 203, 210, 211, 212, 213, 214, 215, 216, 251, 254, 222, 221};
         foreach (int identifier in identifiers) {
             IntPtr control = WindowsHarness.GetDlgItem(window, identifier);
             GetWindowRect(control, out Rectangle bounds);

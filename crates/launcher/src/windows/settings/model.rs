@@ -1,4 +1,5 @@
 use super::{CornerRadius, DisplayChoice, EdgeSpacing, Shortcut};
+use crate::windows::updates::UpdateMode;
 use core_engine::search::ShellKind;
 use std::fmt;
 use windows::Win32::Foundation::COLORREF;
@@ -87,6 +88,7 @@ pub struct Preferences {
     pub edge_spacing: EdgeSpacing,
     /// Shell for `/` commands; `Default` follows the terminal's default profile.
     pub shell: ShellKind,
+    pub updates: UpdateMode,
 }
 
 impl Preferences {
@@ -109,6 +111,7 @@ impl Preferences {
         if self.shell != ShellKind::Default {
             text.push_str(&format!("shell={}\n", self.shell.id()));
         }
+        text.push_str(&format!("updates={}\n", self.updates.label()));
         text
     }
 
@@ -158,6 +161,11 @@ impl Preferences {
                         .ok_or("Shell must be default, cmd, powershell, pwsh, wsl or gitbash.")?;
                     256
                 }
+                "updates" => {
+                    settings.updates = UpdateMode::parse(value.trim())
+                        .ok_or("Updates must be Automatic, Notify or Off.")?;
+                    512
+                }
                 // Newer builds may add fields. Ignore them so an older build can still load
                 // and save; the unknown value is dropped on the next save.
                 unknown => {
@@ -180,6 +188,25 @@ impl Preferences {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_modes_persist_and_invalid_or_duplicate_modes_are_rejected() {
+        for updates in UpdateMode::ALL {
+            let settings = Preferences {
+                updates,
+                ..Preferences::default()
+            };
+            assert_eq!(Preferences::decode(&settings.encode()), Ok(settings));
+        }
+        let legacy = "version=1\nbackground=#000000\nposition=Center\n";
+        assert_eq!(
+            Preferences::decode(legacy).unwrap().updates,
+            UpdateMode::Automatic
+        );
+        for extra in ["updates=unknown", "updates=Off\nupdates=Automatic"] {
+            assert!(Preferences::decode(&format!("{legacy}{extra}")).is_err());
+        }
+    }
 
     #[test]
     fn colors_and_settings_round_trip_without_confusing_rgb_and_native_bgr() {
