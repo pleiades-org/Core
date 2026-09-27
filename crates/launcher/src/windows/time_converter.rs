@@ -2,6 +2,7 @@ use core_engine::calculator::calendar::{CalendarClock, CalendarError, LocalMomen
 use core_engine::time_conversion::{
     ClockTime, ConvertedTime, Date, TimeConverter, TimeError, TimeRequest, TimeZone,
 };
+use std::time::{Duration, Instant};
 use windows::Win32::{
     Foundation::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, FILETIME, SYSTEMTIME},
     System::{
@@ -76,10 +77,14 @@ impl CalendarClock for WindowsCalendarClock {
     }
 }
 
+/// A failed zone-key load is not retried on every keystroke, only after this delay.
+const ZONE_RETRY_DELAY: Duration = Duration::from_secs(60);
+
 /// Created cheaply with the search worker; only the first regional conversion loads zone keys.
 #[derive(Default)]
 pub struct WindowsTimeConverter {
     zones: Option<Vec<(TimeZone, DYNAMIC_TIME_ZONE_INFORMATION)>>,
+    zones_failed_at: Option<Instant>,
 }
 
 impl TimeConverter for WindowsTimeConverter {
@@ -119,16 +124,34 @@ impl WindowsTimeConverter {
     }
 
     fn zone(&mut self, zone: TimeZone) -> Result<&DYNAMIC_TIME_ZONE_INFORMATION, TimeError> {
-        if self.zones.is_none() {
-            self.zones = Some(load_zones()?);
-        }
-        self.zones
-            .as_ref()
-            .expect("zone keys loaded")
+        self.loaded_zones(Instant::now(), load_zones)?
             .iter()
             .find(|(identifier, _)| *identifier == zone)
             .map(|(_, information)| information)
             .ok_or(TimeError::Unavailable)
+    }
+
+    fn loaded_zones(
+        &mut self,
+        now: Instant,
+        load: impl FnOnce() -> Result<Vec<(TimeZone, DYNAMIC_TIME_ZONE_INFORMATION)>, TimeError>,
+    ) -> Result<&[(TimeZone, DYNAMIC_TIME_ZONE_INFORMATION)], TimeError> {
+        if self.zones.is_none() {
+            if self
+                .zones_failed_at
+                .is_some_and(|failed_at| now.duration_since(failed_at) < ZONE_RETRY_DELAY)
+            {
+                return Err(TimeError::Unavailable);
+            }
+            match load() {
+                Ok(zones) => self.zones = Some(zones),
+                Err(error) => {
+                    self.zones_failed_at = Some(now);
+                    return Err(error);
+                }
+            }
+        }
+        Ok(self.zones.as_deref().expect("zone keys loaded"))
     }
 
     fn local_time(&mut self, zone: TimeZone, utc: SYSTEMTIME) -> Result<SYSTEMTIME, TimeError> {
@@ -331,6 +354,102 @@ mod tests {
             .unwrap();
         assert_eq!(daylight.time.hour, 5);
         assert_eq!(standard.time.hour, 6);
+    }
+
+    #[test]
+    fn conversions_across_the_new_year_use_each_years_rules() {
+        let mut converter = WindowsTimeConverter::default();
+        for (query, expected) in [
+            ("11pm uk to sydney on 2026-12-31", "10:00 am 2027-01-01"),
+            ("9am sydney to pt on 2027-01-01", "2:00 pm 2026-12-31"),
+            ("11:30pm pt to sydney on 2026-12-31", "6:30 pm 2027-01-01"),
+        ] {
+            let converted = converter.convert(parse_time(query).unwrap()).unwrap();
+            assert_eq!(
+                format!("{} {}", converted.time, converted.destination_date),
+                expected,
+                "{query}"
+            );
+        }
+        let now = SYSTEMTIME {
+            wYear: 2026,
+            wMonth: 12,
+            wDay: 31,
+            wHour: 23,
+            wMinute: 30,
+            ..Default::default()
+        };
+        let result = converter
+            .convert_at(parse_time("9am sydney to uk").unwrap(), now)
+            .unwrap();
+        assert_eq!(result.source_date.to_string(), "2027-01-01");
+        assert_eq!(result.destination_date.to_string(), "2026-12-31");
+        assert_eq!(result.time.to_string(), "10:00 pm");
+    }
+
+    #[test]
+    fn failed_zone_load_is_remembered_and_retried_after_the_delay() {
+        let mut converter = WindowsTimeConverter::default();
+        let started = Instant::now();
+        let attempts = std::cell::Cell::new(0);
+        let fail = || {
+            attempts.set(attempts.get() + 1);
+            Err(TimeError::Unavailable)
+        };
+        let seconds = Duration::from_secs;
+        for elapsed in [0, 1, 59] {
+            assert_eq!(
+                converter
+                    .loaded_zones(started + seconds(elapsed), fail)
+                    .unwrap_err(),
+                TimeError::Unavailable
+            );
+        }
+        assert_eq!(attempts.get(), 1);
+        assert!(converter.loaded_zones(started + seconds(60), fail).is_err());
+        assert!(converter
+            .loaded_zones(started + seconds(119), fail)
+            .is_err());
+        assert_eq!(attempts.get(), 2);
+        let zones = converter
+            .loaded_zones(started + seconds(120), || {
+                Ok(vec![(
+                    TimeZone::London,
+                    DYNAMIC_TIME_ZONE_INFORMATION::default(),
+                )])
+            })
+            .unwrap();
+        assert_eq!(zones.len(), 1);
+        assert_eq!(
+            converter
+                .loaded_zones(started + seconds(121), fail)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(attempts.get(), 2);
+    }
+
+    #[test]
+    #[ignore = "timing measurement; run with --release -- --ignored --nocapture"]
+    fn measure_one_complete_conversion() {
+        const RUNS: u32 = 10_000;
+        let mut converter = WindowsTimeConverter::default();
+        let request = parse_time("9pm et to uk").unwrap();
+        converter.convert(request).unwrap();
+        let mut samples = Vec::with_capacity(RUNS as usize);
+        for _ in 0..RUNS {
+            let started = std::time::Instant::now();
+            std::hint::black_box(converter.convert(std::hint::black_box(request)).unwrap());
+            samples.push(started.elapsed());
+        }
+        samples.sort();
+        println!(
+            "9pm et to uk: median {:?}, p95 {:?}, max {:?}",
+            samples[samples.len() / 2],
+            samples[samples.len() * 95 / 100],
+            samples[samples.len() - 1]
+        );
     }
 
     #[test]
