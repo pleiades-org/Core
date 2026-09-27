@@ -1,5 +1,5 @@
 mod command_flow;
-pub use command_flow::run_mode;
+pub use command_flow::{run_mode, COMMAND_OUTPUT_TIMER};
 mod footer;
 mod settings_flow;
 

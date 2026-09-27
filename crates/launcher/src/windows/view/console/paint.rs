@@ -38,9 +38,61 @@ struct Run {
     column: usize,
     columns: usize,
     look: Look,
+    /// The run's UTF-16 units in [`Runs::text`] and [`Runs::advances`].
+    units: std::ops::Range<usize>,
+}
+
+/// A line split into runs. Their text and advances share two buffers that are reused for
+/// every line of a paint.
+#[derive(Default)]
+struct Runs {
+    runs: Vec<Run>,
     text: Vec<u16>,
     /// Advance for each UTF-16 unit, which keeps every character on the grid.
     advances: Vec<i32>,
+}
+
+/// The off-screen bitmap painting draws into, kept between paints and replaced only when the
+/// console's size changes.
+pub(super) struct BackBuffer {
+    context: HDC,
+    pub(super) bitmap: HBITMAP,
+    previous: HGDIOBJ,
+    pub(super) width: i32,
+    pub(super) height: i32,
+}
+
+impl BackBuffer {
+    fn new(context: HDC, width: i32, height: i32) -> Option<Self> {
+        unsafe {
+            let memory = CreateCompatibleDC(Some(context));
+            if memory.is_invalid() {
+                return None;
+            }
+            let bitmap = CreateCompatibleBitmap(context, width, height);
+            if bitmap.is_invalid() {
+                let _ = DeleteDC(memory);
+                return None;
+            }
+            Some(Self {
+                context: memory,
+                bitmap,
+                previous: SelectObject(memory, bitmap.into()),
+                width,
+                height,
+            })
+        }
+    }
+}
+
+impl Drop for BackBuffer {
+    fn drop(&mut self) {
+        unsafe {
+            SelectObject(self.context, self.previous);
+            let _ = DeleteObject(self.bitmap.into());
+            let _ = DeleteDC(self.context);
+        }
+    }
 }
 
 impl ConsoleView {
@@ -50,16 +102,33 @@ impl ConsoleView {
             let _ = GetClientRect(self.window, &mut client);
         }
         let (width, height) = (client.right.max(1), client.bottom.max(1));
+        let mut back_buffer = self.back_buffer.borrow_mut();
+        if back_buffer
+            .as_ref()
+            .is_none_or(|buffer| (buffer.width, buffer.height) != (width, height))
+        {
+            // The old bitmap goes before the new one is made, so both never exist at once.
+            *back_buffer = None;
+            *back_buffer = BackBuffer::new(context, width, height);
+        }
+        // Drawn off screen first, so streaming output never flickers.
+        let Some(buffer) = back_buffer.as_ref() else {
+            self.paint_lines(context, client);
+            return;
+        };
+        self.paint_lines(buffer.context, client);
         unsafe {
-            // Drawn off screen first, so streaming output never flickers.
-            let memory = CreateCompatibleDC(Some(context));
-            let bitmap = CreateCompatibleBitmap(context, width, height);
-            let previous_bitmap = SelectObject(memory, bitmap.into());
-            self.paint_lines(memory, client);
-            let _ = BitBlt(context, 0, 0, width, height, Some(memory), 0, 0, SRCCOPY);
-            SelectObject(memory, previous_bitmap);
-            let _ = DeleteObject(bitmap.into());
-            let _ = DeleteDC(memory);
+            let _ = BitBlt(
+                context,
+                0,
+                0,
+                width,
+                height,
+                Some(buffer.context),
+                0,
+                0,
+                SRCCOPY,
+            );
         }
     }
 
@@ -74,10 +143,18 @@ impl ConsoleView {
         let previous_font = unsafe { SelectObject(context, self.font.get().into()) };
         let (top, visible) = (self.first_line(), self.visible_lines());
         let count = self.line_count();
+        let mut runs = Runs::default();
         for (row, line) in (top..count.min(top + visible)).enumerate() {
             let y = row as i32 * self.line_height.get();
-            for run in self.runs(line) {
-                self.draw_run(context, y, &run);
+            self.runs(line, &mut runs);
+            for run in &runs.runs {
+                self.draw_run(
+                    context,
+                    y,
+                    run,
+                    &runs.text[run.units.clone()],
+                    &runs.advances[run.units.clone()],
+                );
             }
         }
         self.draw_cursor(context, top);
@@ -86,8 +163,17 @@ impl ConsoleView {
         }
     }
 
-    /// A shown line split into runs. The prompt lines come first, in the secondary colour.
-    fn runs(&self, line: usize) -> Vec<Run> {
+    /// A shown line split into runs, replacing what `runs` held. The prompt lines come first,
+    /// in the secondary colour.
+    fn runs(&self, line: usize, runs: &mut Runs) {
+        let Runs {
+            runs,
+            text,
+            advances,
+        } = runs;
+        runs.clear();
+        text.clear();
+        advances.clear();
         let palette = self.palette.get();
         let selection = self.selection.get();
         let selected_look = |look: Look, column| {
@@ -101,28 +187,23 @@ impl ConsoleView {
                 look
             }
         };
-        let mut runs: Vec<Run> = Vec::new();
         let mut add = |column: usize, character: char, columns: usize, look: Look| {
             let look = selected_look(look, column);
             let mut units = [0_u16; 2];
             let units = character.encode_utf16(&mut units);
             let advance = columns as i32 * self.cell_width.get();
+            extend(text, advances, units, advance);
             match runs.last_mut() {
                 Some(run) if run.look == look && run.column + run.columns == column => {
                     run.columns += columns;
-                    extend(run, units, advance);
+                    run.units.end = text.len();
                 }
-                _ => {
-                    let mut run = Run {
-                        column,
-                        columns,
-                        look,
-                        text: Vec::new(),
-                        advances: Vec::new(),
-                    };
-                    extend(&mut run, units, advance);
-                    runs.push(run);
-                }
+                _ => runs.push(Run {
+                    column,
+                    columns,
+                    look,
+                    units: text.len() - units.len()..text.len(),
+                }),
             }
         };
         if line < self.header_lines() {
@@ -135,7 +216,7 @@ impl ConsoleView {
             for (column, character) in self.line_characters(line) {
                 add(column, character, character_width(character).max(1), look);
             }
-            return runs;
+            return;
         }
         let terminal = self.terminal.borrow();
         let cells = terminal.line(line - self.header_lines());
@@ -155,10 +236,9 @@ impl ConsoleView {
                 resolve(cell.style, palette),
             );
         }
-        runs
     }
 
-    fn draw_run(&self, context: HDC, y: i32, run: &Run) {
+    fn draw_run(&self, context: HDC, y: i32, run: &Run, text: &[u16], advances: &[i32]) {
         let cell_width = self.cell_width.get();
         let area = RECT {
             left: run.column as i32 * cell_width,
@@ -178,18 +258,18 @@ impl ConsoleView {
                 y,
                 ETO_OPAQUE | ETO_CLIPPED,
                 Some(&area),
-                PCWSTR(run.text.as_ptr()),
-                run.text.len() as u32,
-                Some(run.advances.as_ptr()),
+                PCWSTR(text.as_ptr()),
+                text.len() as u32,
+                Some(advances.as_ptr()),
             );
             if run.look.underline {
-                let brush = CreateSolidBrush(run.look.foreground);
+                // The stock DC brush takes a colour without creating a brush per run.
+                SetDCBrushColor(context, run.look.foreground);
                 let line = RECT {
                     top: area.bottom - 1,
                     ..area
                 };
-                FillRect(context, &line, brush);
-                let _ = DeleteObject(brush.into());
+                FillRect(context, &line, HBRUSH(GetStockObject(DC_BRUSH).0));
             }
             if let Some(previous) = previous {
                 SelectObject(context, previous);
@@ -231,11 +311,11 @@ impl ConsoleView {
     }
 }
 
-fn extend(run: &mut Run, units: &[u16], advance: i32) {
-    run.text.extend_from_slice(units);
-    run.advances.push(advance);
+fn extend(text: &mut Vec<u16>, advances: &mut Vec<i32>, units: &[u16], advance: i32) {
+    text.extend_from_slice(units);
+    advances.push(advance);
     // The second half of a surrogate pair does not move the pen again.
-    run.advances.extend(std::iter::repeat_n(0, units.len() - 1));
+    advances.extend(std::iter::repeat_n(0, units.len() - 1));
 }
 
 fn resolve(style: Style, palette: Palette) -> Look {

@@ -5,7 +5,11 @@ use super::jsonc::{self, Value};
 use core_engine::search::ShellKind;
 use std::{
     path::{Path, PathBuf},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex, PoisonError,
+    },
+    time::SystemTime,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,7 +52,66 @@ impl Invocation {
     }
 }
 
+/// The shell for `preference`, reused from the last Enter while Windows Terminal's settings
+/// are unchanged and the program is still there.
 pub fn resolve(preference: ShellKind) -> Result<ResolvedShell, String> {
+    static CACHE: Mutex<ShellCache> = Mutex::new(ShellCache::new());
+    CACHE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .resolve(preference, settings_stamp(), installed, resolve_uncached)
+}
+
+/// When each Windows Terminal settings file was last modified; `None` for a missing one.
+type SettingsStamp = Vec<Option<SystemTime>>;
+
+fn settings_stamp() -> SettingsStamp {
+    terminal_settings_paths()
+        .iter()
+        .map(|path| {
+            std::fs::metadata(path)
+                .and_then(|file| file.modified())
+                .ok()
+        })
+        .collect()
+}
+
+/// Shells resolved before, so each command does not re-read and parse Windows Terminal's
+/// settings and probe for programs.
+struct ShellCache {
+    entries: Vec<(ShellKind, SettingsStamp, ResolvedShell)>,
+}
+
+impl ShellCache {
+    const fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    /// The cached shell while `stamp` matches and its program `exists`; otherwise `resolve`
+    /// runs again. Failures are not kept, so a shell installed later is found.
+    fn resolve(
+        &mut self,
+        preference: ShellKind,
+        stamp: SettingsStamp,
+        exists: impl Fn(&Path) -> bool,
+        resolve: impl FnOnce(ShellKind) -> Result<ResolvedShell, String>,
+    ) -> Result<ResolvedShell, String> {
+        let cached = self.entries.iter().find(|(kind, ..)| *kind == preference);
+        if let Some((_, cached_stamp, shell)) = cached {
+            if *cached_stamp == stamp && exists(&shell.program) {
+                return Ok(shell.clone());
+            }
+        }
+        self.entries.retain(|(kind, ..)| *kind != preference);
+        let resolved = resolve(preference)?;
+        self.entries.push((preference, stamp, resolved.clone()));
+        Ok(resolved)
+    }
+}
+
+fn resolve_uncached(preference: ShellKind) -> Result<ResolvedShell, String> {
     let concrete = match preference {
         ShellKind::Default => {
             return Ok(terminal_default().unwrap_or_else(|| ResolvedShell {
@@ -107,12 +170,16 @@ fn locate(shell: &Interpreter) -> Option<PathBuf> {
             environment_path("LOCALAPPDATA", r"Programs\Git\bin\bash.exe"),
         ],
     };
-    // App execution aliases (WindowsApps) are reparse points; `exists` follows them poorly,
-    // so check metadata without following links too.
     candidates
         .into_iter()
         .flatten()
-        .find(|path| path.exists() || std::fs::symlink_metadata(path).is_ok())
+        .find(|path| installed(path))
+}
+
+/// App execution aliases (WindowsApps) are reparse points; `exists` follows them poorly, so
+/// metadata is checked without following links too.
+fn installed(path: &Path) -> bool {
+    path.exists() || std::fs::symlink_metadata(path).is_ok()
 }
 
 fn terminal_settings_paths() -> Vec<PathBuf> {
@@ -128,17 +195,30 @@ fn terminal_settings_paths() -> Vec<PathBuf> {
 
 /// Windows Terminal's default profile, when it is a shell Core knows how to drive.
 fn terminal_default() -> Option<ResolvedShell> {
-    terminal_settings_paths().into_iter().find_map(|path| {
-        let text = std::fs::read_to_string(&path).ok()?;
-        let settings = jsonc::parse(text.trim_start_matches('\u{feff}')).ok()?;
-        let profile = default_profile(&settings)?;
-        let (shell, program) = classify_profile(profile, expand_environment)?;
-        let program = program.or_else(|| locate(&shell))?;
-        Some(ResolvedShell {
-            label: format!("{} (terminal default)", shell_label(&shell)),
-            shell,
-            program,
-        })
+    let settings = terminal_settings_paths()
+        .into_iter()
+        .filter_map(|path| std::fs::read_to_string(path).ok());
+    default_shell(settings, expand_environment, locate)
+}
+
+/// The default profile's shell in the first of `settings` that parses: stable Windows
+/// Terminal before Preview. A default Core cannot drive gives `None`, so Windows PowerShell is
+/// used as documented, rather than another installation's default.
+fn default_shell(
+    settings: impl IntoIterator<Item = String>,
+    expand: impl Fn(&str) -> String,
+    locate: impl Fn(&Interpreter) -> Option<PathBuf>,
+) -> Option<ResolvedShell> {
+    let settings = settings
+        .into_iter()
+        .find_map(|text| jsonc::parse(text.trim_start_matches('\u{feff}')).ok())?;
+    let profile = default_profile(&settings)?;
+    let (shell, program) = classify_profile(profile, expand)?;
+    let program = program.or_else(|| locate(&shell))?;
+    Some(ResolvedShell {
+        label: format!("{} (terminal default)", shell_label(&shell)),
+        shell,
+        program,
     })
 }
 
@@ -568,6 +648,90 @@ mod tests {
             r#"{"defaultProfile": "Command Prompt", "profiles": [{"name": "Command Prompt", "commandline": "cmd.exe"}]}"#,
         );
         assert!(default_profile(&legacy).is_some());
+    }
+
+    #[test]
+    fn cached_shells_are_reused_until_the_settings_or_program_change() {
+        use std::{cell::Cell, time::Duration};
+        let resolves = Cell::new(0);
+        let resolve = |preference: ShellKind| {
+            resolves.set(resolves.get() + 1);
+            Ok(ResolvedShell {
+                shell: Interpreter::Cmd,
+                program: PathBuf::from(format!(r"C:\shells\{preference:?}-{}.exe", resolves.get())),
+                label: String::new(),
+            })
+        };
+        let exists = |_: &Path| true;
+        let stamp = vec![Some(SystemTime::UNIX_EPOCH), None];
+        let mut cache = ShellCache::new();
+        let first = cache.resolve(ShellKind::Default, stamp.clone(), exists, resolve);
+        let again = cache.resolve(ShellKind::Default, stamp.clone(), exists, resolve);
+        assert_eq!(first, again);
+        assert_eq!(resolves.get(), 1, "unchanged settings reuse the shell");
+        cache
+            .resolve(ShellKind::Cmd, stamp.clone(), exists, resolve)
+            .unwrap();
+        assert_eq!(resolves.get(), 2, "each preference is cached on its own");
+
+        let edited = vec![Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1)), None];
+        let changed = cache.resolve(ShellKind::Default, edited.clone(), exists, resolve);
+        assert_ne!(changed, first);
+        assert_eq!(resolves.get(), 3, "edited settings are read again");
+        let created = vec![
+            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1)),
+            Some(SystemTime::UNIX_EPOCH),
+        ];
+        cache
+            .resolve(ShellKind::Default, created.clone(), exists, resolve)
+            .unwrap();
+        assert_eq!(resolves.get(), 4, "a new settings file is read");
+
+        cache
+            .resolve(ShellKind::Default, created.clone(), |_| false, resolve)
+            .unwrap();
+        assert_eq!(
+            resolves.get(),
+            5,
+            "an uninstalled program is looked for again"
+        );
+
+        let failed = cache.resolve(ShellKind::GitBash, created.clone(), exists, |_| {
+            Err("Git Bash is not installed".into())
+        });
+        assert!(failed.is_err());
+        cache
+            .resolve(ShellKind::GitBash, created, exists, resolve)
+            .unwrap();
+        assert_eq!(resolves.get(), 6, "failures are not cached");
+    }
+
+    #[test]
+    fn only_the_first_readable_terminal_settings_choose_the_default() {
+        let expand = |text: &str| text.to_owned();
+        let locate =
+            |shell: &Interpreter| Some(PathBuf::from(format!(r"C:\located\{shell:?}.exe")));
+        let settings = |commandline: &str| {
+            format!(
+                r#"{{"defaultProfile": "{{d}}", "profiles": {{"list": [{{"guid": "{{d}}", "commandline": "{commandline}"}}]}}}}"#
+            )
+        };
+        let preview_pwsh = settings("pwsh.exe");
+        let found = default_shell([settings("cmd.exe"), preview_pwsh.clone()], expand, locate)
+            .expect("stable's default");
+        assert_eq!(found.shell, Interpreter::Cmd);
+        assert_eq!(found.label, "Command Prompt (terminal default)");
+        // Stable's default cannot be driven: Windows PowerShell, not Preview's default.
+        assert_eq!(
+            default_shell([settings("nu.exe"), preview_pwsh.clone()], expand, locate),
+            None
+        );
+        // Settings that cannot be parsed count as not installed.
+        let found = default_shell(["{ broken".to_owned(), preview_pwsh], expand, locate)
+            .expect("Preview's default");
+        assert_eq!(found.shell, Interpreter::PowerShell);
+        assert_eq!(found.program, PathBuf::from(r"C:\located\PowerShell.exe"));
+        assert_eq!(default_shell(Vec::new(), expand, locate), None);
     }
 
     #[test]
