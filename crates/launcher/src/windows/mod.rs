@@ -4,6 +4,7 @@ mod app_icon;
 mod application_icon;
 mod button_hover;
 mod commands;
+mod corner_fringe;
 mod diagnostics;
 mod discover_applications;
 mod displays;

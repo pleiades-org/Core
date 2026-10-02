@@ -75,6 +75,114 @@ pub fn bounds(area: RECT, width: i32, height: i32, position: ScreenPosition) -> 
     }
 }
 
+/// A corner of the window, in the order `ClipShape` stores them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Corner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl Corner {
+    pub const ALL: [Self; 4] = [
+        Self::TopLeft,
+        Self::TopRight,
+        Self::BottomLeft,
+        Self::BottomRight,
+    ];
+
+    fn is_left(self) -> bool {
+        matches!(self, Self::TopLeft | Self::BottomLeft)
+    }
+
+    fn is_top(self) -> bool {
+        matches!(self, Self::TopLeft | Self::TopRight)
+    }
+}
+
+/// Sub-rows sampled per pixel row; across each one the curve's coverage is exact.
+const MASK_SUBROWS: u16 = 16;
+
+/// How much of each pixel in a rounded corner's square lies inside the curve, from 0 (outside)
+/// to 255 (fully inside). A window region keeps or drops whole pixels, so it holds only the
+/// fully inside ones; the partly covered rest is the anti-aliased fringe drawn over the desktop.
+pub struct CornerMask {
+    radius: i32,
+    /// The top-left square, row by row; the other corners mirror it.
+    coverage: Vec<u8>,
+}
+
+impl CornerMask {
+    /// `radius` is in physical pixels.
+    pub fn new(radius: i32) -> Self {
+        let radius = radius.max(0);
+        let size = radius as usize;
+        let curve = radius as f32;
+        let mut coverage = Vec::with_capacity(size * size);
+        for row in 0..radius {
+            // Where the curve crosses each sub-row: everything right of it is inside.
+            let crossings: Vec<f32> = (0..MASK_SUBROWS)
+                .map(|sample| {
+                    let height = row as f32 + (f32::from(sample) + 0.5) / f32::from(MASK_SUBROWS);
+                    let above_center = curve - height;
+                    curve - (curve * curve - above_center * above_center).max(0.).sqrt()
+                })
+                .collect();
+            coverage.extend((0..radius).map(|column| {
+                let inside: f32 = crossings
+                    .iter()
+                    .map(|crossing| (column as f32 + 1. - crossing).clamp(0., 1.))
+                    .sum();
+                (inside / f32::from(MASK_SUBROWS) * 255.).round() as u8
+            }));
+        }
+        Self { radius, coverage }
+    }
+
+    pub fn radius(&self) -> i32 {
+        self.radius
+    }
+
+    /// Coverage at `x`, `y` within `corner`'s square, both from its top-left pixel.
+    pub fn coverage(&self, corner: Corner, x: i32, y: i32) -> u8 {
+        let last = self.radius - 1;
+        let column = if corner.is_left() { x } else { last - x };
+        let row = if corner.is_top() { y } else { last - y };
+        self.coverage[(row * self.radius + column) as usize]
+    }
+
+    /// Pixels of a top-left row, counted from the window's edge, that are not fully inside.
+    /// Coverage only grows toward the window's inside, so they are all at the start.
+    fn outside(&self, row: i32) -> i32 {
+        let start = (row * self.radius) as usize;
+        self.coverage[start..start + self.radius as usize]
+            .iter()
+            .take_while(|&&coverage| coverage < u8::MAX)
+            .count() as i32
+    }
+
+    /// Runs of rows in `corner`'s square that leave out the same number of edge pixels, as
+    /// (first row, row after the last, pixels left out). Rows that leave none out are skipped.
+    fn outside_runs(&self, corner: Corner) -> Vec<(i32, i32, i32)> {
+        let mut runs: Vec<(i32, i32, i32)> = Vec::new();
+        for y in 0..self.radius {
+            let row = if corner.is_top() {
+                y
+            } else {
+                self.radius - 1 - y
+            };
+            let outside = self.outside(row);
+            match runs.last_mut() {
+                Some((_, end, width)) if *end == y && *width == outside => *end += 1,
+                _ if outside > 0 => runs.push((y, y + 1, outside)),
+                _ => {}
+            }
+        }
+        runs
+    }
+}
+
 /// Everything the window's clipping region depends on. Moving the window without changing
 /// its size or which corners touch a screen edge keeps the same shape, so the region is kept.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -102,37 +210,55 @@ impl ClipShape {
             },
         }
     }
+
+    pub fn radius(self) -> i32 {
+        self.radius
+    }
+
+    /// The corners that float, each with the window position of its `radius`-sized square.
+    /// Corners touching a screen edge stay square, as do all of them without rounding.
+    pub fn rounded_corners(self) -> impl Iterator<Item = (Corner, POINT)> {
+        Corner::ALL
+            .into_iter()
+            .zip(self.corners)
+            .filter(move |_| self.radius > 0)
+            .filter(|(_, attached)| !attached)
+            .map(move |(corner, _)| {
+                let x = if corner.is_left() {
+                    0
+                } else {
+                    self.width - self.radius
+                };
+                let y = if corner.is_top() {
+                    0
+                } else {
+                    self.height - self.radius
+                };
+                (corner, POINT { x, y })
+            })
+    }
 }
 
+/// Keeps the pixels fully inside each rounded corner's curve, matching `CornerMask`, so the
+/// corner windows draw every partly covered pixel and nothing is drawn twice.
 pub fn clip_to_edges(window: HWND, shape: ClipShape) -> windows::core::Result<()> {
-    let ClipShape {
-        width,
-        height,
-        radius,
-        corners,
-    } = shape;
-    let region = Region::new(unsafe {
-        if radius == 0 {
-            CreateRectRgn(0, 0, width, height)
-        } else {
-            CreateRoundRectRgn(0, 0, width + 1, height + 1, radius * 2, radius * 2)
-        }
-    })?;
-    for (attached, left, top) in [
-        (corners[0], 0, 0),
-        (corners[1], width - radius, 0),
-        (corners[2], 0, height - radius),
-        (corners[3], width - radius, height - radius),
-    ] {
-        if !attached {
-            continue;
-        }
-        let corner =
-            Region::new(unsafe { CreateRectRgn(left, top, left + radius + 1, top + radius + 1) })?;
-        if unsafe { CombineRgn(Some(region.0), Some(region.0), Some(corner.0), RGN_OR) }
-            == RGN_ERROR
-        {
-            return Err(windows::core::Error::from_win32());
+    let region = Region::new(unsafe { CreateRectRgn(0, 0, shape.width, shape.height) })?;
+    let mask = CornerMask::new(shape.radius);
+    for (corner, origin) in shape.rounded_corners() {
+        for (first, end, outside) in mask.outside_runs(corner) {
+            let left = if corner.is_left() {
+                origin.x
+            } else {
+                origin.x + shape.radius - outside
+            };
+            let cut = Region::new(unsafe {
+                CreateRectRgn(left, origin.y + first, left + outside, origin.y + end)
+            })?;
+            if unsafe { CombineRgn(Some(region.0), Some(region.0), Some(cut.0), RGN_DIFF) }
+                == RGN_ERROR
+            {
+                return Err(windows::core::Error::from_win32());
+            }
         }
     }
     if unsafe { SetWindowRgn(window, Some(region.0), true) } == 0 {
@@ -285,5 +411,85 @@ mod tests {
             ClipShape::new(centered, area, 500),
             ClipShape::new(centered, area, 150)
         );
+    }
+
+    #[test]
+    fn only_floating_corners_are_rounded_each_at_its_own_square() {
+        let area = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1040,
+        };
+        let top = bounds(area, 640, 300, ScreenPosition::Top);
+        assert_eq!(
+            ClipShape::new(top, area, 16)
+                .rounded_corners()
+                .collect::<Vec<_>>(),
+            [
+                (Corner::BottomLeft, POINT { x: 0, y: 284 }),
+                (Corner::BottomRight, POINT { x: 624, y: 284 }),
+            ]
+        );
+        let centered = bounds(area, 640, 300, ScreenPosition::Center);
+        assert_eq!(
+            ClipShape::new(centered, area, 16).rounded_corners().count(),
+            4
+        );
+        assert_eq!(
+            ClipShape::new(centered, area, 0).rounded_corners().count(),
+            0
+        );
+    }
+
+    #[test]
+    fn corner_mask_is_a_smooth_quarter_circle_and_the_region_keeps_only_full_pixels() {
+        const RADIUS: i32 = 16;
+        let last = RADIUS - 1;
+        let mask = CornerMask::new(RADIUS);
+        let top_left = |x, y| mask.coverage(Corner::TopLeft, x, y);
+        let pixels = || (0..RADIUS).flat_map(|y| (0..RADIUS).map(move |x| (x, y)));
+        assert_eq!(top_left(0, 0), 0);
+        assert_eq!(top_left(last, last), u8::MAX);
+        // Coverage grows toward the window's inside along every row and column.
+        for (x, y) in pixels().filter(|&(x, _)| x > 0) {
+            assert!(top_left(x, y) >= top_left(x - 1, y), "({x}, {y})");
+            assert!(top_left(y, x) >= top_left(y, x - 1), "({y}, {x})");
+        }
+        // Partly covered pixels smooth the curve instead of stepping it.
+        let partial = pixels()
+            .filter(|&(x, y)| (1..u8::MAX).contains(&top_left(x, y)))
+            .count();
+        assert!(partial >= RADIUS as usize, "{partial}");
+        let area: f32 = pixels()
+            .map(|(x, y)| f32::from(top_left(x, y)) / 255.)
+            .sum();
+        let quarter_disc = std::f32::consts::PI * (RADIUS * RADIUS) as f32 / 4.;
+        assert!((area - quarter_disc).abs() < 1., "{area} vs {quarter_disc}");
+        // The other corners mirror the top-left one.
+        for (x, y) in pixels() {
+            let coverage = top_left(x, y);
+            assert_eq!(mask.coverage(Corner::TopRight, last - x, y), coverage);
+            assert_eq!(mask.coverage(Corner::BottomLeft, x, last - y), coverage);
+            assert_eq!(
+                mask.coverage(Corner::BottomRight, last - x, last - y),
+                coverage
+            );
+        }
+        // The region leaves out exactly the pixels that are not fully inside.
+        for corner in Corner::ALL {
+            let mut outside = [0; RADIUS as usize];
+            for (first, end, width) in mask.outside_runs(corner) {
+                outside[first as usize..end as usize].fill(width);
+            }
+            for (x, y) in pixels() {
+                let from_edge = if corner.is_left() { x } else { last - x };
+                assert_eq!(
+                    from_edge < outside[y as usize],
+                    mask.coverage(corner, x, y) < u8::MAX,
+                    "{corner:?} ({x}, {y})"
+                );
+            }
+        }
     }
 }
