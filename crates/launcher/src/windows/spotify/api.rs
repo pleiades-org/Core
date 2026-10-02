@@ -15,6 +15,7 @@ use windows::{core::HSTRING, Data::Json::JsonObject};
 
 const API_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RESPONSE_BYTES: usize = 512 * 1024;
+#[derive(Debug)]
 pub struct ApiError {
     pub status: SongStatus,
     pub message: &'static str,
@@ -22,10 +23,16 @@ pub struct ApiError {
 pub type ApiResult<T> = Result<T, ApiError>;
 
 impl ApiError {
-    fn invalid() -> Self {
+    pub(super) fn invalid() -> Self {
         Self {
             status: SongStatus::NetworkError,
             message: "Spotify returned an invalid response. Try again later.",
+        }
+    }
+    pub(super) fn cancelled() -> Self {
+        Self {
+            status: SongStatus::NetworkError,
+            message: "Spotify playback was cancelled.",
         }
     }
     fn network() -> Self {
@@ -118,13 +125,18 @@ impl Client {
         parse_songs(&response.body).map_err(|_| ApiError::invalid())
     }
 
-    pub fn play(&mut self, uri: &str) -> ApiResult<()> {
-        if !valid_track_uri(uri) {
-            return Err(ApiError::invalid());
-        }
-        let body = format!("{{\"uris\":[\"{uri}\"],\"position_ms\":0}}");
-        self.authenticated("PUT", "/v1/me/player/play", body.as_bytes())?;
-        Ok(())
+    pub fn play(
+        &mut self,
+        uri: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> ApiResult<super::playback::PlaybackTarget> {
+        super::playback::play_song(
+            self,
+            uri,
+            &std::env::var("COMPUTERNAME").unwrap_or_default(),
+            super::playback::wait,
+            cancelled,
+        )
     }
 
     pub fn disconnect(&mut self) -> Result<(), String> {
@@ -206,14 +218,27 @@ impl Client {
         Ok(())
     }
 
-    fn authenticated(
+    pub(super) fn authenticated(
         &mut self,
         method: &'static str,
         path: &str,
         body: &[u8],
     ) -> ApiResult<http::Response> {
+        self.authenticated_if_current(method, path, body, &|| false)
+    }
+
+    pub(super) fn authenticated_if_current(
+        &mut self,
+        method: &'static str,
+        path: &str,
+        body: &[u8],
+        cancelled: &impl Fn() -> bool,
+    ) -> ApiResult<http::Response> {
         for attempt in 0..2 {
             let access = self.access_token()?;
+            if cancelled() {
+                return Err(ApiError::cancelled());
+            }
             let headers =
                 format!("Authorization: Bearer {access}\r\nContent-Type: application/json\r\n");
             match self.request("api.spotify.com", method, path, &headers, body) {
@@ -252,11 +277,11 @@ impl Client {
             .transport
             .send(host, method, path, headers, body)
             .inspect_err(|error| {
-                if path == "/v1/me/player/play" {
+                if path.split('?').next() == Some("/v1/me/player/play") {
                     eprintln!("Spotify playback request failed: {}", error.message);
                 }
             })?;
-        if path == "/v1/me/player/play" {
+        if path.split('?').next() == Some("/v1/me/player/play") {
             // Record only the response status, never bearer headers or request bodies.
             eprintln!("Spotify playback: HTTP {}", response.status);
         }
@@ -282,12 +307,12 @@ fn response_error(status: u32) -> Option<ApiError> {
     Some(ApiError { status, message })
 }
 
-fn parse_json(bytes: &[u8]) -> ApiResult<JsonObject> {
+pub(super) fn parse_json(bytes: &[u8]) -> ApiResult<JsonObject> {
     let text = std::str::from_utf8(bytes).map_err(|_| ApiError::invalid())?;
     JsonObject::Parse(&HSTRING::from(text)).map_err(|_| ApiError::invalid())
 }
 
-fn string(object: &JsonObject, name: &str) -> ApiResult<String> {
+pub(super) fn string(object: &JsonObject, name: &str) -> ApiResult<String> {
     object
         .GetNamedString(&HSTRING::from(name))
         .map(|text| text.to_string())
@@ -299,7 +324,7 @@ pub fn valid_track_uri(uri: &str) -> bool {
         .is_some_and(|id| id.len() == 22 && id.bytes().all(|byte| byte.is_ascii_alphanumeric()))
 }
 
-fn bounded(text: String) -> Arc<str> {
+pub(super) fn bounded(text: String) -> Arc<str> {
     text.chars()
         .filter(|character| !character.is_control())
         .take(256)
@@ -449,6 +474,24 @@ mod tests {
         }
     }
 
+    fn devices_response() -> http::Response {
+        response(
+            200,
+            r#"{"devices":[{"id":"pc_device","name":"This PC","type":"Computer","is_active":false,"is_restricted":false}]}"#,
+            None,
+        )
+    }
+
+    fn playback_response(uri: &str, playing: bool) -> http::Response {
+        response(
+            200,
+            &format!(
+                r#"{{"device":{{"id":"pc_device"}},"is_playing":{playing},"item":{{"uri":"{uri}"}}}}"#
+            ),
+            None,
+        )
+    }
+
     fn mock_client(
         storage: &TestStorage,
         responses: Vec<http::Response>,
@@ -523,18 +566,34 @@ mod tests {
 
     #[test]
     fn enter_plays_exactly_the_selected_track_and_rejects_invalid_uris_before_sending() {
+        let _apartment = Apartment::new();
         let storage = TestStorage::new();
-        let (mut client, requests) = mock_client(&storage, vec![response(204, "", None)]);
-        assert!(client.play("spotify:track:0123456789abcdefghijkl").is_ok());
-        assert!(client.play("spotify:track:invalid").is_err());
-        let requests = requests.lock().unwrap();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, "PUT");
-        assert_eq!(requests[0].path, "/v1/me/player/play");
+        let uri = "spotify:track:0123456789abcdefghijkl";
+        let (mut client, requests) = mock_client(
+            &storage,
+            vec![
+                devices_response(),
+                response(204, "", None),
+                playback_response(uri, true),
+            ],
+        );
         assert_eq!(
-            requests[0].body,
+            client.play(uri, &|| false).unwrap().name.as_ref(),
+            "This PC"
+        );
+        assert!(client.play("spotify:track:invalid", &|| false).is_err());
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0].method, "GET");
+        assert_eq!(requests[0].path, "/v1/me/player/devices");
+        assert_eq!(requests[1].method, "PUT");
+        assert_eq!(requests[1].path, "/v1/me/player/play?device_id=pc_device");
+        assert_eq!(
+            requests[1].body,
             br#"{"uris":["spotify:track:0123456789abcdefghijkl"],"position_ms":0}"#
         );
+        assert_eq!(requests[2].method, "GET");
+        assert_eq!(requests[2].path, "/v1/me/player");
     }
 
     #[test]
@@ -547,10 +606,14 @@ mod tests {
             vec![
                 response(401, "", None),
                 response(200, tokens, None),
+                devices_response(),
                 response(204, "", None),
+                playback_response("spotify:track:0123456789abcdefghijkl", true),
             ],
         );
-        assert!(client.play("spotify:track:0123456789abcdefghijkl").is_ok());
+        assert!(client
+            .play("spotify:track:0123456789abcdefghijkl", &|| false)
+            .is_ok());
         assert_eq!(
             token_store::load(&storage.path(), &client.settings.client_id)
                 .unwrap()
@@ -558,7 +621,7 @@ mod tests {
             Some("replacement-refresh")
         );
         let requests = requests.lock().unwrap();
-        assert_eq!(requests.len(), 3);
+        assert_eq!(requests.len(), 5);
         assert_eq!(requests[1].host, "accounts.spotify.com");
         assert_eq!(requests[1].method, "POST");
         assert!(std::str::from_utf8(&requests[1].body)
@@ -568,20 +631,227 @@ mod tests {
     }
 
     #[test]
+    fn a_successful_http_response_without_playback_is_reported_as_a_failure() {
+        let _apartment = Apartment::new();
+        let storage = TestStorage::new();
+        let mut responses = vec![devices_response(), response(204, "", None)];
+        responses.extend((0..5).map(|_| response(204, "", None)));
+        let (mut client, requests) = mock_client(&storage, responses);
+
+        let result = super::super::playback::play_song(
+            &mut client,
+            "spotify:track:0123456789abcdefghijkl",
+            "This PC",
+            |_| {},
+            &|| false,
+        );
+
+        assert!(result.unwrap_err().message.contains("did not start"));
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 7);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.method == "PUT")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_selected_track_that_remains_paused_is_resumed_once_on_the_same_device() {
+        let _apartment = Apartment::new();
+        let storage = TestStorage::new();
+        let uri = "spotify:track:0123456789abcdefghijkl";
+        let (mut client, requests) = mock_client(
+            &storage,
+            vec![
+                devices_response(),
+                response(204, "", None),
+                playback_response(uri, false),
+                playback_response(uri, false),
+                response(204, "", None),
+                playback_response(uri, true),
+            ],
+        );
+
+        let result =
+            super::super::playback::play_song(&mut client, uri, "This PC", |_| {}, &|| false);
+
+        assert!(result.is_ok());
+        let requests = requests.lock().unwrap();
+        let commands: Vec<_> = requests
+            .iter()
+            .filter(|request| request.method == "PUT")
+            .collect();
+        assert_eq!(commands.len(), 2);
+        assert_eq!(commands[0].path, commands[1].path);
+        assert_eq!(commands[1].body, commands[0].body);
+    }
+
+    #[test]
+    fn an_old_track_is_never_resumed_or_reported_as_the_selected_song() {
+        let _apartment = Apartment::new();
+        let storage = TestStorage::new();
+        let mut responses = vec![devices_response(), response(204, "", None)];
+        responses.extend(
+            (0..5).map(|_| playback_response("spotify:track:abcdefghijkl0123456789", false)),
+        );
+        let (mut client, requests) = mock_client(&storage, responses);
+
+        assert!(super::super::playback::play_song(
+            &mut client,
+            "spotify:track:0123456789abcdefghijkl",
+            "This PC",
+            |_| {},
+            &|| false
+        )
+        .is_err());
+
+        assert_eq!(
+            requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|request| request.method == "PUT")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn cancellation_after_device_lookup_never_sends_a_play_command() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let _apartment = Apartment::new();
+        let storage = TestStorage::new();
+        let (mut client, requests) = mock_client(&storage, vec![devices_response()]);
+        let checks = AtomicUsize::new(0);
+        let cancelled = || checks.fetch_add(1, Ordering::SeqCst) != 0;
+
+        assert!(super::super::playback::play_song(
+            &mut client,
+            "spotify:track:0123456789abcdefghijkl",
+            "This PC",
+            |_| {},
+            &cancelled
+        )
+        .is_err());
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+    }
+
+    #[test]
+    fn missing_device_permission_requests_reconnection_without_playing_anything() {
+        let storage = TestStorage::new();
+        let (mut client, requests) = mock_client(&storage, vec![response(403, "", None)]);
+
+        let error = client
+            .play("spotify:track:0123456789abcdefghijkl", &|| false)
+            .unwrap_err();
+
+        assert_eq!(error.status, SongStatus::ConnectRequired);
+        assert!(error.message.contains("playback-state access"));
+        assert_eq!(requests.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn cancellation_during_token_refresh_prevents_retrying_the_play_command() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let _apartment = Apartment::new();
+        let storage = TestStorage::new();
+        let tokens = r#"{"access_token":"replacement-access","refresh_token":"replacement-refresh","token_type":"Bearer","expires_in":3600}"#;
+        let (mut client, requests) = mock_client(
+            &storage,
+            vec![
+                devices_response(),
+                response(401, "", None),
+                response(200, tokens, None),
+            ],
+        );
+        let checks = AtomicUsize::new(0);
+        let cancelled = || checks.fetch_add(1, Ordering::SeqCst) >= 3;
+
+        let error = super::super::playback::play_song(
+            &mut client,
+            "spotify:track:0123456789abcdefghijkl",
+            "This PC",
+            |_| {},
+            &cancelled,
+        )
+        .unwrap_err();
+
+        assert!(error.message.contains("cancelled"));
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.method == "PUT")
+                .count(),
+            1
+        );
+        assert_eq!(requests[2].host, "accounts.spotify.com");
+    }
+
+    #[test]
+    fn restricted_devices_and_missing_or_invalid_ids_are_never_targeted() {
+        let _apartment = Apartment::new();
+        let storage = TestStorage::new();
+        let devices = r#"{"devices":[{"id":null,"is_restricted":false},{"id":"restricted_pc","is_restricted":true},{"id":"bad&id=other","is_restricted":false}]}"#;
+        let (mut client, requests) = mock_client(&storage, vec![response(200, devices, None)]);
+
+        assert!(client
+            .play("spotify:track:0123456789abcdefghijkl", &|| false)
+            .is_err());
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+    }
+
+    #[test]
+    fn the_final_confirmation_read_never_sends_a_retry_it_cannot_observe() {
+        let _apartment = Apartment::new();
+        let storage = TestStorage::new();
+        let uri = "spotify:track:0123456789abcdefghijkl";
+        let mut responses = vec![devices_response(), response(204, "", None)];
+        responses.extend((0..4).map(|_| response(204, "", None)));
+        responses.push(playback_response(uri, false));
+        let (mut client, requests) = mock_client(&storage, responses);
+
+        assert!(
+            super::super::playback::play_song(&mut client, uri, "This PC", |_| {}, &|| false)
+                .is_err()
+        );
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 7);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.method == "PUT")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn throttled_requests_wait_for_spotify_and_failed_tokens_never_become_credentials() {
         let _apartment = Apartment::new();
         let storage = TestStorage::new();
         let (mut client, requests) = mock_client(&storage, vec![response(429, "", Some(3600))]);
         assert_eq!(
             client
-                .play("spotify:track:0123456789abcdefghijkl")
+                .play("spotify:track:0123456789abcdefghijkl", &|| false)
                 .unwrap_err()
                 .status,
             SongStatus::RateLimited
         );
         assert_eq!(
             client
-                .play("spotify:track:0123456789abcdefghijkl")
+                .play("spotify:track:0123456789abcdefghijkl", &|| false)
                 .unwrap_err()
                 .status,
             SongStatus::RateLimited

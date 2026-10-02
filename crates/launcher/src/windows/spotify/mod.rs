@@ -2,6 +2,7 @@
 mod api;
 mod authorization;
 mod encoding;
+mod playback;
 mod token_store;
 use crate::windows::settings::SpotifySettings;
 use api::Client;
@@ -58,7 +59,7 @@ pub enum Event {
     Account(Result<(), String>),
     Playback {
         request_id: u64,
-        result: Result<(), String>,
+        result: Result<String, String>,
     },
 }
 
@@ -312,7 +313,10 @@ fn perform(
             Some(Event::Account(result))
         }
         Some(Command::Play { request_id, uri }) => {
-            let result = client.play(&uri).map_err(|error| error.message.to_owned());
+            let result = client
+                .play(&uri, cancelled)
+                .map(|device| format!("Playing in Spotify · {}", device.name))
+                .map_err(|error| error.message.to_owned());
             Some(Event::Playback { request_id, result })
         }
         None => {
@@ -338,7 +342,7 @@ pub fn connection_status(folder: Option<PathBuf>, settings: &SpotifySettings) ->
         return "Core's settings folder is unavailable.".into();
     };
     match token_store::load(&folder.join("spotify-token.bin"), &settings.client_id) {
-        Ok(Some(_)) => "Connected. Enter on a song plays it on your active Spotify device.".into(),
+        Ok(Some(_)) => "Connected. Enter plays on this PC when Spotify is available.".into(),
         Ok(None) => "Connect Spotify once, then search with @song.".into(),
         Err(error) => error,
     }
@@ -415,7 +419,7 @@ mod tests {
             1,
             Some(Event::Playback {
                 request_id: 1,
-                result: Ok(()),
+                result: Ok("Playing in Spotify".into()),
             }),
         );
         assert!(shared.pending.lock().unwrap().events.is_empty());

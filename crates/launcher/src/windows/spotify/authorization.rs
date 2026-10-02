@@ -11,6 +11,7 @@ use windows::Win32::Foundation::HWND;
 pub const REDIRECT_URI: &str = "http://127.0.0.1:43821/callback";
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_CALLBACK_BYTES: usize = 8192;
+const AUTHORIZATION_SCOPES: &str = "user-modify-playback-state user-read-playback-state";
 
 pub struct Authorization {
     pub code: String,
@@ -27,7 +28,7 @@ pub fn authorize(client_id: &str, cancelled: &impl Fn() -> bool) -> Result<Autho
         .map_err(|_| "Could not prepare the Spotify connection.")?;
     let verifier = random_secret()?;
     let state = random_secret()?;
-    let url = format!("https://accounts.spotify.com/authorize?client_id={}&response_type=code&redirect_uri={}&scope=user-modify-playback-state&state={}&code_challenge_method=S256&code_challenge={}", url_encode(client_id), url_encode(REDIRECT_URI), state, challenge(&verifier)?);
+    let url = format!("https://accounts.spotify.com/authorize?client_id={}&response_type=code&redirect_uri={}&scope={}&state={}&code_challenge_method=S256&code_challenge={}", url_encode(client_id), url_encode(REDIRECT_URI), url_encode(AUTHORIZATION_SCOPES), state, challenge(&verifier)?);
     if cancelled() {
         return Err("Spotify connection cancelled.".into());
     }

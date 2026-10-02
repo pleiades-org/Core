@@ -48,7 +48,7 @@ impl SongFlow {
         });
     }
 
-    fn playback_finished(&mut self, request_id: u64, result: Result<(), String>) {
+    fn playback_finished(&mut self, request_id: u64, result: Result<String, String>) {
         let Some(notice) = self
             .playback
             .as_mut()
@@ -56,10 +56,7 @@ impl SongFlow {
         else {
             return;
         };
-        notice.message = result.map_or_else(
-            |error| error,
-            |()| "Playback requested on your active Spotify device".into(),
-        );
+        notice.message = result.unwrap_or_else(|error| error);
     }
 
     pub(super) fn playback_notice(&self, query: &str, uri: &str) -> Option<&str> {
@@ -300,7 +297,7 @@ mod tests {
             &selected,
             Err("Spotify is busy".into()),
         );
-        flow.playback_finished(1, Ok(()));
+        flow.playback_finished(1, Ok("Playing in Spotify".into()));
 
         assert_eq!(
             flow.playback_notice("@song selected", &selected.uri),
@@ -322,7 +319,7 @@ mod tests {
             Err("Spotify is busy".into()),
         );
 
-        flow.playback_finished(first_request, Ok(()));
+        flow.playback_finished(first_request, Ok("Playing in Spotify".into()));
 
         assert_eq!(
             flow.playback_notice("@song selected", &selected.uri),

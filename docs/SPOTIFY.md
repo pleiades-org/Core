@@ -14,7 +14,11 @@
 
 Type **`@song basorexia`**, or search by song and artist together. Matching songs appear in Core's existing results list with title, artist, album and artwork. Use the arrows to select a result and press **Enter** to play it from 0:00. Core stays open. The footer keeps playback status or errors visible for that result.
 
-Playback goes to your **active Spotify device**, which can be your PC, phone or another Spotify Connect device. To play on this PC, open Spotify here and play a track once before using Core's song results. Core displays an actionable error if Spotify has no available active device, refuses access, or reaches its request limit.
+Core prefers Spotify on **this PC**, including when it is available but inactive. If it cannot match this PC's name, it uses the active device, then a single available computer. Open Spotify here so it appears in the device list. Restricted devices and devices without a usable ID are excluded; ambiguous inactive computers require you to choose a device in Spotify.
+
+After sending the selected song to that device, Core checks that the same song is playing there before showing **Playing in Spotify**. It checks briefly after Enter, without polling while idle. If the selected song remains paused, Core retries that exact song once. An accepted request without confirmed playback shows an error instead of success.
+
+The connection needs both playback-control and playback-state permissions. Connections made before Core 2.4.2 may need **Connect Spotify** once more to approve playback-state access; Core explains when this is required.
 
 Only an explicit `@song` query is sent to Spotify. Searches wait for a short typing pause, newer queries replace queued ones, and responses for older text are discarded. General application searches remain local. Album artwork is downloaded from Spotify's image host and cached in memory.
 
@@ -28,6 +32,6 @@ Search and playback use the official Web API and authorization with PKCE. Core d
 
 ## Validation
 
-Offscreen checks cover explicit command parsing, selected-track playback, stale query rejection, configuration cancellation, PKCE's published test vector, callback state and path validation, encrypted credential storage, token rotation, URI and image-host validation, rate-limit backoff, HTTP methods/headers/bodies through a local server, artwork decoding in memory, and settings compatibility. These checks do not open Core or a browser and do not change playback.
+Offscreen checks cover explicit command parsing, device selection, exact-track playback confirmation, accepted requests that never start playback, bounded retry of a paused selected song, stale query rejection, cancellation during token refresh, PKCE's published test vector, callback state and path validation, encrypted credential storage, token rotation, URI and image-host validation, rate-limit backoff, HTTP methods/headers/bodies through a local server, artwork decoding in memory, and settings compatibility. These checks do not open Core or a browser and do not change playback.
 
-Live Spotify authorization and playback, and the new settings page's visual and assistive-technology acceptance, require manual verification. They have not been run automatically.
+Authorization and read-only device/state requests have been checked with the user's connection. Live playback and the settings page's visual and assistive-technology acceptance still require manual verification. They have not been run automatically.
