@@ -12,7 +12,61 @@ pub(super) struct SongFlow {
     service: Option<SpotifyService>,
     settings: SpotifySettings,
     requested: Option<String>,
+    playback: Option<PlaybackNotice>,
+    next_playback_request: u64,
     pub snapshot: Option<Arc<SongSearch>>,
+}
+
+struct PlaybackNotice {
+    request_id: u64,
+    query: String,
+    uri: Arc<str>,
+    message: String,
+}
+
+impl SongFlow {
+    fn new_playback_request(&mut self) -> u64 {
+        self.next_playback_request = self.next_playback_request.wrapping_add(1);
+        self.next_playback_request
+    }
+
+    fn playback_started(
+        &mut self,
+        request_id: u64,
+        query: &str,
+        song: &Song,
+        result: Result<(), String>,
+    ) {
+        self.playback = Some(PlaybackNotice {
+            request_id,
+            query: song_query(query).unwrap_or_default().to_owned(),
+            uri: song.uri.clone(),
+            message: result.map_or_else(
+                |error| error,
+                |()| format!("Starting {} in Spotify…", song.title),
+            ),
+        });
+    }
+
+    fn playback_finished(&mut self, request_id: u64, result: Result<(), String>) {
+        let Some(notice) = self
+            .playback
+            .as_mut()
+            .filter(|notice| notice.request_id == request_id)
+        else {
+            return;
+        };
+        notice.message = result.map_or_else(
+            |error| error,
+            |()| "Playback requested on your active Spotify device".into(),
+        );
+    }
+
+    pub(super) fn playback_notice(&self, query: &str, uri: &str) -> Option<&str> {
+        let notice = self.playback.as_ref()?;
+        (song_query(query) == Some(&notice.query) && &*notice.uri == uri)
+            .then_some(notice.message.as_str())
+    }
 }
 
 impl LauncherState {
@@ -28,6 +82,7 @@ impl LauncherState {
         self.songs.settings = settings.clone();
         self.songs.requested = None;
         self.songs.snapshot = None;
+        self.songs.playback = None;
         if let Some(service) = &self.songs.service {
             service.configure(settings);
         }
@@ -60,6 +115,7 @@ impl LauncherState {
         let Some(payload) = song_query(query) else {
             self.songs.requested = None;
             self.songs.snapshot = None;
+            self.songs.playback = None;
             if let Some(service) = &self.songs.service {
                 service.cancel_search();
             }
@@ -68,6 +124,7 @@ impl LauncherState {
         if self.songs.requested.as_deref() == Some(payload) {
             return;
         }
+        self.songs.playback = None;
         let settings = self.spotify_settings();
         let status = match (
             settings.enabled,
@@ -121,6 +178,7 @@ impl LauncherState {
                 Event::Account(result) => {
                     self.songs.requested = None;
                     self.songs.snapshot = None;
+                    self.songs.playback = None;
                     let text = result.map_or_else(
                         |error| error,
                         |()| {
@@ -137,13 +195,9 @@ impl LauncherState {
                         self.queue_search();
                     }
                 }
-                Event::Playback(result) => {
-                    if let Some(view) = &self.view {
-                        view.set_footer(&result.map_or_else(
-                            |error| error,
-                            |()| "Playing the selected song in Spotify".into(),
-                        ));
-                    }
+                Event::Playback { request_id, result } => {
+                    self.songs.playback_finished(request_id, result);
+                    self.refresh_footer();
                     self.request_media_reading();
                 }
             }
@@ -176,20 +230,103 @@ impl LauncherState {
         let text = result.map_or_else(|error| error, |()| "Disconnecting Spotify…".into());
         self.songs.requested = None;
         self.songs.snapshot = None;
+        self.songs.playback = None;
         if let Some(view) = &self.view {
             view.spotify_status(&text);
         }
     }
 
     pub(super) fn play_song(&mut self, song: Song) {
+        let request_id = self.songs.new_playback_request();
         let result = self
             .spotify_service()
-            .and_then(|service| service.play(&song.uri));
-        if let Some(view) = &self.view {
-            view.set_footer(&result.map_or_else(
-                |error| error,
-                |()| format!("Starting {} in Spotify…", song.title),
-            ));
+            .and_then(|service| service.play(request_id, &song.uri));
+        let query = self
+            .view
+            .as_ref()
+            .map(|view| view.query())
+            .unwrap_or_default();
+        self.songs
+            .playback_started(request_id, &query, &song, result);
+        self.refresh_footer();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn song(uri: &str) -> Song {
+        Song {
+            uri: uri.into(),
+            title: "Selected song".into(),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            artwork: None,
         }
+    }
+
+    #[test]
+    fn footer_refreshes_retain_the_playback_error_for_the_selected_result() {
+        let selected = song("spotify:track:0123456789abcdefghijkl");
+        let mut flow = SongFlow::default();
+        flow.playback_started(1, "@song selected", &selected, Ok(()));
+        flow.playback_finished(1, Err("No active Spotify device".into()));
+
+        for _ in 0..3 {
+            assert_eq!(
+                flow.playback_notice("@song selected", &selected.uri),
+                Some("No active Spotify device")
+            );
+        }
+        assert!(flow
+            .playback_notice("@song changed", &selected.uri)
+            .is_none());
+        assert!(flow.playback_notice("selected", &selected.uri).is_none());
+        assert!(flow
+            .playback_notice("@song selected", "different-uri")
+            .is_none());
+    }
+
+    #[test]
+    fn an_old_playback_completion_cannot_replace_a_new_song_notice() {
+        let previous = song("spotify:track:0123456789abcdefghijkl");
+        let selected = song("spotify:track:abcdefghijkl0123456789");
+        let mut flow = SongFlow::default();
+        flow.playback_started(1, "@song selected", &previous, Ok(()));
+        flow.playback_started(
+            2,
+            "@song selected",
+            &selected,
+            Err("Spotify is busy".into()),
+        );
+        flow.playback_finished(1, Ok(()));
+
+        assert_eq!(
+            flow.playback_notice("@song selected", &selected.uri),
+            Some("Spotify is busy")
+        );
+    }
+
+    #[test]
+    fn an_older_completion_for_the_same_uri_cannot_hide_a_retry_failure() {
+        let selected = song("spotify:track:0123456789abcdefghijkl");
+        let mut flow = SongFlow::default();
+        let first_request = flow.new_playback_request();
+        flow.playback_started(first_request, "@song selected", &selected, Ok(()));
+        let retry = flow.new_playback_request();
+        flow.playback_started(
+            retry,
+            "@song selected",
+            &selected,
+            Err("Spotify is busy".into()),
+        );
+
+        flow.playback_finished(first_request, Ok(()));
+
+        assert_eq!(
+            flow.playback_notice("@song selected", &selected.uri),
+            Some("Spotify is busy")
+        );
     }
 }

@@ -12,7 +12,7 @@
 
 ## Search and play
 
-Type **`@song basorexia`**, or search by song and artist together. Matching songs appear in Core's existing results list with title, artist, album and artwork. Use the arrows to select a result and press **Enter** to play it. Core stays open.
+Type **`@song basorexia`**, or search by song and artist together. Matching songs appear in Core's existing results list with title, artist, album and artwork. Use the arrows to select a result and press **Enter** to play it from 0:00. Core stays open. The footer keeps playback status or errors visible for that result.
 
 Playback goes to your **active Spotify device**, which can be your PC, phone or another Spotify Connect device. To play on this PC, open Spotify here and play a track once before using Core's song results. Core displays an actionable error if Spotify has no available active device, refuses access, or reaches its request limit.
 

@@ -51,12 +51,15 @@ const SEARCH_SETTLE: Duration = Duration::from_millis(350);
 enum Command {
     Connect,
     Disconnect,
-    Play(String),
+    Play { request_id: u64, uri: String },
 }
 pub enum Event {
     Search(SongSearch),
     Account(Result<(), String>),
-    Playback(Result<(), String>),
+    Playback {
+        request_id: u64,
+        result: Result<(), String>,
+    },
 }
 
 #[derive(Default)]
@@ -128,8 +131,11 @@ impl SpotifyService {
     pub fn connect(&self) -> Result<(), String> {
         self.command(Command::Connect)
     }
-    pub fn play(&self, uri: &str) -> Result<(), String> {
-        self.command(Command::Play(uri.to_owned()))
+    pub fn play(&self, request_id: u64, uri: &str) -> Result<(), String> {
+        self.command(Command::Play {
+            request_id,
+            uri: uri.to_owned(),
+        })
     }
 
     pub fn disconnect(&self) -> Result<(), String> {
@@ -305,9 +311,10 @@ fn perform(
             );
             Some(Event::Account(result))
         }
-        Some(Command::Play(uri)) => Some(Event::Playback(
-            client.play(&uri).map_err(|error| error.message.to_owned()),
-        )),
+        Some(Command::Play { request_id, uri }) => {
+            let result = client.play(&uri).map_err(|error| error.message.to_owned());
+            Some(Event::Playback { request_id, result })
+        }
         None => {
             let query = query?;
             if !client.settings.enabled || cancelled() {
@@ -366,7 +373,7 @@ mod tests {
         );
         drop(pending);
         assert!(service
-            .play("spotify:track:0123456789abcdefghijkl")
+            .play(1, "spotify:track:0123456789abcdefghijkl")
             .is_err());
     }
 
@@ -379,7 +386,10 @@ mod tests {
         assert!(perform(&mut client, Some(Command::Connect), None, &|| true).is_none());
         assert!(perform(
             &mut client,
-            Some(Command::Play("spotify:track:0123456789abcdefghijkl".into())),
+            Some(Command::Play {
+                request_id: 1,
+                uri: "spotify:track:0123456789abcdefghijkl".into()
+            }),
             None,
             &|| true
         )
@@ -399,7 +409,15 @@ mod tests {
                 ..Default::default()
             })),
         );
-        publish(0, &shared, 1, Some(Event::Playback(Ok(()))));
+        publish(
+            0,
+            &shared,
+            1,
+            Some(Event::Playback {
+                request_id: 1,
+                result: Ok(()),
+            }),
+        );
         assert!(shared.pending.lock().unwrap().events.is_empty());
     }
 }

@@ -8,6 +8,12 @@ impl LauncherState {
     /// Keep the footer tied to the selected action while preserving errors and run status.
     pub fn refresh_footer(&self) {
         let Some(view) = &self.view else { return };
+        if let Some(result) = self.batch.results.get(view.selected()) {
+            if let Some(message) = self.songs.playback_notice(&view.query(), &result.id) {
+                view.set_footer(message);
+                return;
+            }
+        }
         if view.query().trim().eq_ignore_ascii_case("@update") {
             view.set_footer(&self.update_hint());
             return;
