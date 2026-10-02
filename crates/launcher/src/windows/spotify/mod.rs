@@ -342,7 +342,7 @@ pub fn connection_status(folder: Option<PathBuf>, settings: &SpotifySettings) ->
         return "Core's settings folder is unavailable.".into();
     };
     match token_store::load(&folder.join("spotify-token.bin"), &settings.client_id) {
-        Ok(Some(_)) => "Connected. Enter plays on this PC when Spotify is available.".into(),
+        Ok(Some(_)) => "Connected. Enter plays on your active Spotify device.".into(),
         Ok(None) => "Connect Spotify once, then search with @song.".into(),
         Err(error) => error,
     }

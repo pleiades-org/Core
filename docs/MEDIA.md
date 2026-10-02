@@ -42,7 +42,7 @@ Some players publish nothing to Windows: pressing a media or volume key then sho
 
 ## Searching for a song
 
-Optional **Settings → Music → Spotify song search** connects a personal Spotify app. Type **`@song`** followed by a song or artist, select a result, and press Enter while Core stays open. Core prefers Spotify on this PC, otherwise the active device or a single available computer, and confirms that the selected song is playing before showing success. This requires Spotify Premium and an account connection with playback-control and playback-state permissions. It is disabled by default and is separate from the existing Windows media controls. See [Spotify setup and privacy](SPOTIFY.md).
+Optional **Settings → Music → Spotify song search** connects a personal Spotify app. Type **`@song`** followed by a song or artist, select a result, and press Enter while Core stays open. Core respects the active device chosen in Spotify, falling back to this PC or a single available computer when none is active, and confirms that the selected song is playing before showing success. This requires Spotify Premium and an account connection with playback-control and playback-state permissions. It is disabled by default and is separate from the existing Windows media controls. See [Spotify setup, privacy, and the desktop playback workaround](SPOTIFY.md).
 
 ## The now-playing bar
 

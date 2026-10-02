@@ -631,6 +631,40 @@ mod tests {
     }
 
     #[test]
+    fn choosing_the_web_player_in_spotify_keeps_playback_off_the_inactive_desktop() {
+        let _apartment = Apartment::new();
+        let storage = TestStorage::new();
+        let devices = r#"{"devices":[{"id":"pc_device","name":"This PC","type":"Computer","is_active":false,"is_restricted":false},{"id":"web_device","name":"Web Player (Chrome)","type":"Computer","is_active":true,"is_restricted":false}]}"#;
+        let playback = r#"{"device":{"id":"web_device"},"is_playing":true,"item":{"uri":"spotify:track:0123456789abcdefghijkl"}}"#;
+        let (mut client, requests) = mock_client(
+            &storage,
+            vec![
+                response(200, devices, None),
+                response(204, "", None),
+                response(200, playback, None),
+            ],
+        );
+
+        let result = super::super::playback::play_song(
+            &mut client,
+            "spotify:track:0123456789abcdefghijkl",
+            "This PC",
+            |_| {},
+            &|| false,
+        );
+
+        assert_eq!(result.unwrap().name.as_ref(), "Web Player (Chrome)");
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[1].method, "PUT");
+        assert_eq!(requests[1].path, "/v1/me/player/play?device_id=web_device");
+        assert_eq!(
+            requests[1].body,
+            br#"{"uris":["spotify:track:0123456789abcdefghijkl"],"position_ms":0}"#
+        );
+    }
+
+    #[test]
     fn a_successful_http_response_without_playback_is_reported_as_a_failure() {
         let _apartment = Apartment::new();
         let storage = TestStorage::new();
