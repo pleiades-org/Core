@@ -90,14 +90,15 @@ fn check_cancelled(cancelled: &impl Fn() -> bool) -> ApiResult<()> {
 }
 
 fn choose_device(devices: &[Device], computer_name: &str) -> ApiResult<Device> {
+    // Respect the device chosen in Spotify, including the Web Player desktop workaround.
+    if let Some(device) = devices.iter().find(|device| device.active) {
+        return Ok(device.clone());
+    }
     if let Some(device) = devices.iter().find(|device| {
         device.computer
             && !computer_name.is_empty()
             && device.name.eq_ignore_ascii_case(computer_name)
     }) {
-        return Ok(device.clone());
-    }
-    if let Some(device) = devices.iter().find(|device| device.active) {
         return Ok(device.clone());
     }
     let mut computers = devices.iter().filter(|device| device.computer);
@@ -212,7 +213,7 @@ fn confirm_playback(
     }
     Err(ApiError {
         status: SongStatus::NetworkError,
-        message: "Spotify did not start the selected song. Check Spotify.",
+        message: "Spotify did not start the song. Try its Web Player.",
     })
 }
 
@@ -230,14 +231,32 @@ mod tests {
     }
 
     #[test]
-    fn an_available_local_pc_is_targeted_even_when_inactive() {
+    fn the_active_device_is_respected_even_when_the_local_pc_is_available() {
         let devices = [
             device("phone", "Phone", false, true),
             device("pc", "This PC", true, false),
         ];
-        assert_eq!(choose_device(&devices, "THIS PC").unwrap().id, "pc");
+        assert_eq!(choose_device(&devices, "THIS PC").unwrap().id, "phone");
         assert_eq!(choose_device(&devices, "Unknown").unwrap().id, "phone");
+        let devices = [
+            device("pc", "This PC", true, false),
+            device("web", "Web Player (Chrome)", true, true),
+        ];
+        assert_eq!(choose_device(&devices, "THIS PC").unwrap().id, "web");
+    }
+
+    #[test]
+    fn an_inactive_local_pc_is_used_when_no_device_is_active() {
+        let devices = [
+            device("other", "Other PC", true, false),
+            device("pc", "This PC", true, false),
+        ];
+        assert_eq!(choose_device(&devices, "THIS PC").unwrap().id, "pc");
         assert_eq!(choose_device(&devices[1..], "Renamed PC").unwrap().id, "pc");
+    }
+
+    #[test]
+    fn missing_or_ambiguous_inactive_devices_require_a_spotify_device_choice() {
         assert!(choose_device(&[], "This PC").is_err());
         assert!(choose_device(
             &[
