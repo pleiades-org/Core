@@ -24,6 +24,8 @@ use windows::Win32::{
 
 pub const UPDATE_READY: u32 = WM_APP + 15;
 pub const RELEASE_PAGE: &str = "https://github.com/pleiades-org/Core/releases/latest";
+/// Followed by a version, the release notes of that version.
+pub const RELEASE_NOTES_PAGE: &str = "https://github.com/pleiades-org/Core/releases/tag/v";
 const MANIFEST_PATH: &str = "/pleiades-org/Core/releases/latest/download/core-update.txt";
 const MAX_MANIFEST_BYTES: usize = 4 * 1024;
 const MAX_EXECUTABLE_BYTES: usize = 8 * 1024 * 1024;
@@ -107,6 +109,8 @@ impl fmt::Display for UpdateError {
 struct Shared {
     mode: UpdateMode,
     state: UpdateState,
+    /// The newest release a verified manifest named, cached or downloaded; None before any.
+    latest: Option<Version>,
     working: bool,
     shutdown: bool,
     loaded_stage: bool,
@@ -141,6 +145,7 @@ impl UpdateService {
             shared: Arc::new(Mutex::new(Shared {
                 mode,
                 state: UpdateState::UpToDate,
+                latest: None,
                 working: false,
                 shutdown: false,
                 loaded_stage: false,
@@ -166,6 +171,10 @@ impl UpdateService {
     }
     pub fn working(&self) -> bool {
         self.shared.lock().expect("update lock").working
+    }
+    /// The latest release the last check saw, for `@info`.
+    pub fn latest(&self) -> Option<Version> {
+        self.shared.lock().expect("update lock").latest
     }
 
     /// Returns immediately. Even explicit @update obeys the daily check / failure backoff.
@@ -314,7 +323,8 @@ fn check_release(
     if installation.staged.is_file() && installation.manifest.is_file() {
         match installation.verified_stage() {
             Ok(manifest) if manifest.version > env!("CARGO_PKG_VERSION").parse()? => {
-                let state = shared.lock().expect("update lock");
+                let mut state = shared.lock().expect("update lock");
+                remember_latest(&mut state, manifest.version);
                 if state.mode != UpdateMode::Automatic || state.shutdown {
                     return Ok(UpdateState::Available(manifest.version));
                 }
@@ -339,6 +349,7 @@ fn check_release(
     let Some(manifest) = release_manifest(download_due, cache)? else {
         return Ok(UpdateState::UpToDate);
     };
+    remember_latest(&mut shared.lock().expect("update lock"), manifest.version);
     if manifest.version <= env!("CARGO_PKG_VERSION").parse()? {
         return Ok(UpdateState::UpToDate);
     }
@@ -368,6 +379,13 @@ fn check_release(
         }
         Err(UpdateError::FolderNotWritable) => Ok(UpdateState::Available(manifest.version)),
         Err(error) => Err(error),
+    }
+}
+
+/// A staged download and the release manifest can name different versions; keep the newer.
+fn remember_latest(shared: &mut Shared, version: Version) {
+    if shared.latest.is_none_or(|latest| version > latest) {
+        shared.latest = Some(version);
     }
 }
 

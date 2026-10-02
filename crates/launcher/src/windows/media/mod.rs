@@ -30,8 +30,11 @@ mod hotkeys;
 mod read_sessions;
 mod send_command;
 mod session_worker;
+mod title_watch;
+mod window_players;
 
 pub use hotkeys::MediaHotkeys;
+pub use title_watch::{TitleWatch, MEDIA_TITLE_CHANGED};
 
 use super::application_icon::ApplicationIcon;
 use core_engine::media::{MediaCommand, MediaPolicy, MediaSession, PlaybackState};
@@ -85,6 +88,9 @@ pub struct MediaReading {
     pub unavailable: bool,
     /// Only track positions changed; titles, states and art are as in the last full reading.
     pub timeline_only: bool,
+    /// Processes of players read from their window, whose title changes Core watches while
+    /// visible, since such players announce nothing to Windows.
+    pub window_processes: Vec<u32>,
 }
 
 #[derive(Default)]
@@ -181,6 +187,11 @@ impl MediaService {
         work.requests.push_back(request);
         self.shared.wake.notify_one();
         true
+    }
+
+    /// A player read from its window changed its title: read again once the change settles.
+    pub fn player_changed(&self) {
+        self.shared.announce(false);
     }
 
     pub fn take_reading(&self) -> Option<MediaReading> {

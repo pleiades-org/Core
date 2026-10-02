@@ -2,7 +2,7 @@
 //! press never acts on a player that closed or changed state since the results were shown.
 use super::{
     read_sessions::{read_sessions, OPERATION_TIMEOUT},
-    MediaAction, MediaOutcome, MediaRequest,
+    window_players, MediaAction, MediaOutcome, MediaRequest,
 };
 use core_engine::media::{choose_target, MediaCommand, MediaSession, PlaybackState};
 use windows::{
@@ -15,25 +15,34 @@ use windows::{
 };
 
 pub(super) fn execute(manager: Option<&SessionManager>, request: &MediaRequest) -> MediaOutcome {
-    let Some(manager) = manager else {
+    let sessions = match manager.map(|manager| read_sessions(manager, false)) {
+        Some(Ok(read)) => read.kept,
+        Some(Err(error)) => {
+            return failure(request, format!("Could not read media sessions: {error}"))
+        }
+        None => Vec::new(),
+    };
+    let mut infos: Vec<MediaSession> = sessions.iter().map(|entry| entry.info.clone()).collect();
+    // Players that publish nothing to Windows, read from their window; they follow the
+    // sessions, so an index past the sessions is a window player.
+    let players = window_players::beside(&infos);
+    infos.extend(players.iter().map(|player| player.info.clone()));
+    if infos.is_empty() {
         return MediaOutcome {
             action: request.action,
             app_id: None,
             app_name: None,
             before: None,
-            // A media-key shortcut sending its own key would only trigger itself again.
+            // Nothing is visible to Windows: the keyboard's media key may still reach a player
+            // that listens for it. A media-key shortcut sending its own key would only trigger
+            // itself again.
             result: if request.key_fallback {
                 media_key(request.action)
             } else {
-                Err("Windows media sessions are unavailable".into())
+                Err("No player is visible to Windows".into())
             },
         };
-    };
-    let sessions = match read_sessions(manager, false) {
-        Ok(read) => read.kept,
-        Err(error) => return failure(request, format!("Could not read media sessions: {error}")),
-    };
-    let infos: Vec<MediaSession> = sessions.iter().map(|entry| entry.info.clone()).collect();
+    }
     let command = match request.action {
         MediaAction::Control(command) => command,
         // Seeking moves within whatever track the bar shows; any player qualifies.
@@ -68,14 +77,22 @@ pub(super) fn execute(manager: Option<&SessionManager>, request: &MediaRequest) 
         },
     };
     let info = &infos[index];
-    let result = match send(&sessions[index].session, info, request.action) {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(format!(
-            "{} did not accept {}",
-            info.app_name,
-            describe(request.action)
-        )),
-        Err(error) => Err(format!("Could not reach {}: {error}", info.app_name)),
+    let result = match sessions.get(index) {
+        Some(entry) => match send(&entry.session, info, request.action) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(format!(
+                "{} did not accept {}",
+                info.app_name,
+                describe(request.action)
+            )),
+            Err(error) => Err(format!("Could not reach {}: {error}", info.app_name)),
+        },
+        None => match request.action {
+            MediaAction::Control(command) => {
+                window_players::send(players[index - sessions.len()].window, command)
+            }
+            MediaAction::Seek(_) => Err(format!("{} cannot seek from Core", info.app_name)),
+        },
     };
     MediaOutcome {
         action: request.action,

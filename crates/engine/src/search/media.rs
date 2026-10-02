@@ -10,6 +10,8 @@ use std::sync::Arc;
 pub(super) const KEYWORD_MESSAGE: &str = "Enter to control media · ↓ for apps";
 const LIST_MESSAGE: &str = "Enter to play or pause · ↓ for next, previous and other players";
 const LOADING_MESSAGE: &str = "Reading media sessions…";
+const NO_PLAYER_MESSAGE: &str = "No player is visible to Windows · Enter sends the media key";
+const MEDIA_KEY_DETAIL: &str = "Sends the keyboard media key";
 const UNAVAILABLE_MESSAGE: &str =
     "Windows media sessions are unavailable · Enter sends the media key";
 
@@ -67,22 +69,32 @@ fn same_words(text: &str, phrase: &str) -> bool {
 pub(super) fn keyword_result(command: MediaCommand, state: Option<&MediaState>) -> SearchResult {
     match state {
         None => command_row(command, None, "Uses your music app first"),
-        Some(state) if state.unavailable => {
-            command_row(command, None, "Sends the Windows media key")
-        }
+        Some(state) if blind(state) => command_row(command, None, MEDIA_KEY_DETAIL),
         Some(state) => command_row(command, state.target(command), missing_target(command)),
     }
+}
+
+/// No player is visible, to Windows or by its window: controls send the keyboard's media keys,
+/// which some players listen for themselves.
+fn blind(state: &MediaState) -> bool {
+    state.unavailable || state.sessions.is_empty()
 }
 
 /// `@media [app] [command]`: the chosen player's controls, then the other players.
 pub(super) fn media_results(payload: &str, state: Option<&MediaState>) -> SearchBatch {
     let (filter, explicit) = split_payload(payload);
-    let Some(state) = state.filter(|state| !state.unavailable) else {
+    let Some(state) = state.filter(|state| !blind(state)) else {
         let detail = if state.is_some() {
-            "Sends the Windows media key"
+            MEDIA_KEY_DETAIL
         } else {
             "Uses your music app first"
         };
+        if !filter.is_empty() && state.is_some() {
+            return SearchBatch {
+                results: Vec::new(),
+                message: "No open media app matches that name",
+            };
+        }
         let mut commands = vec![
             MediaCommand::TogglePlayPause,
             MediaCommand::Next,
@@ -97,10 +109,10 @@ pub(super) fn media_results(payload: &str, state: Option<&MediaState>) -> Search
                 .into_iter()
                 .map(|command| command_row(command, None, detail))
                 .collect(),
-            message: if state.is_some() {
-                UNAVAILABLE_MESSAGE
-            } else {
-                LOADING_MESSAGE
+            message: match state {
+                Some(state) if state.unavailable => UNAVAILABLE_MESSAGE,
+                Some(_) => NO_PLAYER_MESSAGE,
+                None => LOADING_MESSAGE,
             },
         };
     };
@@ -305,6 +317,10 @@ mod tests {
         }
     }
 
+    fn batch_targets(batch: &SearchBatch) -> Vec<(MediaCommand, Option<&str>)> {
+        batch.results.iter().map(target).collect()
+    }
+
     fn target(result: &SearchResult) -> (MediaCommand, Option<&str>) {
         match &result.action {
             Action::Media { command, target } => (*command, target.as_deref()),
@@ -402,9 +418,23 @@ mod tests {
             .iter()
             .all(|result| target(result).1 == Some("Chrome")));
         assert!(media_results("winamp", Some(&state)).results.is_empty());
-        assert!(media_results("", Some(&MediaState::default()))
-            .results
-            .is_empty());
+        // With no player visible at all, the controls send the keyboard's media keys.
+        let blind = media_results("", Some(&MediaState::default()));
+        assert_eq!(blind.message, NO_PLAYER_MESSAGE);
+        assert_eq!(
+            batch_targets(&blind),
+            [
+                (MediaCommand::TogglePlayPause, None),
+                (MediaCommand::Next, None),
+                (MediaCommand::Previous, None),
+            ]
+        );
+        assert_eq!(
+            keyword_result(MediaCommand::Pause, Some(&MediaState::default()))
+                .description
+                .as_ref(),
+            MEDIA_KEY_DETAIL
+        );
     }
 
     #[test]

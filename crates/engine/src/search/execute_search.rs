@@ -1,6 +1,9 @@
 use super::{
-    media, power::power_results, recent_applications::recent_results, run_target, taskbar,
-    terminal, PowerAction, RunMode, ShellKind,
+    info::{self, AppInfo},
+    media,
+    power::power_results,
+    recent_applications::recent_results,
+    run_target, taskbar, terminal, PowerAction, RunMode, ShellKind,
 };
 use super::{parse_query, CommandKind, ParsedQuery};
 use crate::{
@@ -88,6 +91,8 @@ pub struct SearchEngine {
     exchange_rates: Option<Arc<ExchangeRates>>,
     /// Media sessions and priorities; None until the launcher has read them.
     media: Option<Arc<MediaState>>,
+    /// Core's version and what the last update check saw, for `@info`.
+    app_info: Option<Arc<AppInfo>>,
     /// Application identifiers, most recent first, shown when nothing is typed.
     recent_applications: Arc<[Arc<str>]>,
     /// Top results for an empty query per pair of catalog identities; a catalog never changes,
@@ -108,6 +113,11 @@ impl SearchEngine {
     /// A shared snapshot of media sessions, replaced when players or priorities change.
     pub fn set_media(&mut self, media: Option<Arc<MediaState>>) {
         self.media = media;
+    }
+
+    /// Core's version and update status, replaced when an update check ends.
+    pub fn set_app_info(&mut self, app_info: Option<Arc<AppInfo>>) {
+        self.app_info = app_info;
     }
 
     /// The launcher's recently used apps, most recent first; unknown identifiers are skipped.
@@ -187,6 +197,10 @@ impl SearchEngine {
                 kind: CommandKind::Media,
                 payload,
             } => media::media_results(payload, self.media.as_deref()),
+            ParsedQuery::Command {
+                kind: CommandKind::Info,
+                payload,
+            } => info::info_results(payload, self.app_info.as_deref()),
             ParsedQuery::Command {
                 kind: CommandKind::Shell(shell),
                 payload,
@@ -564,6 +578,7 @@ fn command_hints(prefix: &str) -> SearchBatch {
         ),
         ("update", "Check Core updates or restart to install"),
         ("media", "Play, pause or skip music · also @music"),
+        ("info", "Core's version and the latest release"),
     ]
     .into_iter()
     .filter(|(command, _)| command.starts_with(&normalized))
