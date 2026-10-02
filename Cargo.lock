@@ -923,7 +923,7 @@ dependencies = [
 
 [[package]]
 name = "core-engine"
-version = "2.4.1"
+version = "2.4.2"
 
 [[package]]
 name = "core-foundation"
@@ -1027,7 +1027,7 @@ dependencies = [
 
 [[package]]
 name = "core-launcher-v2"
-version = "2.4.1"
+version = "2.4.2"
 dependencies = [
  "core-engine",
  "gpui",

@@ -395,7 +395,7 @@ mod tests {
         };
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let body = br#"{"uris":["spotify:track:0123456789abcdefghijkl"]}"#;
+        let body = br#"{"uris":["spotify:track:0123456789abcdefghijkl"],"position_ms":0}"#;
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             stream
@@ -439,7 +439,23 @@ mod tests {
         let request = server.join().unwrap();
         assert!(request.starts_with("PUT /v1/me/player/play HTTP/1.1"));
         assert!(request.contains("Authorization: Bearer test-only\r\n"));
-        assert!(request.ends_with(std::str::from_utf8(body).unwrap()));
+        let (headers, received_body) = request.split_once("\r\n\r\n").unwrap();
+        let content_type = headers.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("Content-Type")
+                .then_some(value.trim())
+        });
+        let content_length = headers.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("Content-Length")
+                .then_some(value.trim())
+        });
+        assert_eq!(content_type, Some("application/json"));
+        assert_eq!(
+            content_length.unwrap().parse::<usize>().unwrap(),
+            body.len()
+        );
+        assert_eq!(received_body.as_bytes(), body);
         assert_eq!(response.status, 429);
         assert_eq!(response.retry_after, Some(120));
         assert_eq!(response.body, b"{}");
