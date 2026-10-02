@@ -122,7 +122,7 @@ impl Client {
         if !valid_track_uri(uri) {
             return Err(ApiError::invalid());
         }
-        let body = format!("{{\"uris\":[\"{uri}\"]}}");
+        let body = format!("{{\"uris\":[\"{uri}\"],\"position_ms\":0}}");
         self.authenticated("PUT", "/v1/me/player/play", body.as_bytes())?;
         Ok(())
     }
@@ -248,7 +248,18 @@ impl Client {
                 message: "Spotify's request limit was reached. Try again later.",
             });
         }
-        let response = self.transport.send(host, method, path, headers, body)?;
+        let response = self
+            .transport
+            .send(host, method, path, headers, body)
+            .inspect_err(|error| {
+                if path == "/v1/me/player/play" {
+                    eprintln!("Spotify playback request failed: {}", error.message);
+                }
+            })?;
+        if path == "/v1/me/player/play" {
+            // Record only the response status, never bearer headers or request bodies.
+            eprintln!("Spotify playback: HTTP {}", response.status);
+        }
         if response.status == 429 {
             self.blocked_until = Some(
                 Instant::now()
@@ -522,7 +533,7 @@ mod tests {
         assert_eq!(requests[0].path, "/v1/me/player/play");
         assert_eq!(
             requests[0].body,
-            br#"{"uris":["spotify:track:0123456789abcdefghijkl"]}"#
+            br#"{"uris":["spotify:track:0123456789abcdefghijkl"],"position_ms":0}"#
         );
     }
 
