@@ -126,7 +126,8 @@ command-history.txt (Settings > Behaviour > Clear command history deletes it).
 Settings > Behaviour > Updates chooses Automatic (default), Notify or Off.
 Automatic checks GitHub when Core is shown, at most once a day (one-hour retry
 after errors), and downloads signed updates. Verified updates install on exit;
-type @update to restart now. Notify only checks and opens the release page.
+type @update and press Enter to check GitHub immediately (at most once a minute),
+or restart to install a ready update. Notify only checks and opens the release page.
 Off disables update checks and installation. Read-only folders use notify-only.
 Core keeps core-v2.previous.exe and rolls back if an updated restart fails to
 show its window within five seconds. Back up the external release-signing key.

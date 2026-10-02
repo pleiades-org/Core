@@ -1,8 +1,11 @@
 # Signed updates
 
-Core 2.1.0 checks `https://github.com/pleiades-org/Core/releases/latest/download/core-update.txt`
+Core checks `https://github.com/pleiades-org/Core/releases/latest/download/core-update.txt`
 in the background when shown. Successful checks are cached for 24 hours; failed checks
 retry after one hour. The deadline survives restarting Core. There is no polling while hidden.
+From 2.2.2, pressing Enter on `@update` checks GitHub at once instead of waiting for that
+deadline, at most once a minute. Earlier installed versions keep their daily check behavior
+until updated.
 
 Settings > Behaviour > Updates offers:
 
@@ -10,9 +13,9 @@ Settings > Behaviour > Updates offers:
 - **Notify**: check the signed manifest without downloading or installing an executable.
 - **Off**: no update network requests or installation, including an already staged download.
 
-`@update` shows status. Enter restarts a staged update, or opens the release page when
-only a notification is available. `@info` shows the installed version and the latest release
-the last check read (from GitHub, or from the cached signed manifest between daily checks),
+`@update` shows status. Enter restarts a staged update, opens the release page when only a
+notification is available, and otherwise checks GitHub now. `@info` shows the installed version
+and the latest release the last check read (from GitHub, or from the cached signed manifest between daily checks),
 with Enter on the latest row behaving like `@update`. A read-only installation folder uses notification only.
 Checks send ordinary HTTPS requests to GitHub and its release-asset hosts, without cookies
 or authentication. Local search and calculations still work offline. This setting controls

@@ -1,8 +1,8 @@
 {
-  "Date": "2026-09-27T06:42:49.9659753+01:00",
+  "Date": "2026-10-02T19:05:53.5866636+01:00",
   "Passed": true,
   "Interactive": false,
-  "Sha256": "556622CE83FAD9863A5DD1651195F62CCAB1E1D3075066F8ACADE8C1749580CD",
+  "Sha256": "66F18C5352B2760145B8173476EBA302C39CFE45F1D60B59E29491D27E36F6AE",
   "Scenarios": [
     "power visible on fresh launch before typing",
     "constrained DPI layout keeps footer, icons and all results reachable",
@@ -10,5 +10,5 @@
     "position box previews",
     "power visible after settings and reopen"
   ],
-  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\controls-tests\\8d4e28bdb7f74c2d8f2e727b890585fb"
+  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\controls-tests\\0ecb8e4bb11a49bca1872799dac82867"
 }

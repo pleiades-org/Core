@@ -1,0 +1,19 @@
+{
+  "Date": "2026-10-02T19:06:37.5782719+01:00",
+  "Passed": true,
+  "Sha256": "66F18C5352B2760145B8173476EBA302C39CFE45F1D60B59E29491D27E36F6AE",
+  "Scenarios": [
+    "Hidden startup probe",
+    "Running executable renamed",
+    "Old process exits before replacement startup",
+    "Visible-window acknowledgment",
+    "Previous executable retained",
+    "Five-second startup rollback",
+    "Tampered executable rollback",
+    "Ordinary next-start success",
+    "Ordinary next-start timeout rollback",
+    "Ordinary next-start tampering rollback"
+  ],
+  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\update-tests\\5b0abe5a407348f598884495e3eaa2f3",
+  "SideEffects": "Isolated copies, background dry-run windows; no installed Core process is stopped and no network requests are made."
+}

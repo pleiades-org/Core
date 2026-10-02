@@ -1,12 +1,12 @@
 {
-  "Date": "2026-09-27T06:43:05.7300592+01:00",
+  "Date": "2026-10-02T19:06:10.6974651+01:00",
   "Passed": true,
   "Interactive": false,
-  "Sha256": "556622CE83FAD9863A5DD1651195F62CCAB1E1D3075066F8ACADE8C1749580CD",
+  "Sha256": "66F18C5352B2760145B8173476EBA302C39CFE45F1D60B59E29491D27E36F6AE",
   "EffectiveAnimationsEnabled": true,
-  "ColdGdiObjects": 26,
-  "GdiObjectsBefore": 36,
-  "GdiObjectsAfter": 36,
+  "ColdGdiObjects": 27,
+  "GdiObjectsBefore": 34,
+  "GdiObjectsAfter": 35,
   "Scenarios": [
     "DPI-scaled expanded calculator geometry",
     "rounded window region",

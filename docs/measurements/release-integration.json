@@ -1,8 +1,8 @@
 {
-  "Date": "2026-09-27T06:42:57.0515061+01:00",
+  "Date": "2026-10-02T19:06:01.9197502+01:00",
   "Passed": true,
   "Interactive": false,
-  "Sha256": "556622CE83FAD9863A5DD1651195F62CCAB1E1D3075066F8ACADE8C1749580CD",
+  "Sha256": "66F18C5352B2760145B8173476EBA302C39CFE45F1D60B59E29491D27E36F6AE",
   "Scenarios": [
     "real app discovery and exact query with dry-run acceptance",
     "calculator result and dry-run action",

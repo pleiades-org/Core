@@ -1,15 +1,15 @@
 {
-  "Date": "2026-09-27T06:42:54.8960649+01:00",
+  "Date": "2026-10-02T19:05:59.4119392+01:00",
   "Passed": true,
   "Interactive": false,
   "PhysicalKeyboardChecked": false,
-  "Sha256": "556622CE83FAD9863A5DD1651195F62CCAB1E1D3075066F8ACADE8C1749580CD",
+  "Sha256": "66F18C5352B2760145B8173476EBA302C39CFE45F1D60B59E29491D27E36F6AE",
   "Scenarios": [
     "custom global hotkey registered",
     "Windows-key mode releases previous shortcut",
     "switching back restores registration",
     "conflict retains previous working binding"
   ],
-  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\shortcut-tests\\6017a9bbdc5e45ddb45952d186cdd410",
+  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\shortcut-tests\\1360aafe482f406bbf651bd664861840",
   "Limitations": "Physical input is tested only when PhysicalKeyboardChecked is true. Registration-only mode injects no input. Elevated apps and secure desktop not covered. External actions and startup writes disabled."
 }
