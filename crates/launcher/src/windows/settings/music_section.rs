@@ -42,6 +42,7 @@ const RECORDER_FIRST: usize = 274;
 const SCOPE_FIRST: usize = 278;
 pub const FIRST_ID: usize = 260;
 pub const LAST_ID: usize = 289;
+pub const SPOTIFY_SETTINGS_ID: usize = 282;
 
 // Layout in 96-DPI pixels: settings on the left, the app list on the right, shortcuts below.
 const LEFT: i32 = layout::CONTENT_LEFT;
@@ -225,6 +226,7 @@ impl MusicSection {
         )?;
         // Switch text carries the state ("…: On") for screen readers; only the name is drawn.
         section.add_button(parent, instance, "Now playing bar: On", BAR_ID)?;
+        section.add_button(parent, instance, "Spotify song search", SPOTIFY_SETTINGS_ID)?;
         section.add(
             parent,
             instance,
@@ -397,6 +399,7 @@ impl MusicSection {
         }
         let apps = self.apps.borrow();
         Ok(MusicSettings {
+            spotify: super::SpotifySettings::default(),
             priority: PriorityMode::ALL
                 .get(selected(PRIORITY_ID))
                 .copied()
@@ -627,6 +630,7 @@ impl MusicSection {
                 DROPDOWN_LIST_HEIGHT,
             ),
             BAR_ID => (LEFT, BAR_TOP, LEFT_WIDTH, BUTTON_HEIGHT),
+            SPOTIFY_SETTINGS_ID => (LEFT, LIST_BUTTON_TOP, LEFT_WIDTH, LIST_BUTTON_HEIGHT),
             APPS_LABEL_ID => (RIGHT, LABEL_TOP, RIGHT_WIDTH, LABEL_HEIGHT),
             APPS_ID => (RIGHT, ROW_TOP, RIGHT_WIDTH, LIST_HEIGHT),
             UP_ID | DOWN_ID | IGNORE_ID => (
@@ -727,7 +731,7 @@ impl MusicSection {
                 );
                 true
             }
-            UP_ID | DOWN_ID | IGNORE_ID => {
+            UP_ID | DOWN_ID | IGNORE_ID | SPOTIFY_SETTINGS_ID => {
                 let label = control_text(item.hwndItem);
                 control_style::draw_action(item.hDC, item.rcItem, &label, None, active, look);
                 true

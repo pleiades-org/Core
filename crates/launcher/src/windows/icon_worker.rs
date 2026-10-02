@@ -31,6 +31,7 @@ pub enum IconSource {
     Shell(PathBuf),
     /// A website quicklink: the site's cached or downloaded favicon.
     Website(WebsiteOrigin),
+    SpotifyArtwork(Arc<str>),
 }
 
 impl IconSource {
@@ -45,6 +46,9 @@ impl IconSource {
             }
             // Dry runs and probes never contact websites.
             Self::Website(origin) => allow_network.then(|| super::favicon::load(origin))?,
+            Self::SpotifyArtwork(url) => {
+                allow_network.then(|| super::spotify::load_artwork(url))?
+            }
         }
     }
 }
@@ -171,9 +175,12 @@ impl IconWorker {
 
     pub fn submit(&self, requests: Vec<IconRequest>) {
         let generation = self.shared.generation.fetch_add(1, Ordering::AcqRel) + 1;
-        let (websites, shell): (Vec<_>, Vec<_>) = requests
-            .into_iter()
-            .partition(|request| matches!(request.source, IconSource::Website(_)));
+        let (websites, shell): (Vec<_>, Vec<_>) = requests.into_iter().partition(|request| {
+            matches!(
+                request.source,
+                IconSource::Website(_) | IconSource::SpotifyArtwork(_)
+            )
+        });
         let should_wake = !shell.is_empty() || !websites.is_empty();
         let batch = |requests: Vec<IconRequest>| {
             (!requests.is_empty()).then_some(RequestBatch {

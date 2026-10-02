@@ -3,7 +3,7 @@ use super::{
     media,
     power::power_results,
     recent_applications::recent_results,
-    run_target, taskbar, terminal, PowerAction, RunMode, ShellKind,
+    run_target, songs, taskbar, terminal, PowerAction, RunMode, ShellKind,
 };
 use super::{parse_query, CommandKind, ParsedQuery};
 use crate::{
@@ -25,6 +25,7 @@ const EMPTY_QUERY_CATALOGS: usize = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
+    PlaySong(super::Song),
     LaunchApplication(Arc<str>),
     CopyText(Arc<str>),
     OpenUrl(Arc<str>),
@@ -91,6 +92,7 @@ pub struct SearchEngine {
     exchange_rates: Option<Arc<ExchangeRates>>,
     /// Media sessions and priorities; None until the launcher has read them.
     media: Option<Arc<MediaState>>,
+    songs: Option<Arc<super::SongSearch>>,
     /// Core's version and what the last update check saw, for `@info`.
     app_info: Option<Arc<AppInfo>>,
     /// Application identifiers, most recent first, shown when nothing is typed.
@@ -101,6 +103,9 @@ pub struct SearchEngine {
 }
 
 impl SearchEngine {
+    pub fn set_songs(&mut self, songs: Option<Arc<super::SongSearch>>) {
+        self.songs = songs;
+    }
     pub fn with_calendar_clock(mut self, clock: impl CalendarClock + 'static) -> Self {
         self.calendar_clock = Some(Box::new(clock));
         self
@@ -201,6 +206,10 @@ impl SearchEngine {
                 kind: CommandKind::Info,
                 payload,
             } => info::info_results(payload, self.app_info.as_deref()),
+            ParsedQuery::Command {
+                kind: CommandKind::Songs,
+                payload,
+            } => songs::song_results(payload, self.songs.as_deref()),
             ParsedQuery::Command {
                 kind: CommandKind::Shell(shell),
                 payload,
@@ -578,6 +587,10 @@ fn command_hints(prefix: &str) -> SearchBatch {
         ),
         ("update", "Check Core updates or restart to install"),
         ("media", "Play, pause or skip music · also @music"),
+        (
+            "song",
+            "Search Spotify songs · optional connection in Music settings",
+        ),
         ("info", "Core's version and the latest release"),
     ]
     .into_iter()

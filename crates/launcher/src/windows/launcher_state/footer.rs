@@ -53,6 +53,7 @@ impl LauncherState {
 
 fn action_hint(action: &Action) -> &'static str {
     match action {
+        Action::PlaySong(_) => "Enter to play in Spotify",
         Action::CopyText(_) => "Enter to copy",
         Action::LaunchApplication(_) | Action::OpenQuicklink(_) => "Enter to open",
         Action::OpenUrl(_) => "Enter to search",

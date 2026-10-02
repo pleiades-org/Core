@@ -113,6 +113,7 @@ impl MusicApp {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MusicSettings {
+    pub spotify: super::SpotifySettings,
     pub priority: PriorityMode,
     /// The now-playing bar above the search box.
     pub bar: bool,
@@ -133,6 +134,7 @@ impl Default for MusicSettings {
             scope: ShortcutScope::InCore,
         };
         Self {
+            spotify: super::SpotifySettings::default(),
             priority: PriorityMode::default(),
             bar: true,
             shortcuts: [
@@ -167,6 +169,12 @@ impl MusicSettings {
             self.priority.id(),
             self.bar
         );
+        if self.spotify != super::SpotifySettings::default() {
+            text.push_str(&format!(
+                "music_spotify_enabled={}\nmusic_spotify_client_id={}\n",
+                self.spotify.enabled, self.spotify.client_id
+            ));
+        }
         for (action, shortcut) in MediaShortcutAction::ALL.iter().zip(&self.shortcuts) {
             text.push_str(&format!(
                 "music_shortcut={}\t{}\t{}\n",
@@ -195,6 +203,18 @@ impl MusicSettings {
             return Ok(false);
         };
         let field = match key.trim() {
+            "music_spotify_enabled" => {
+                self.spotify.enabled = value
+                    .trim()
+                    .parse()
+                    .map_err(|_| "Spotify song search must be true or false.")?;
+                MusicFields::SPOTIFY_ENABLED
+            }
+            "music_spotify_client_id" => {
+                self.spotify.client_id = value.trim().to_owned();
+                self.spotify.validate()?;
+                MusicFields::SPOTIFY_CLIENT
+            }
             "music_priority" => {
                 self.priority = PriorityMode::parse(value.trim())
                     .ok_or("Music priority must be music-first or playing-first.")?;
@@ -346,6 +366,8 @@ impl MusicSettings {
 pub struct MusicFields(u8);
 
 impl MusicFields {
+    const SPOTIFY_ENABLED: u8 = 32;
+    const SPOTIFY_CLIENT: u8 = 64;
     const PRIORITY: u8 = 1;
     const BAR: u8 = 2;
     const SHORTCUT: u8 = 4;
@@ -390,6 +412,10 @@ mod tests {
     fn defaults_write_nothing_and_changes_round_trip() {
         assert_eq!(MusicSettings::default().encode(), "");
         let settings = MusicSettings {
+            spotify: super::super::SpotifySettings {
+                enabled: true,
+                client_id: "0123456789abcdef0123456789abcdef".into(),
+            },
             priority: PriorityMode::PlayingFirst,
             bar: false,
             shortcuts: [
@@ -423,6 +449,10 @@ mod tests {
         for text in [
             "music_priority=loudest",
             "music_bar=maybe",
+            "music_spotify_enabled=maybe",
+            "music_spotify_enabled=true\nmusic_spotify_enabled=false",
+            "music_spotify_client_id=not-a-client-id",
+            "music_spotify_client_id=\nmusic_spotify_client_id=",
             "music_shortcut=play-pause\tAlt+P",
             "music_shortcut=rewind\tAlt+R\tcore",
             "music_shortcut=next\tAlt+Right\tsomewhere",

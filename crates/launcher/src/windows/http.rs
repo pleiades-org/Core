@@ -27,8 +27,17 @@ pub struct Request<'a> {
 pub struct Response {
     pub status: u32,
     pub location: Option<String>,
-    /// Empty unless the status is 200.
+    /// Size-limited response bytes. `get` clears bodies for unsuccessful responses.
     pub body: Vec<u8>,
+    pub retry_after: Option<u32>,
+}
+
+/// Authenticated API calls. Callers supply validated headers; redirects are never followed.
+pub struct Exchange<'a> {
+    pub endpoint: Request<'a>,
+    pub method: &'static str,
+    pub headers: &'a str,
+    pub body: &'a [u8],
 }
 
 struct Internet(*mut core::ffi::c_void);
@@ -76,6 +85,23 @@ fn session() -> windows::core::Result<&'static Internet> {
 
 /// Blocking GET; call only from a background thread.
 pub fn get(request: Request, deadline: Instant) -> windows::core::Result<Response> {
+    let mut response = exchange(
+        Exchange {
+            endpoint: request,
+            method: "GET",
+            headers: "",
+            body: &[],
+        },
+        deadline,
+    )?;
+    if response.status != STATUS_OK {
+        response.body.clear();
+    }
+    Ok(response)
+}
+
+pub fn exchange(exchange: Exchange<'_>, deadline: Instant) -> windows::core::Result<Response> {
+    let request = exchange.endpoint;
     unsafe {
         // Timeouts are set on each request handle, never on the shared session.
         let session = session()?;
@@ -89,7 +115,7 @@ pub fn get(request: Request, deadline: Instant) -> windows::core::Result<Respons
         let path: Vec<u16> = request.path.encode_utf16().chain(Some(0)).collect();
         let handle = Internet::new(WinHttpOpenRequest(
             connection.0,
-            w!("GET"),
+            PCWSTR(super::wide(exchange.method).as_ptr()),
             PCWSTR(path.as_ptr()),
             PCWSTR::null(),
             PCWSTR::null(),
@@ -112,7 +138,15 @@ pub fn get(request: Request, deadline: Instant) -> windows::core::Result<Respons
             Some(&WINHTTP_OPTION_REDIRECT_POLICY_NEVER.to_le_bytes()),
         )?;
         set_timeouts(handle.0, deadline)?;
-        WinHttpSendRequest(handle.0, None, None, 0, 0, 0)?;
+        let headers = super::wide(exchange.headers);
+        WinHttpSendRequest(
+            handle.0,
+            Some(&headers[..headers.len() - 1]),
+            (!exchange.body.is_empty()).then_some(exchange.body.as_ptr().cast()),
+            exchange.body.len() as u32,
+            exchange.body.len() as u32,
+            0,
+        )?;
         set_timeouts(handle.0, deadline)?;
         WinHttpReceiveResponse(handle.0, std::ptr::null_mut())?;
         remaining_timeout(deadline, Instant::now())?;
@@ -131,7 +165,9 @@ pub fn get(request: Request, deadline: Instant) -> windows::core::Result<Respons
         } else {
             None
         };
-        let body = if status == STATUS_OK {
+        let retry_after =
+            header(handle.0, WINHTTP_QUERY_RETRY_AFTER)?.and_then(|text| text.parse().ok());
+        let body = if status != 204 && !(300..400).contains(&status) {
             let length = header(handle.0, WINHTTP_QUERY_CONTENT_LENGTH)?;
             validate_length(length.as_deref(), request.max_bytes)?;
             read_body(handle.0, request.max_bytes, deadline)?
@@ -142,6 +178,7 @@ pub fn get(request: Request, deadline: Instant) -> windows::core::Result<Respons
             status,
             location,
             body,
+            retry_after,
         })
     }
 }
@@ -347,5 +384,64 @@ mod tests {
         for length in ["11", "18446744073709551615", "-1", "invalid"] {
             assert!(validate_length(Some(length), 10).is_err());
         }
+    }
+
+    #[test]
+    fn api_exchange_sends_method_headers_and_body_and_preserves_rate_limit_details() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let body = br#"{"uris":["spotify:track:0123456789abcdefghijkl"]}"#;
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0; 1024];
+            loop {
+                let read = stream.read(&mut chunk).unwrap();
+                assert_ne!(read, 0);
+                request.extend_from_slice(&chunk[..read]);
+                if let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                    if request.len() >= header_end + 4 + body.len() {
+                        break;
+                    }
+                }
+                assert!(request.len() < 8192);
+            }
+            stream.write_all(b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 120\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        let response = exchange(
+            Exchange {
+                endpoint: Request {
+                    secure: false,
+                    host: "127.0.0.1",
+                    port,
+                    path: "/v1/me/player/play",
+                    max_bytes: 1024,
+                },
+                method: "PUT",
+                headers: "Authorization: Bearer test-only\r\nContent-Type: application/json\r\n",
+                body,
+            },
+            Instant::now() + Duration::from_secs(4),
+        )
+        .unwrap();
+        let request = server.join().unwrap();
+        assert!(request.starts_with("PUT /v1/me/player/play HTTP/1.1"));
+        assert!(request.contains("Authorization: Bearer test-only\r\n"));
+        assert!(request.ends_with(std::str::from_utf8(body).unwrap()));
+        assert_eq!(response.status, 429);
+        assert_eq!(response.retry_after, Some(120));
+        assert_eq!(response.body, b"{}");
     }
 }

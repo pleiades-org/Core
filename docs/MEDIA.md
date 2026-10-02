@@ -40,6 +40,10 @@ Some players publish nothing to Windows: pressing a media or volume key then sho
 - **Spotify** is then read from its window instead: the title shows "Artist - Song" while it plays, and controls go straight to Spotify's window. There is no album art (a music note shows instead) and no progress line or seeking. While Core is visible it follows Spotify's title changes; it does not poll. Turning the overlay setting on gives Core art, progress and seeking again.
 - **Any other player** that Windows cannot see: `@media` and the keywords still offer Play / pause, Next track and Previous track, and send the keyboard's media keys, which Windows passes to whichever player listens for them. The bar needs a player Core can read, so it does not appear.
 
+## Searching for a song
+
+Optional **Settings → Music → Spotify song search** connects a personal Spotify app. Type **`@song`** followed by a song or artist, select a result, and press Enter to play it on your active Spotify device while Core stays open. This requires Spotify Premium and a one-time account connection. It is disabled by default and is separate from the existing Windows media controls. See [Spotify setup and privacy](SPOTIFY.md).
+
 ## The now-playing bar
 
 A strip above the search box shows the chosen player's album art, title, artist and app, the elapsed and total time, a progress line, and **previous**, **play / pause** and **next** buttons.
@@ -87,7 +91,7 @@ Older Core builds ignore these lines and keep working with the rest of the file.
 
 - Nothing media-related starts until you use a media command or open Core with the bar on. Then one worker thread reads the sessions. While Core is hidden it sleeps without event subscriptions or timers. While Core is visible it follows the players' change events, and the progress clock ticks once a second only while a track plays.
 - Commands are re-checked against a fresh reading, so a press never acts on a player that closed since the results were shown. A player that does not answer within two seconds is given up on rather than stalling Core.
-- Track text, app names and album art stay in memory; nothing about what you play is written to disk or sent anywhere.
+- Windows media session text, app names and album art stay in memory. Optional Spotify song search sends only explicit `@song` queries to Spotify and stores its connection credentials protected for your Windows user; see [Spotify setup and privacy](SPOTIFY.md).
 - If Windows' media sessions are unavailable (Windows 10 before version 1809), Core still reads Spotify from its window, and otherwise sends the keyboard media keys, letting Windows choose the player.
 
 Measured on this PC with Spotify playing (release build, `--dry-run --start-hidden`, warmed with one `@media` show and hide, then 60 seconds hidden): hidden CPU 0.0000% in both runs, and private bytes 6.2 MiB without media against 6.7 MiB with the media worker started ([without](measurements/media-idle-off.json), [with](measurements/media-idle-on.json)).

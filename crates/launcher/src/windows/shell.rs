@@ -800,6 +800,10 @@ unsafe extern "system" fn window_proc(
             shell.receive_media();
             LRESULT(0)
         }
+        super::spotify::SPOTIFY_READY => {
+            shell.receive_spotify();
+            LRESULT(0)
+        }
         MEDIA_TITLE_CHANGED => {
             shell.media_title_changed();
             LRESULT(0)
