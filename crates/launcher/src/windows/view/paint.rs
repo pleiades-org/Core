@@ -5,7 +5,7 @@ impl View {
     pub fn color_control(&self, context: HDC, control: HWND) -> LRESULT {
         let palette = self.palette.get();
         let identifier = unsafe { GetDlgCtrlID(control) } as usize;
-        let color_input = matches!(identifier, COLOR_ID | SHORTCUT_ID)
+        let color_input = crate::windows::settings::page::is_text_field(identifier)
             || crate::windows::settings::quicklink_table::is_edit(identifier);
         unsafe {
             SetBkColor(
@@ -51,6 +51,9 @@ impl View {
             if page.draw_button(item, palette) {
                 return;
             }
+        }
+        if self.draw_media_item(item) {
+            return;
         }
         if self
             .power_menu
@@ -104,17 +107,18 @@ impl View {
                 .paint(context, palette);
             return;
         }
+        let bar = self.media_bar_height();
         let icon = painting::rectangle(
             scale(27, dpi),
-            scale(32, dpi),
+            scale(bar + 32, dpi),
             scale(48, dpi),
-            scale(53, dpi),
+            scale(bar + 53, dpi),
         );
         if painting::intersects(&icon, update) {
             painting::search_icon(
                 context,
                 scale(27, dpi),
-                scale(32, dpi),
+                scale(bar + 32, dpi),
                 dpi,
                 palette.secondary,
             );
@@ -149,8 +153,10 @@ impl View {
             Some(ResultKind::System) => "SYSTEM",
             Some(ResultKind::Terminal) => "TERMINAL",
             Some(ResultKind::Recent) => "RECENT",
+            Some(ResultKind::Media) => "MEDIA",
             None => "SEARCH",
         };
+        let bar = self.media_bar_height();
         let area = |left, top, right, bottom| {
             painting::rectangle(
                 scale(left, dpi),
@@ -159,7 +165,7 @@ impl View {
                 scale(bottom, dpi),
             )
         };
-        let label = area(24, SECTION_LABEL_TOP, 400, 100);
+        let label = area(24, bar + SECTION_LABEL_TOP, 400, bar + 100);
         if painting::intersects(&label, update) {
             painting::text(
                 context,
@@ -171,9 +177,9 @@ impl View {
         }
         let empty = area(
             25,
-            theme::RESULTS_TOP + 10,
+            bar + theme::RESULTS_TOP + 10,
             theme::WIDTH - 25,
-            theme::RESULTS_TOP + 38,
+            bar + theme::RESULTS_TOP + 38,
         );
         if rows.is_empty() && !terminal && painting::intersects(&empty, update) {
             painting::text(

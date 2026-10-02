@@ -17,6 +17,9 @@ pub const GRID_TILE_HEIGHT: i32 = 88;
 pub const GRID_ICON: i32 = 32;
 /// Space below the last row of tiles.
 pub const GRID_GAP: i32 = 6;
+/// The now-playing bar above the search box, and its album art. In 96-DPI pixels.
+pub const MEDIA_BAR_HEIGHT: i32 = 64;
+pub const MEDIA_ART: i32 = 40;
 pub const BACKGROUND: COLORREF = rgb(0, 0, 0);
 pub const SELECTED: COLORREF = rgb(18, 18, 18);
 pub const TEXT: COLORREF = rgb(239, 241, 245);

@@ -16,6 +16,7 @@ mod http;
 mod icon_worker;
 mod launcher_state;
 mod local_cache;
+mod media;
 mod motion;
 mod packaged_applications;
 mod painting;

@@ -29,7 +29,8 @@ impl DisplayRow {
             | ResultKind::Quicklink
             | ResultKind::Power
             | ResultKind::System
-            | ResultKind::Terminal => result.description.to_string(),
+            | ResultKind::Terminal
+            | ResultKind::Media => result.description.to_string(),
         };
         Self {
             identifier: result.id.clone(),
@@ -360,6 +361,7 @@ fn result_icon(
             ResultKind::Calculator => "=",
             ResultKind::Time => "◷",
             ResultKind::Web | ResultKind::Quicklink => "↗",
+            ResultKind::Media => "♪",
             _ => ">",
         };
         text(

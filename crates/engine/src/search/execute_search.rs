@@ -1,8 +1,8 @@
-use super::{parse_query, CommandKind, ParsedQuery};
 use super::{
-    power::power_results, recent_applications::recent_results, run_target, taskbar, terminal,
-    PowerAction, RunMode, ShellKind,
+    media, power::power_results, recent_applications::recent_results, run_target, taskbar,
+    terminal, PowerAction, RunMode, ShellKind,
 };
+use super::{parse_query, CommandKind, ParsedQuery};
 use crate::{
     applications::{ApplicationCatalog, SearchScratch},
     calculator::{
@@ -10,6 +10,7 @@ use crate::{
         format_number, Calculation, CalculatorEngine,
     },
     conversions::{self, Conversion, ConversionContext, ExchangeRates},
+    media::{MediaCommand, MediaState},
     time_conversion::{parse_time, recognizes_time, TimeConverter, TimeError, TimeRequest},
     VISIBLE_RESULT_LIMIT,
 };
@@ -38,6 +39,11 @@ pub enum Action {
         target: Arc<str>,
         elevated: bool,
     },
+    /// A media control; with no target, the launcher chooses the player when it runs.
+    Media {
+        command: MediaCommand,
+        target: Option<Arc<str>>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -64,6 +70,7 @@ pub enum ResultKind {
     Terminal,
     /// A recently used app, shown in the grid when nothing is typed.
     Recent,
+    Media,
 }
 
 #[derive(Debug)]
@@ -79,6 +86,8 @@ pub struct SearchEngine {
     time_converter: Option<Box<dyn TimeConverter>>,
     calendar_clock: Option<Box<dyn CalendarClock>>,
     exchange_rates: Option<Arc<ExchangeRates>>,
+    /// Media sessions and priorities; None until the launcher has read them.
+    media: Option<Arc<MediaState>>,
     /// Application identifiers, most recent first, shown when nothing is typed.
     recent_applications: Arc<[Arc<str>]>,
     /// Top results for an empty query per pair of catalog identities; a catalog never changes,
@@ -94,6 +103,11 @@ impl SearchEngine {
     /// Rates are a shared snapshot; the launcher replaces it when a newer ECB file arrives.
     pub fn set_exchange_rates(&mut self, rates: Option<Arc<ExchangeRates>>) {
         self.exchange_rates = rates;
+    }
+
+    /// A shared snapshot of media sessions, replaced when players or priorities change.
+    pub fn set_media(&mut self, media: Option<Arc<MediaState>>) {
+        self.media = media;
     }
 
     /// The launcher's recently used apps, most recent first; unknown identifiers are skipped.
@@ -159,6 +173,20 @@ impl SearchEngine {
                 batch.message = taskbar::MESSAGE;
                 batch
             }
+            ParsedQuery::Search(payload) if media::keyword(payload).is_some() => {
+                let command = media::keyword(payload).expect("media keyword checked");
+                let mut batch = self.applications(payload, general, quicklinks, cancelled);
+                batch
+                    .results
+                    .insert(0, media::keyword_result(command, self.media.as_deref()));
+                batch.results.truncate(VISIBLE_RESULT_LIMIT);
+                batch.message = media::KEYWORD_MESSAGE;
+                batch
+            }
+            ParsedQuery::Command {
+                kind: CommandKind::Media,
+                payload,
+            } => media::media_results(payload, self.media.as_deref()),
             ParsedQuery::Command {
                 kind: CommandKind::Shell(shell),
                 payload,
@@ -535,6 +563,7 @@ fn command_hints(prefix: &str) -> SearchBatch {
             "Open a program, folder or URI like Win+R · / runs commands",
         ),
         ("update", "Check Core updates or restart to install"),
+        ("media", "Play, pause or skip music · also @music"),
     ]
     .into_iter()
     .filter(|(command, _)| command.starts_with(&normalized))

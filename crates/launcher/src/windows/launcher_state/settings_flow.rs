@@ -15,7 +15,10 @@ impl LauncherState {
         }
         self.auto_save.error = None;
         self.auto_save.done_when_saved = false;
-        if let Err(error) = view.open_settings(self.auto_save.latest(&self.settings.saved)) {
+        let music_apps = self.music_app_choices();
+        if let Err(error) =
+            view.open_settings(self.auto_save.latest(&self.settings.saved), &music_apps)
+        {
             view.set_footer(&format!("Could not open settings: {error}"));
             return;
         }
@@ -39,6 +42,7 @@ impl LauncherState {
         let Some(view) = self.view.clone() else {
             return;
         };
+        self.resume_shortcuts(self.window);
         self.auto_save.done_when_saved = false;
         if let Err(error) =
             view.close_settings(self.auto_save.latest(&self.settings.saved).preferences)
@@ -48,6 +52,7 @@ impl LauncherState {
         unsafe {
             let _ = SetFocus(Some(view.input));
         }
+        self.refresh_media_bar(crate::windows::view::BarPresence::Free);
         self.queue_search();
     }
 
@@ -77,6 +82,7 @@ impl LauncherState {
                 Ok(()) => view.settings_status("Command history cleared."),
                 Err(error) => view.settings_status(&error),
             },
+
             SettingsAction::None => {}
         }
     }
@@ -205,6 +211,10 @@ impl LauncherState {
                     }
                 }
             }
+            let saved_music = self.settings.saved.music.clone();
+            if let Err(restore) = self.configure_media_hotkeys(window, &saved_music) {
+                eprintln!("Could not restore media shortcuts: {restore}");
+            }
             let restored =
                 self.configure_shortcut(window, self.settings.saved.preferences.shortcut);
             self.settings_error(match restored {
@@ -226,6 +236,7 @@ impl LauncherState {
             }
         }
         self.finish_settings_if_ready();
+        self.music_settings_changed();
         self.update_service
             .set_mode(self.settings.saved.preferences.updates);
         if self.visible {
@@ -238,7 +249,14 @@ impl LauncherState {
 
     fn save_preferences(&mut self, window: HWND, draft: SettingsDocument) -> Result<(), String> {
         self.configure_shortcut(window, draft.preferences.shortcut)?;
-        if let Err(error) = self.settings.start_save(window, draft) {
+        let result = self
+            .configure_media_hotkeys(window, &draft.music)
+            .and_then(|()| self.settings.start_save(window, draft));
+        if let Err(error) = result {
+            let saved_music = self.settings.saved.music.clone();
+            if let Err(restore) = self.configure_media_hotkeys(window, &saved_music) {
+                eprintln!("Could not restore media shortcuts: {restore}");
+            }
             if let Err(restore) =
                 self.configure_shortcut(window, self.settings.saved.preferences.shortcut)
             {

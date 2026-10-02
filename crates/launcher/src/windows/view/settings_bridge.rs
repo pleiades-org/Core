@@ -6,9 +6,11 @@ impl View {
         self.settings_open.get()
     }
 
+    /// `music_apps`: music apps found on this PC and players seen this session.
     pub fn open_settings(
         &self,
         saved: crate::windows::settings::SettingsDocument,
+        music_apps: &[crate::windows::settings::MusicApp],
     ) -> windows::core::Result<()> {
         self.close_power_menu();
         if self.settings_page.get().is_none() {
@@ -19,7 +21,7 @@ impl View {
             let _ = self.settings_page.set(page);
         }
         let page = self.settings_page.get().expect("created settings page");
-        page.reset(saved);
+        page.reset(saved, music_apps);
         self.settings_open.set(true);
         self.set_clock_active(false);
         self.show_search_controls(false);
@@ -62,6 +64,7 @@ impl View {
                 let _ = ShowWindow(control, if visible { SW_SHOWNA } else { SW_HIDE });
             }
         }
+        self.show_media_bar(visible);
     }
 
     pub fn focus_target(&self) -> HWND {
@@ -112,6 +115,12 @@ impl View {
             .get()
             .ok_or("Settings are not open.")?
             .draft()
+    }
+
+    pub fn add_music_apps(&self, music_apps: &[crate::windows::settings::MusicApp]) {
+        if let Some(page) = self.settings_page.get().filter(|_| self.settings_open()) {
+            page.add_music_apps(music_apps);
+        }
     }
 
     pub fn settings_status(&self, message: &str) {

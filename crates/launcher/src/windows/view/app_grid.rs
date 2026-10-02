@@ -25,7 +25,11 @@ impl View {
     /// them, since tiles do not scroll. At least one row is always shown.
     pub(super) fn fit_grid(&self, count: usize, area: RECT, dpi: u32) -> i32 {
         let logical_height = (area.bottom - area.top) * 96 / dpi.max(1) as i32;
-        let room = logical_height - theme::RESULTS_TOP - theme::FOOTER_HEIGHT - theme::GRID_GAP;
+        let room = logical_height
+            - self.media_bar_height()
+            - theme::RESULTS_TOP
+            - theme::FOOTER_HEIGHT
+            - theme::GRID_GAP;
         let rows = Self::grid_rows(count).min((room / theme::GRID_TILE_HEIGHT).max(1));
         let visible = (rows as usize * theme::GRID_COLUMNS).min(count);
         self.grid_visible.set(visible);
@@ -45,7 +49,7 @@ impl View {
         let height = scale(theme::GRID_TILE_HEIGHT, dpi);
         let column = (index % theme::GRID_COLUMNS) as i32;
         let row = (index / theme::GRID_COLUMNS) as i32;
-        let top = scale(theme::RESULTS_TOP, dpi) + row * height;
+        let top = scale(self.media_bar_height() + theme::RESULTS_TOP, dpi) + row * height;
         painting::rectangle(
             left + column * width,
             top,

@@ -1,5 +1,8 @@
 use super::LauncherState;
-use core_engine::search::{Action, RunMode};
+use core_engine::{
+    media::MediaCommand,
+    search::{Action, RunMode},
+};
 
 impl LauncherState {
     /// Keep the footer tied to the selected action while preserving errors and run status.
@@ -55,6 +58,13 @@ fn action_hint(action: &Action) -> &'static str {
             ..
         } => "Enter to open terminal",
         Action::RunCommand { .. } | Action::OpenRunTarget { .. } => "Enter to run",
+        Action::Media { command, .. } => match command {
+            MediaCommand::TogglePlayPause => "Enter to play or pause",
+            MediaCommand::Play => "Enter to play",
+            MediaCommand::Pause => "Enter to pause",
+            MediaCommand::Next => "Enter for the next track",
+            MediaCommand::Previous => "Enter for the previous track",
+        },
     }
 }
 
