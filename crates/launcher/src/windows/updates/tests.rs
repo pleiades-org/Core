@@ -91,6 +91,152 @@ fn disabled_services_never_start_network_work() {
 }
 
 #[test]
+fn update_checks_from_at_update_wait_a_minute_between_presses() {
+    let now = Instant::now();
+    assert!(manual_check_allowed(None, now));
+    assert!(!manual_check_allowed(
+        Some(now),
+        now + Duration::from_secs(59)
+    ));
+    assert!(manual_check_allowed(Some(now), now + MANUAL_CHECK_COOLDOWN));
+    // A clock read before the last press never counts as later.
+    assert!(!manual_check_allowed(
+        Some(now + Duration::from_secs(5)),
+        now
+    ));
+}
+
+#[test]
+fn manual_checks_bypass_daily_and_failure_deadlines_in_enabled_modes() {
+    let wall_clock_now = UNIX_EPOCH + CHECK_AFTER;
+    let monotonic_now = Instant::now();
+    for mode in [UpdateMode::Automatic, UpdateMode::NotifyOnly] {
+        for backoff in [CHECK_AFTER, RETRY_AFTER] {
+            let service = UpdateService::new(false, mode);
+            let mut shared = service.shared.lock().unwrap();
+            shared.next_check = wall_clock_now + backoff;
+            shared.loaded_stage = true;
+
+            let download_due =
+                shared.begin_check(CheckTrigger::Manual, wall_clock_now, monotonic_now);
+
+            assert_eq!(download_due, Some(true));
+            assert!(shared.working);
+            assert_eq!(shared.last_manual_check, Some(monotonic_now));
+            assert_eq!(shared.next_check, wall_clock_now + RETRY_AFTER);
+        }
+    }
+}
+
+#[test]
+fn manual_cooldown_blocks_expired_automatic_deadlines_until_sixty_seconds() {
+    let wall_clock_now = UNIX_EPOCH + CHECK_AFTER;
+    let monotonic_now = Instant::now();
+    let service = UpdateService::new(false, UpdateMode::Automatic);
+    let mut shared = service.shared.lock().unwrap();
+    shared.last_manual_check = Some(monotonic_now);
+    shared.next_check = UNIX_EPOCH;
+
+    let too_soon = shared.begin_check(
+        CheckTrigger::Manual,
+        wall_clock_now,
+        monotonic_now + Duration::from_secs(59),
+    );
+
+    assert_eq!(too_soon, None);
+    assert!(!shared.working);
+    assert!(!shared.loaded_stage);
+    assert_eq!(shared.last_manual_check, Some(monotonic_now));
+    assert_eq!(shared.next_check, UNIX_EPOCH);
+
+    let after_cooldown = shared.begin_check(
+        CheckTrigger::Manual,
+        wall_clock_now,
+        monotonic_now + MANUAL_CHECK_COOLDOWN,
+    );
+
+    assert_eq!(after_cooldown, Some(true));
+    assert!(shared.working);
+    assert_eq!(
+        shared.last_manual_check,
+        Some(monotonic_now + MANUAL_CHECK_COOLDOWN)
+    );
+}
+
+#[test]
+fn automatic_checks_keep_daily_and_failure_backoff_without_consuming_manual_cooldown() {
+    let wall_clock_now = UNIX_EPOCH + CHECK_AFTER;
+    let monotonic_now = Instant::now();
+    for backoff in [CHECK_AFTER, RETRY_AFTER] {
+        let service = UpdateService::new(false, UpdateMode::Automatic);
+        let mut shared = service.shared.lock().unwrap();
+        let deadline = wall_clock_now + backoff;
+        shared.next_check = deadline;
+
+        let cached_check =
+            shared.begin_check(CheckTrigger::Automatic, wall_clock_now, monotonic_now);
+
+        assert_eq!(cached_check, Some(false));
+        assert_eq!(shared.next_check, deadline);
+        assert_eq!(shared.last_manual_check, None);
+        shared.working = false;
+        assert_eq!(
+            shared.begin_check(CheckTrigger::Automatic, wall_clock_now, monotonic_now),
+            None
+        );
+
+        let due_check = shared.begin_check(CheckTrigger::Automatic, deadline, monotonic_now);
+
+        assert_eq!(due_check, Some(true));
+        assert_eq!(shared.next_check, deadline + RETRY_AFTER);
+        assert_eq!(shared.last_manual_check, None);
+    }
+}
+
+#[test]
+fn in_flight_and_shutdown_checks_do_not_consume_manual_cooldown() {
+    let wall_clock_now = UNIX_EPOCH + CHECK_AFTER;
+    let monotonic_now = Instant::now();
+    let service = UpdateService::new(false, UpdateMode::Automatic);
+    let mut shared = service.shared.lock().unwrap();
+    shared.working = true;
+
+    assert_eq!(
+        shared.begin_check(CheckTrigger::Manual, wall_clock_now, monotonic_now),
+        None
+    );
+    assert_eq!(shared.last_manual_check, None);
+    shared.working = false;
+    shared.shutdown = true;
+    assert_eq!(
+        shared.begin_check(CheckTrigger::Manual, wall_clock_now, monotonic_now),
+        None
+    );
+    assert_eq!(shared.last_manual_check, None);
+    assert!(!shared.working);
+    assert_eq!(shared.next_check, UNIX_EPOCH);
+}
+
+#[test]
+fn checking_now_still_respects_off_disabled_and_ready_updates() {
+    let disabled = UpdateService::new(false, UpdateMode::Automatic);
+    disabled.check_now(HWND::default());
+    assert!(!disabled.working());
+    assert_eq!(disabled.shared.lock().unwrap().last_manual_check, None);
+    let mut service = UpdateService::new(false, UpdateMode::Off);
+    service.enabled = true;
+    service.check_now(HWND::default());
+    assert!(!service.working());
+    // A downloaded update is installed with @update, not checked for again.
+    service.set_mode(UpdateMode::Automatic);
+    service.shared.lock().unwrap().state = UpdateState::Staged("9.8.7".parse().unwrap());
+    service.check_now(HWND::default());
+    assert!(!service.working());
+    // Refused presses do not start the minute's wait.
+    assert_eq!(service.shared.lock().unwrap().last_manual_check, None);
+}
+
+#[test]
 fn off_and_retry_deadlines_suppress_network_and_mode_changes_preserve_backoff() {
     let mut service = UpdateService::new(false, UpdateMode::Off);
     service.enabled = true;

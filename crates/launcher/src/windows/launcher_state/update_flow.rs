@@ -75,9 +75,11 @@ impl LauncherState {
             UpdateState::Available(version) => {
                 format!("Core {version} is available · Enter to open release page")
             }
-            UpdateState::Failed(error) => format!("{error} · retry after one hour"),
+            UpdateState::Failed(error) => {
+                format!("{error} · Enter to retry (once a minute)")
+            }
             UpdateState::UpToDate => format!(
-                "Core {} · Enter to check for updates",
+                "Core {} · Enter to check GitHub now (once a minute)",
                 env!("CARGO_PKG_VERSION")
             ),
         }
@@ -118,8 +120,9 @@ impl LauncherState {
             UpdateState::Available(_) => {
                 self.pending_action = Some(super::NativeAction::OpenUrl(RELEASE_PAGE.into()))
             }
+            // Pressing Enter is asking now: GitHub is checked at once, not at the daily check.
             _ => {
-                self.update_service.refresh(self.window);
+                self.update_service.check_now(self.window);
                 self.refresh_footer();
             }
         }

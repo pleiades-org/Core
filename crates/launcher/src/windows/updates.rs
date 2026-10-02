@@ -15,7 +15,7 @@ use std::{
     fmt, fs,
     path::PathBuf,
     sync::{Arc, Mutex},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM},
@@ -31,7 +31,16 @@ const MAX_MANIFEST_BYTES: usize = 4 * 1024;
 const MAX_EXECUTABLE_BYTES: usize = 8 * 1024 * 1024;
 const CHECK_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 const RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
+/// Enter on `@update` checks GitHub at once instead of waiting for the daily check, but no more
+/// often than this, so repeated presses cannot flood GitHub.
+const MANUAL_CHECK_COOLDOWN: Duration = Duration::from_secs(60);
 const RELEASE_KEY: &[u8; 64] = include_bytes!("../../assets/release-key.bin");
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CheckTrigger {
+    Automatic,
+    Manual,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum UpdateMode {
@@ -115,6 +124,47 @@ struct Shared {
     shutdown: bool,
     loaded_stage: bool,
     next_check: SystemTime,
+    /// When Enter on `@update` last started a check.
+    last_manual_check: Option<Instant>,
+}
+
+impl Shared {
+    /// Starts an eligible check; true fetches GitHub, false only loads cached update files.
+    fn begin_check(
+        &mut self,
+        trigger: CheckTrigger,
+        wall_clock_now: SystemTime,
+        monotonic_now: Instant,
+    ) -> Option<bool> {
+        if self.mode == UpdateMode::Off
+            || self.shutdown
+            || self.working
+            || matches!(self.state, UpdateState::Staged(_))
+        {
+            return None;
+        }
+        let download_due = match trigger {
+            CheckTrigger::Automatic => wall_clock_now >= self.next_check,
+            CheckTrigger::Manual
+                if !manual_check_allowed(self.last_manual_check, monotonic_now) =>
+            {
+                return None;
+            }
+            CheckTrigger::Manual => true,
+        };
+        if !download_due && self.loaded_stage {
+            return None;
+        }
+        if trigger == CheckTrigger::Manual {
+            self.last_manual_check = Some(monotonic_now);
+        }
+        self.working = true;
+        self.loaded_stage = true;
+        if download_due {
+            self.next_check = wall_clock_now + RETRY_AFTER;
+        }
+        Some(download_due)
+    }
 }
 
 pub struct UpdateService {
@@ -150,6 +200,7 @@ impl UpdateService {
                 shutdown: false,
                 loaded_stage: false,
                 next_check,
+                last_manual_check: None,
             })),
         }
     }
@@ -177,32 +228,37 @@ impl UpdateService {
         self.shared.lock().expect("update lock").latest
     }
 
-    /// Returns immediately. Even explicit @update obeys the daily check / failure backoff.
+    /// The automatic check when Core is shown: GitHub is contacted at most once a day, or an
+    /// hour after a failure; between those, the cached signed manifest is used. Returns at once.
     pub fn refresh(&self, window: HWND) {
+        self.start_check(window, CheckTrigger::Automatic);
+    }
+
+    /// Enter on `@update`: contact GitHub now rather than at the next daily check, at most once
+    /// a minute. Returns at once; `UPDATE_READY` follows.
+    pub fn check_now(&self, window: HWND) {
+        self.start_check(window, CheckTrigger::Manual);
+    }
+
+    fn start_check(&self, window: HWND, trigger: CheckTrigger) {
+        if !self.enabled {
+            return;
+        }
         let Some(installation) = self.installation.clone() else {
             return;
         };
-        let download_due;
-        {
+        let download_due = {
             let mut shared = self.shared.lock().expect("update lock");
-            download_due = SystemTime::now() >= shared.next_check;
-            if !self.enabled
-                || shared.mode == UpdateMode::Off
-                || shared.shutdown
-                || shared.working
-                || (!download_due && shared.loaded_stage)
-                || matches!(shared.state, UpdateState::Staged(_))
-            {
+            let Some(download_due) = shared.begin_check(trigger, SystemTime::now(), Instant::now())
+            else {
                 return;
-            }
-            shared.working = true;
-            shared.loaded_stage = true;
+            };
             if download_due {
-                shared.next_check = SystemTime::now() + RETRY_AFTER;
                 // Closing Core during a request must not bypass the retry deadline.
                 save_check_time(self.cache.as_ref(), shared.next_check);
             }
-        }
+            download_due
+        };
         let shared = self.shared.clone();
         let cache = self.cache.clone();
         let address = window.0 as usize;
@@ -380,6 +436,12 @@ fn check_release(
         Err(UpdateError::FolderNotWritable) => Ok(UpdateState::Available(manifest.version)),
         Err(error) => Err(error),
     }
+}
+
+fn manual_check_allowed(last_manual_check: Option<Instant>, current_time: Instant) -> bool {
+    last_manual_check.is_none_or(|last_check| {
+        current_time.saturating_duration_since(last_check) >= MANUAL_CHECK_COOLDOWN
+    })
 }
 
 /// A staged download and the release manifest can name different versions; keep the newer.

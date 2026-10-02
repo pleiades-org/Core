@@ -1,6 +1,6 @@
 # Core v2
 
-A small Windows launcher written in Rust. Version **2.1.0** brings the native v2 implementation to this repository; the previous implementation remains in Git history and earlier release tags. See the [2.1.0 release notes](docs/RELEASE_2.1.0.md).
+A small Windows launcher written in Rust. Version **2.2.2** adds immediate manual update checks; see the [2.2.2 release notes](docs/RELEASE_2.2.2.md). Version 2.1.0 brought the native v2 implementation to this repository; the previous implementation remains in Git history and earlier release tags.
 
 The [second 22 September release notes](docs/RELEASE_2026_09_22_B.md) add [smart conversions](docs/SMART_CONVERSIONS.md) (currency, units, download time, percentages, tips, bases, colours, Unix time, screens, loans and BMI) and website quicklink icons. The [first 22 September release notes](docs/RELEASE_2026_09_22.md) describe the app and tray icons, taskbar command, corner rounding and edge spacing sliders, logging and reliability fixes. The [21 September release notes](docs/RELEASE_2026_09_21.md) describe the expanded calculator, power menu, configurable shortcuts, monitor/startup settings and packaged-app discovery. Earlier benchmarks remain available in the [feature/performance comparison](docs/FEATURE_AND_PERFORMANCE_DIFF.md); each measurement identifies its tested executable.
 
@@ -10,7 +10,7 @@ The footer shows one hint for the selected action, such as **Enter to copy** or 
 
 | Input | Action |
 | --- | --- |
-| `@update` | Check signed-update status, restart to install a ready update, or open its release page |
+| `@update` | Signed-update status. Enter checks GitHub now (at most once a minute), restarts to install a ready update, or opens its release page |
 | `@info` (or `@about`, `@version`) | Core's installed version (Enter copies it), the latest release from the last update check, and this version's release notes |
 | Nothing typed | Recently used apps as a grid, like Start: up to 18, six across. Apps opened from Core come first, then apps Windows has seen you start (read locally from Windows' own usage record). Arrow keys move, Enter or a click opens |
 | `code`, `vsc`, `studio code`, `xbox` | Search Start Menu and registered packaged apps by name, word prefix, initials and substring |
@@ -54,7 +54,7 @@ The bottom-right power icon opens a recessed inline menu. All four power icons h
 
 **Updates:** Settings > Behaviour > **Updates (GitHub)** offers **Automatic** (default),
 **Notify**, and **Off**. Core checks GitHub when shown, at most once per day, with a one-hour
-retry after errors. Automatic downloads a newer signed executable and installs it on exit;
+retry after errors; Enter on `@update` checks at once. Automatic downloads a newer signed executable and installs it on exit;
 `@update` restarts now. Notify downloads only the manifest; Off disables update checks and
 installation. A read-only folder falls back to notification. Local search and calculations
 work without a network connection. See [signed updates, release signing and rollback](docs/UPDATES.md).
