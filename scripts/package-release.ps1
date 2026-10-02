@@ -29,7 +29,9 @@ $packageDirectory = Join-Path $projectRoot "dist\Core-$version-windows-x64"
 New-Item -ItemType Directory -Path $packageDirectory -Force | Out-Null
 Copy-Item -LiteralPath $Candidate -Destination "$packageDirectory\core-v2.exe" -Force
 Write-CoreUpdateManifest -Executable "$packageDirectory\core-v2.exe" -Version $version -SigningKeyPath $SigningKeyPath -PublicKeyPath "$projectRoot\crates\launcher\assets\release-key.bin" -OutputPath "$packageDirectory\core-update.txt"
-Copy-Item -LiteralPath "$projectRoot\docs\RELEASE_2.1.0.md" -Destination "$packageDirectory\RELEASE_NOTES.md" -Force
+$releaseNotes = "$projectRoot\docs\RELEASE_$version.md"
+if (-not (Test-Path -LiteralPath $releaseNotes)) { throw "Write docs\RELEASE_$version.md before packaging." }
+Copy-Item -LiteralPath $releaseNotes -Destination "$packageDirectory\RELEASE_NOTES.md" -Force
 @'
 Core v2 — Windows x64 portable alpha
 
@@ -106,6 +108,14 @@ Try these queries:
   9pm et to uk
   /ipconfig
   xbox
+
+Media: type @media or @music to control Spotify or any player Windows knows
+(play, pause, next, previous), or type play, pause, next or now playing on
+their own. Core prefers music apps over a paused browser tab. A now-playing bar
+above the search box shows the track, its art and progress, with buttons.
+Settings > Music chooses Music apps first or Playing media first, preferred
+and ignored apps, the bar, and media shortcuts that work while Core is open
+or in every app. Shortcut boxes record keys: click one and press the keys.
 
 Keep the executable in a stable folder before enabling Start with Windows.
 Startup runs at your Windows sign-in. Core's tray menu can exit the application.
