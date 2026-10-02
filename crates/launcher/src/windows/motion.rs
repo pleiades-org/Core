@@ -76,6 +76,11 @@ impl VisibilityTransition {
         }
     }
 
+    /// The window's current opacity, for anything drawn alongside it.
+    pub fn opacity(&self) -> u8 {
+        self.alpha
+    }
+
     fn animations_enabled(&self) -> bool {
         match self.preference {
             MotionPreference::Enabled => true,

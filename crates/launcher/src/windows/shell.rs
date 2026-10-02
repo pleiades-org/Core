@@ -626,7 +626,7 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_TIMER if word.0 == super::motion::TRANSITION_TIMER => {
-            shell.transition.tick(window);
+            shell.tick_transition(window);
             LRESULT(0)
         }
         WM_TIMER if word.0 == super::settings::AUTO_SAVE_TIMER => {

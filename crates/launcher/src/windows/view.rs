@@ -1,6 +1,7 @@
 use super::{
     application_icon::ApplicationIcon,
     button_hover,
+    corner_fringe::CornerFringe,
     icon_worker::LoadedIcon,
     painting::{self, DisplayRow, ResultKind},
     power_menu::{PowerMenu, POWER_ID},
@@ -132,6 +133,8 @@ pub struct View {
     bounds: Cell<RECT>,
     /// The shape of the window region that is set, if any.
     clip_shape: Cell<Option<window_placement::ClipShape>>,
+    /// Smooths the rounded corners that the region can only step.
+    corner_fringe: CornerFringe,
     layout_key: Cell<LayoutKey>,
     rows: RefCell<Vec<DisplayRow>>,
     /// Icons shown recently, for results that come back.
@@ -178,6 +181,7 @@ impl View {
             height: Cell::new(0),
             bounds: Cell::new(RECT::default()),
             clip_shape: Cell::new(None),
+            corner_fringe: CornerFringe::create(parent, instance)?,
             layout_key: Cell::new(LayoutKey::STALE),
             rows: RefCell::new(Vec::new()),
             icon_cache: RefCell::new(IconCache::default()),
@@ -573,6 +577,8 @@ impl View {
             }
         }
         if changes.palette {
+            // The corner fringe is drawn in the background color.
+            self.clip()?;
             // Controls take their colors from the brushes, so every one repaints.
             unsafe {
                 let _ = RedrawWindow(
@@ -588,23 +594,30 @@ impl View {
 
     /// Rounds the corners that float; corners touching a screen edge stay square.
     /// An unchanged shape keeps the current region instead of replacing and redrawing it.
+    /// The corner fringe follows every move, as well as shape and background changes.
     fn clip(&self) -> windows::core::Result<()> {
         let dpi = self.dpi.get();
         let preferences = self.preferences.get();
         let spacing = scale(preferences.edge_spacing.logical(), dpi);
+        let bounds = self.bounds.get();
         let shape = window_placement::ClipShape::new(
-            self.bounds.get(),
+            bounds,
             self.screen.get().edges(spacing),
             scale(preferences.corner_radius.logical(), dpi),
         );
-        if self.clip_shape.get() == Some(shape) {
-            return Ok(());
+        if self.clip_shape.get() != Some(shape) {
+            // Forget the old shape first: a failure leaves the region unknown, so it is retried.
+            self.clip_shape.set(None);
+            window_placement::clip_to_edges(self.parent, shape)?;
+            self.clip_shape.set(Some(shape));
         }
-        // Forget the old shape first: a failure leaves the region unknown, so it is retried.
-        self.clip_shape.set(None);
-        window_placement::clip_to_edges(self.parent, shape)?;
-        self.clip_shape.set(Some(shape));
-        Ok(())
+        self.corner_fringe
+            .place(bounds, shape, self.palette.get().background)
+    }
+
+    /// Core's fade: its corners' fringe blends in and out with it.
+    pub fn set_opacity(&self, opacity: u8) {
+        self.corner_fringe.set_opacity(opacity);
     }
 
     /// Runs each time Core is shown. Layout runs again only on another screen area, but

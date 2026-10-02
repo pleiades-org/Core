@@ -470,6 +470,7 @@ impl LauncherState {
         }
         unsafe {
             self.transition.set_visible(window, visible);
+            self.follow_opacity();
             if visible {
                 self.rate_service.refresh(window);
                 self.update_service.refresh(window);
@@ -485,6 +486,19 @@ impl LauncherState {
             } else {
                 self.cancel_background_work();
             }
+        }
+    }
+
+    /// Advances a fade in or out by one frame.
+    pub fn tick_transition(&mut self, window: HWND) {
+        self.transition.tick(window);
+        self.follow_opacity();
+    }
+
+    /// What is drawn beside the window (its corners' fringe) fades with it.
+    fn follow_opacity(&self) {
+        if let Some(view) = &self.view {
+            view.set_opacity(self.transition.opacity());
         }
     }
 
