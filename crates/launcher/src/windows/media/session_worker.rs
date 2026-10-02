@@ -4,7 +4,7 @@ use super::{
     album_art::ArtCache,
     post_ready,
     read_sessions::{read_sessions, read_timeline, ReadSession, SessionRead},
-    send_command, MediaOutcome, MediaReading, Shared,
+    send_command, window_players, MediaOutcome, MediaReading, Shared,
 };
 use core_engine::media::MediaSession;
 use std::{sync::Arc, thread, time::Duration};
@@ -141,25 +141,19 @@ impl Worker {
     }
 
     fn read(&mut self, manager: Option<&SessionManager>, art_edge: u32) -> MediaReading {
-        let Some(manager) = manager else {
-            self.sessions.clear();
-            return MediaReading {
-                sessions: Vec::new(),
-                art: Vec::new(),
-                unavailable: true,
-                timeline_only: false,
-            };
+        let empty = || SessionRead {
+            kept: Vec::new(),
+            all: Vec::new(),
         };
-        let SessionRead { kept: read, all } = match read_sessions(manager, true) {
-            Ok(read) => read,
-            Err(error) => {
-                eprintln!("Could not read media sessions: {error}");
-                SessionRead {
-                    kept: Vec::new(),
-                    all: Vec::new(),
+        let SessionRead { kept: read, all } =
+            match manager.map(|manager| read_sessions(manager, true)) {
+                Some(Ok(read)) => read,
+                Some(Err(error)) => {
+                    eprintln!("Could not read media sessions: {error}");
+                    empty()
                 }
-            }
-        };
+                None => empty(),
+            };
         let art = if art_edge == 0 {
             Vec::new()
         } else {
@@ -177,14 +171,19 @@ impl Worker {
             .iter()
             .map(|entry| (entry.info.clone(), entry.session.clone()))
             .collect();
+        let mut sessions: Vec<MediaSession> = read
+            .into_iter()
+            .map(|entry: ReadSession| entry.info)
+            .collect();
+        let players = window_players::beside(&sessions);
+        let window_processes = players.iter().map(|player| player.process).collect();
+        sessions.extend(players.into_iter().map(|player| player.info));
         MediaReading {
-            sessions: read
-                .into_iter()
-                .map(|entry: ReadSession| entry.info)
-                .collect(),
+            unavailable: manager.is_none() && sessions.is_empty(),
+            sessions,
             art,
-            unavailable: false,
             timeline_only: false,
+            window_processes,
         }
     }
 
@@ -200,6 +199,7 @@ impl Worker {
             art: Vec::new(),
             unavailable: false,
             timeline_only: true,
+            window_processes: Vec::new(),
         })
     }
 

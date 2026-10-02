@@ -5,7 +5,10 @@ use super::LauncherState;
 use crate::windows::{
     application_icon::ApplicationIcon,
     execute_action::NativeAction,
-    media::{MediaAction, MediaHotkeys, MediaOutcome, MediaReading, MediaRequest, MediaService},
+    media::{
+        MediaAction, MediaHotkeys, MediaOutcome, MediaReading, MediaRequest, MediaService,
+        TitleWatch,
+    },
     settings::{shortcut_recorder, MediaShortcutAction, MusicApp, MusicSettings, Shortcut},
     view::{BarPresence, MediaBarClick, MediaBarContent, MEDIA_NEXT_ID, MEDIA_PREVIOUS_ID},
 };
@@ -45,6 +48,8 @@ pub struct MediaFlow {
     seen: Vec<MusicApp>,
     hotkeys: Option<MediaHotkeys>,
     hotkey_bindings: Vec<(usize, Shortcut)>,
+    /// Title changes of players read from their window, watched while Core is visible.
+    title_watch: TitleWatch,
     /// A full reading arrived since Core was shown, so the bar no longer rests on what was
     /// read before Core was hidden.
     read_since_show: bool,
@@ -53,6 +58,7 @@ pub struct MediaFlow {
 impl MediaFlow {
     /// At exit: stop the worker and release the shortcuts.
     pub fn stop(&mut self) {
+        self.title_watch.clear();
         self.service.take();
         self.hotkeys.take();
     }
@@ -145,6 +151,7 @@ impl LauncherState {
         if let Some(service) = &self.media.service {
             service.stop_watching();
         }
+        self.media.title_watch.clear();
         if let Some(view) = &self.view {
             view.set_media_progress_active(false);
         }
@@ -245,7 +252,19 @@ impl LauncherState {
         self.media.loaded = true;
         self.media.unavailable = reading.unavailable;
         self.media.art = reading.art.into_iter().collect();
+        if self.visible {
+            self.media
+                .title_watch
+                .follow(self.window, &reading.window_processes);
+        }
         self.check_paused_marker();
+    }
+
+    /// A player read from its window changed its title: a new track, a pause or a resume.
+    pub fn media_title_changed(&self) {
+        if let Some(service) = self.media.service.as_ref().filter(|_| self.visible) {
+            service.player_changed();
+        }
     }
 
     fn apply_media_outcome(&mut self, outcome: MediaOutcome) {

@@ -313,7 +313,9 @@ impl LauncherState {
         self.searched_query = view.query();
         let query = self.searched_query.clone();
         self.media_for_query(&query);
+        self.info_requested(&query);
         let media = self.media_state();
+        let app_info = Some(self.app_info());
         if let Some(worker) = &self.worker {
             worker.submit(
                 self.generation,
@@ -324,6 +326,7 @@ impl LauncherState {
                     exchange_rates: self.exchange_rates.clone(),
                     recent_applications: self.recent_applications.clone(),
                     media,
+                    app_info,
                 },
             );
         }

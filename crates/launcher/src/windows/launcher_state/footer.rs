@@ -12,6 +12,20 @@ impl LauncherState {
             view.set_footer(&self.update_hint());
             return;
         }
+        if core_engine::search::wants_info(&view.query()) {
+            match self
+                .batch
+                .results
+                .get(view.selected())
+                .map(|row| &row.action)
+            {
+                Some(Action::Update) => view.set_footer(&self.update_hint()),
+                Some(Action::OpenUrl(_)) => view.set_footer("Enter to open the release notes"),
+                Some(Action::CopyText(_)) => view.set_footer("Enter to copy the version"),
+                _ => view.set_footer(self.batch.message),
+            }
+            return;
+        }
         if view.query().is_empty() {
             if let Some(notice) = self.update_notice() {
                 view.set_footer(&notice);

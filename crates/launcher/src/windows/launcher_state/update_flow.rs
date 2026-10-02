@@ -1,11 +1,66 @@
 use super::LauncherState;
-use crate::windows::updates::{UpdateMode, UpdateState, RELEASE_PAGE};
+use crate::windows::updates::{UpdateMode, UpdateState, Version, RELEASE_NOTES_PAGE, RELEASE_PAGE};
+use core_engine::search::{wants_info, AppInfo, LatestRelease};
+use std::sync::Arc;
 use windows::Win32::{
     Foundation::{LPARAM, WPARAM},
     UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE},
 };
 
 impl LauncherState {
+    /// Core's version and what the update check last saw, for `@info`.
+    pub(super) fn app_info(&self) -> Arc<AppInfo> {
+        let current = env!("CARGO_PKG_VERSION");
+        let text = |version: Version| Arc::<str>::from(version.to_string());
+        let latest = if self.settings.saved.preferences.updates == UpdateMode::Off {
+            LatestRelease::Off
+        } else if self.update_service.working() {
+            LatestRelease::Checking
+        } else {
+            match self.update_service.state() {
+                UpdateState::Staged(version) => LatestRelease::Ready(text(version)),
+                UpdateState::Available(version) => LatestRelease::Available(text(version)),
+                UpdateState::Failed(error) => LatestRelease::Failed(error.to_string().into()),
+                UpdateState::UpToDate => match self.update_service.latest() {
+                    Some(latest)
+                        if current
+                            .parse()
+                            .is_ok_and(|current: Version| latest > current) =>
+                    {
+                        LatestRelease::Available(text(latest))
+                    }
+                    Some(latest) => LatestRelease::UpToDate(text(latest)),
+                    None => LatestRelease::Unknown,
+                },
+            }
+        };
+        Arc::new(AppInfo {
+            version: current.into(),
+            latest,
+            notes_url: format!("{RELEASE_NOTES_PAGE}{current}").into(),
+        })
+    }
+
+    /// `@info` asks for the latest release; the daily limit and error backoff still apply.
+    pub(super) fn info_requested(&self, query: &str) {
+        if wants_info(query) {
+            self.update_service.refresh(self.window);
+        }
+    }
+
+    /// An update check ended: the footer and an open `@info` show the new status.
+    pub fn update_status_changed(&mut self) {
+        self.refresh_footer();
+        if self.visible
+            && self
+                .view
+                .as_ref()
+                .is_some_and(|view| wants_info(&view.query()))
+        {
+            self.queue_search();
+        }
+    }
+
     pub fn update_hint(&self) -> String {
         if self.settings.saved.preferences.updates == UpdateMode::Off {
             return "Updates are off · change Settings > Behaviour to enable".into();

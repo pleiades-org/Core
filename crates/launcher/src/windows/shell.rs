@@ -2,7 +2,7 @@ use super::{
     foreground_observer::FOREGROUND_CHANGED,
     icon_worker::ICONS_READY,
     launcher_state::{run_mode, LauncherState, Options, COMMAND_OUTPUT_TIMER},
-    media::MEDIA_READY,
+    media::{MEDIA_READY, MEDIA_TITLE_CHANGED},
     search_worker::WORKER_READY,
     settings::{page::DONE_ID, shortcut_recorder, SETTINGS_SAVED},
     tray::{Tray, TrayAction, TRAY_EVENT},
@@ -534,7 +534,7 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         super::updates::UPDATE_READY => {
-            shell.refresh_footer();
+            shell.update_status_changed();
             LRESULT(0)
         }
         TEST_QUEUE_FENCE if shell.options.dry_run => {
@@ -795,6 +795,10 @@ unsafe extern "system" fn window_proc(
         }
         MEDIA_READY => {
             shell.receive_media();
+            LRESULT(0)
+        }
+        MEDIA_TITLE_CHANGED => {
+            shell.media_title_changed();
             LRESULT(0)
         }
         shortcut_recorder::RECORDER_FOCUS => {

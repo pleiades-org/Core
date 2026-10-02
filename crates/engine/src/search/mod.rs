@@ -1,4 +1,5 @@
 mod execute_search;
+mod info;
 mod media;
 mod normalize;
 mod parse_query;
@@ -11,6 +12,7 @@ pub use power::PowerAction;
 pub use terminal::{RunMode, ShellKind};
 
 pub use execute_search::{Action, ResultKind, SearchBatch, SearchEngine, SearchResult};
+pub use info::{wants_info, AppInfo, LatestRelease};
 pub use media::wants_media;
 pub use normalize::{normalize, normalize_into};
 pub use parse_query::{parse_query, CommandKind, ParsedQuery, QueryError, MAX_QUERY_BYTES};

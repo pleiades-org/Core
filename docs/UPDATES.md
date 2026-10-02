@@ -11,7 +11,9 @@ Settings > Behaviour > Updates offers:
 - **Off**: no update network requests or installation, including an already staged download.
 
 `@update` shows status. Enter restarts a staged update, or opens the release page when
-only a notification is available. A read-only installation folder uses notification only.
+only a notification is available. `@info` shows the installed version and the latest release
+the last check read (from GitHub, or from the cached signed manifest between daily checks),
+with Enter on the latest row behaving like `@update`. A read-only installation folder uses notification only.
 Checks send ordinary HTTPS requests to GitHub and its release-asset hosts, without cookies
 or authentication. Local search and calculations still work offline. This setting controls
 updates; the separate exchange-rate and website-icon features retain their own networking.

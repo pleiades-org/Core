@@ -11,6 +11,7 @@ The footer shows one hint for the selected action, such as **Enter to copy** or 
 | Input | Action |
 | --- | --- |
 | `@update` | Check signed-update status, restart to install a ready update, or open its release page |
+| `@info` (or `@about`, `@version`) | Core's installed version (Enter copies it), the latest release from the last update check, and this version's release notes |
 | Nothing typed | Recently used apps as a grid, like Start: up to 18, six across. Apps opened from Core come first, then apps Windows has seen you start (read locally from Windows' own usage record). Arrow keys move, Enter or a click opens |
 | `code`, `vsc`, `studio code`, `xbox` | Search Start Menu and registered packaged apps by name, word prefix, initials and substring |
 | `cmd`, `wt`, `taskmgr`, `regedit` | Windows aliases: the program a Start Menu shortcut starts (`cmd` finds Command Prompt) and Store apps' command names (`wt` finds Windows Terminal) |

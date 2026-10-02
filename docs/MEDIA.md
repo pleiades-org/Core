@@ -33,6 +33,13 @@ For five seconds after Core sends a control, it keeps using the same player, so 
 
 Spotify is recognised whether it is the desktop app (`Spotify.exe`) or the Microsoft Store app; the same holds for the other apps Core knows. Apps Core does not recognise still work and rank with "other apps" until you move them up.
 
+## Players Windows does not see
+
+Some players publish nothing to Windows: pressing a media or volume key then shows no song in Windows' own pop-up. Spotify does this when its setting **Show desktop overlay when using media keys** is off.
+
+- **Spotify** is then read from its window instead: the title shows "Artist - Song" while it plays, and controls go straight to Spotify's window. There is no album art (a music note shows instead) and no progress line or seeking. While Core is visible it follows Spotify's title changes; it does not poll. Turning the overlay setting on gives Core art, progress and seeking again.
+- **Any other player** that Windows cannot see: `@media` and the keywords still offer Play / pause, Next track and Previous track, and send the keyboard's media keys, which Windows passes to whichever player listens for them. The bar needs a player Core can read, so it does not appear.
+
 ## The now-playing bar
 
 A strip above the search box shows the chosen player's album art, title, artist and app, the elapsed and total time, a progress line, and **previous**, **play / pause** and **next** buttons.
@@ -81,7 +88,7 @@ Older Core builds ignore these lines and keep working with the rest of the file.
 - Nothing media-related starts until you use a media command or open Core with the bar on. Then one worker thread reads the sessions. While Core is hidden it sleeps without event subscriptions or timers. While Core is visible it follows the players' change events, and the progress clock ticks once a second only while a track plays.
 - Commands are re-checked against a fresh reading, so a press never acts on a player that closed since the results were shown. A player that does not answer within two seconds is given up on rather than stalling Core.
 - Track text, app names and album art stay in memory; nothing about what you play is written to disk or sent anywhere.
-- If Windows' media sessions are unavailable, Core falls back to sending the keyboard media keys, and Windows chooses the player.
+- If Windows' media sessions are unavailable (Windows 10 before version 1809), Core still reads Spotify from its window, and otherwise sends the keyboard media keys, letting Windows choose the player.
 
 Measured on this PC with Spotify playing (release build, `--dry-run --start-hidden`, warmed with one `@media` show and hide, then 60 seconds hidden): hidden CPU 0.0000% in both runs, and private bytes 6.2 MiB without media against 6.7 MiB with the media worker started ([without](measurements/media-idle-off.json), [with](measurements/media-idle-on.json)).
 
@@ -90,4 +97,5 @@ Measured on this PC with Spotify playing (release build, `--dry-run --start-hidd
 - `cargo test --workspace` covers the ranking rules, keywords, the `@media` list, timeline arithmetic, app recognition, settings round trips and validation, the key recorder's key handling, bar geometry and album-art rounding.
 - `cargo test -p core-launcher-v2 media_probe -- --ignored --nocapture` prints what Windows reports for each open player, including whether its art decodes.
 - `cargo test -p core-launcher-v2 media_round_trip -- --ignored --nocapture` sends **play** to a player that is already playing (which changes nothing) through the whole worker path.
+- `cargo test -p core-launcher-v2 window_player_probe -- --ignored --nocapture` prints the players found from their windows; it reads titles only.
 - Dry runs (`--dry-run`) read media sessions only with `--test-media`, so integration checks do not depend on what is playing; media controls in a dry run report "Verified media control · no side effect".
