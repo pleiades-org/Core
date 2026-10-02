@@ -1,10 +1,12 @@
 use super::{
     control_style::{self, Look},
     layout::{self, *},
+    music_section::{self, MusicSection},
     quicklink_table::{QuicklinkTable, TableEdit},
+    shortcut_recorder::{self, SHORTCUT_RECORDED},
     slider::{self, SlideStage},
-    BackgroundColor, CornerRadius, DisplayChoice, EdgeSpacing, Preferences, ScreenPosition,
-    SettingsDocument, Shortcut,
+    BackgroundColor, CornerRadius, DisplayChoice, EdgeSpacing, MusicApp, Preferences,
+    ScreenPosition, SettingsDocument, Shortcut,
 };
 use crate::windows::updates::UpdateMode;
 use crate::windows::{
@@ -43,6 +45,7 @@ const POSITION_LABEL_ID: usize = 224;
 const APPEARANCE_CATEGORY_ID: usize = 230;
 const BEHAVIOUR_CATEGORY_ID: usize = 231;
 const QUICKLINKS_CATEGORY_ID: usize = 232;
+const MUSIC_CATEGORY_ID: usize = 233;
 pub const SHORTCUT_ID: usize = 240;
 const WINDOWS_KEY_ID: usize = 241;
 const DISPLAY_ID: usize = 242;
@@ -56,9 +59,15 @@ const COMMANDS_LABEL_ID: usize = 249;
 const UPDATES_ID: usize = 256;
 const UPDATES_LABEL_ID: usize = 257;
 
-/// The display and shell dropdowns, whose own keys (Enter, Esc, arrows) must reach them.
+/// The dropdowns, whose own keys (Enter, Esc, arrows) must reach them.
 pub fn is_dropdown(identifier: usize) -> bool {
     matches!(identifier, DISPLAY_ID | SHELL_ID | UPDATES_ID)
+        || music_section::is_dropdown(identifier)
+}
+
+/// Text boxes: drawn on the field colour, and Enter in one means Done.
+pub fn is_text_field(identifier: usize) -> bool {
+    matches!(identifier, COLOR_ID | SHORTCUT_ID) || music_section::is_recorder(identifier)
 }
 const RADIUS_LABEL_ID: usize = 250;
 const RADIUS_ID: usize = 251;
@@ -96,6 +105,7 @@ enum Section {
     Appearance,
     Behaviour,
     Quicklinks,
+    Music,
 }
 
 pub enum SettingsAction {
@@ -112,6 +122,7 @@ pub enum SettingsAction {
 pub struct SettingsPage {
     pub color: HWND,
     quicklinks: QuicklinkTable,
+    music: MusicSection,
     controls: Vec<(usize, HWND)>,
     position: Cell<ScreenPosition>,
     section: Cell<Section>,
@@ -143,6 +154,7 @@ impl SettingsPage {
         let mut page = Self {
             color: HWND::default(),
             quicklinks: QuicklinkTable::create(parent, instance)?,
+            music: MusicSection::create(parent, instance)?,
             controls: Vec::new(),
             position: Cell::new(ScreenPosition::Center),
             section: Cell::new(Section::Appearance),
@@ -197,6 +209,7 @@ impl SettingsPage {
         page.add_button(parent, instance, "Appearance", APPEARANCE_CATEGORY_ID)?;
         page.add_button(parent, instance, "Behaviour", BEHAVIOUR_CATEGORY_ID)?;
         page.add_button(parent, instance, "Quicklinks", QUICKLINKS_CATEGORY_ID)?;
+        page.add_button(parent, instance, "Music", MUSIC_CATEGORY_ID)?;
         // Switch text carries the state ("…: On") for screen readers; only the name is drawn.
         page.add_button(parent, instance, "Use Windows key: Off", WINDOWS_KEY_ID)?;
         page.add_dropdown(parent, instance, "Display", DISPLAY_ID)?;
@@ -215,6 +228,7 @@ impl SettingsPage {
         unsafe {
             SendMessageW(shortcut, EM_SETLIMITTEXT, Some(WPARAM(64)), None);
         }
+        shortcut_recorder::install(shortcut, false, "Press a shortcut")?;
         for (identifier, label) in [
             (SHORTCUT_LABEL_ID, "Open Core shortcut"),
             (DISPLAY_LABEL_ID, "Display"),
@@ -222,7 +236,7 @@ impl SettingsPage {
             (UPDATES_LABEL_ID, "Updates (GitHub)"),
             (
                 SHORTCUT_HELP_ID,
-                "Example: Ctrl+Alt+Space. Win replaces Start when tapped.",
+                "Click the box, then press the keys. Win replaces Start when tapped.",
             ),
         ] {
             page.add(
@@ -349,6 +363,7 @@ impl SettingsPage {
                 let _ = SetWindowTheme(self.control(identifier), theme, PCWSTR::null());
             }
         }
+        self.music.apply_theme(palette.is_dark());
     }
 
     fn add(
@@ -375,8 +390,15 @@ impl SettingsPage {
         Ok(control)
     }
 
-    pub fn reset(&self, document: SettingsDocument) {
+    /// Music apps found since Settings opened join the Music page's list.
+    pub fn add_music_apps(&self, music_apps: &[MusicApp]) {
+        self.music.add_available(music_apps);
+    }
+
+    /// `music_apps`: music apps found on this PC and players seen this session.
+    pub fn reset(&self, document: SettingsDocument, music_apps: &[MusicApp]) {
         self.quicklinks.reset(&document.quicklinks);
+        self.music.reset(&document.music, music_apps);
         let settings = document.preferences;
         self.section.set(Section::Appearance);
         self.position.set(settings.position);
@@ -407,19 +429,23 @@ impl SettingsPage {
     }
 
     pub fn draft(&self) -> Result<SettingsDocument, String> {
+        let preferences = Preferences {
+            background: BackgroundColor::parse(&control_text(self.color))?,
+            position: self.position.get(),
+            shortcut: Shortcut::parse(&control_text(self.control(SHORTCUT_ID)))?,
+            display: self.display.get(),
+            startup: self.startup.get(),
+            shell: self.shell.get(),
+            updates: self.updates.get(),
+            corner_radius: CornerRadius::new(slider::position(self.control(RADIUS_ID))),
+            edge_spacing: EdgeSpacing::new(slider::position(self.control(SPACING_ID))),
+        };
+        let music = self.music.draft()?;
+        music.validate(preferences.shortcut)?;
         Ok(SettingsDocument {
-            preferences: Preferences {
-                background: BackgroundColor::parse(&control_text(self.color))?,
-                position: self.position.get(),
-                shortcut: Shortcut::parse(&control_text(self.control(SHORTCUT_ID)))?,
-                display: self.display.get(),
-                startup: self.startup.get(),
-                shell: self.shell.get(),
-                updates: self.updates.get(),
-                corner_radius: CornerRadius::new(slider::position(self.control(RADIUS_ID))),
-                edge_spacing: EdgeSpacing::new(slider::position(self.control(SPACING_ID))),
-            },
+            preferences,
             quicklinks: self.quicklinks.draft()?,
+            music,
         })
     }
 
@@ -428,6 +454,7 @@ impl SettingsPage {
             Section::Appearance => self.color,
             Section::Behaviour => self.control(SHORTCUT_ID),
             Section::Quicklinks => self.quicklinks.focus_target(),
+            Section::Music => self.music.focus_target(),
         }
     }
 
@@ -441,12 +468,27 @@ impl SettingsPage {
                 TableEdit::Removed => SettingsAction::Change,
             };
         }
-        if matches!(identifier, COLOR_ID | SHORTCUT_ID) && notification == EN_CHANGE {
-            if identifier == SHORTCUT_ID {
-                // Typing "Win" turns the Windows-key switch on, and anything else turns it off.
-                self.update_behaviour_names();
-            }
+        if let Some(action) = self.music.command(identifier, notification) {
+            return action;
+        }
+        if identifier == COLOR_ID && notification == EN_CHANGE {
             return SettingsAction::Edit;
+        }
+        if identifier == SHORTCUT_ID {
+            return match notification {
+                // Text set by automation or assistive technology still applies, as typing did.
+                // The recorder's "Ctrl+…" while keys are held is not a shortcut yet.
+                EN_CHANGE if !shortcut_recorder::is_partial(self.control(SHORTCUT_ID)) => {
+                    // "Win" turns the Windows-key switch on, and anything else turns it off.
+                    self.update_behaviour_names();
+                    SettingsAction::Edit
+                }
+                SHORTCUT_RECORDED => {
+                    self.update_behaviour_names();
+                    SettingsAction::Change
+                }
+                _ => SettingsAction::None,
+            };
         }
         if matches!(identifier, DISPLAY_ID | SHELL_ID | UPDATES_ID) {
             return if notification == CBN_SELCHANGE {
@@ -460,11 +502,15 @@ impl SettingsPage {
             return SettingsAction::None;
         }
         match identifier {
-            APPEARANCE_CATEGORY_ID | BEHAVIOUR_CATEGORY_ID | QUICKLINKS_CATEGORY_ID => {
+            APPEARANCE_CATEGORY_ID
+            | BEHAVIOUR_CATEGORY_ID
+            | QUICKLINKS_CATEGORY_ID
+            | MUSIC_CATEGORY_ID => {
                 self.section.set(match identifier {
                     APPEARANCE_CATEGORY_ID => Section::Appearance,
                     BEHAVIOUR_CATEGORY_ID => Section::Behaviour,
-                    _ => Section::Quicklinks,
+                    QUICKLINKS_CATEGORY_ID => Section::Quicklinks,
+                    _ => Section::Music,
                 });
                 self.show(true);
                 unsafe {
@@ -572,11 +618,14 @@ impl SettingsPage {
     pub fn show(&self, visible: bool) {
         self.quicklinks
             .show(visible && self.section.get() == Section::Quicklinks);
+        self.music
+            .show(visible && self.section.get() == Section::Music);
         for (identifier, control) in &self.controls {
             let in_section = match *identifier {
                 APPEARANCE_CATEGORY_ID
                 | BEHAVIOUR_CATEGORY_ID
                 | QUICKLINKS_CATEGORY_ID
+                | MUSIC_CATEGORY_ID
                 | DONE_ID
                 | STATUS_ID => true,
                 RETRY_ID => self.save_failed.get(),
@@ -800,7 +849,10 @@ impl SettingsPage {
                     BUTTON_HEIGHT,
                 ),
                 STATUS_ID => (content_left, STATUS_TOP, content_width, BUTTON_HEIGHT),
-                APPEARANCE_CATEGORY_ID | BEHAVIOUR_CATEGORY_ID | QUICKLINKS_CATEGORY_ID => (
+                APPEARANCE_CATEGORY_ID
+                | BEHAVIOUR_CATEGORY_ID
+                | QUICKLINKS_CATEGORY_ID
+                | MUSIC_CATEGORY_ID => (
                     SIDEBAR_INSET,
                     SIDEBAR_FIRST_TOP
                         + (*identifier - APPEARANCE_CATEGORY_ID) as i32 * SIDEBAR_PITCH,
@@ -908,6 +960,7 @@ impl SettingsPage {
             }
         }
         self.quicklinks.layout(dpi, fonts, new_fonts)?;
+        self.music.layout(dpi, fonts, new_fonts)?;
         Ok(())
     }
 
@@ -926,6 +979,10 @@ impl SettingsPage {
             Section::Behaviour => (
                 "Behaviour",
                 "How Core opens, starts with Windows and runs / commands.",
+            ),
+            Section::Music => (
+                "Music",
+                "Which player Core controls, the now-playing bar and media shortcuts.",
             ),
         };
         for (label, left, top, bottom, font, color) in [
@@ -987,6 +1044,10 @@ impl SettingsPage {
             self.quicklinks.paint(context, dpi, fonts, palette);
             return;
         }
+        if self.section.get() == Section::Music {
+            self.music.paint(context, dpi, palette);
+            return;
+        }
         painting::rounded(
             context,
             &layout::area(
@@ -1013,6 +1074,18 @@ impl SettingsPage {
             return true;
         }
         let identifier = item.CtlID as usize;
+        let dpi = self.dpi.get();
+        let fonts = self.fonts.get();
+        if self.music.draw(
+            item,
+            Look {
+                dpi,
+                fonts,
+                palette,
+            },
+        ) {
+            return true;
+        }
         if !self
             .controls
             .iter()
@@ -1020,8 +1093,6 @@ impl SettingsPage {
         {
             return false;
         }
-        let dpi = self.dpi.get();
-        let fonts = self.fonts.get();
         let position = identifier
             .checked_sub(POSITION_FIRST_ID)
             .and_then(|index| ScreenPosition::ALL.get(index))
@@ -1063,6 +1134,7 @@ impl SettingsPage {
             || (identifier == APPEARANCE_CATEGORY_ID && self.section.get() == Section::Appearance)
             || (identifier == BEHAVIOUR_CATEGORY_ID && self.section.get() == Section::Behaviour)
             || (identifier == QUICKLINKS_CATEGORY_ID && self.section.get() == Section::Quicklinks)
+            || (identifier == MUSIC_CATEGORY_ID && self.section.get() == Section::Music)
             || active;
         painting::fill(item.hDC, &item.rcItem, palette.background);
         if emphasized {

@@ -8,7 +8,7 @@ use super::{
     search_layout::SearchLayout,
     settings::{
         layout as settings_layout,
-        page::{SettingsAction, SettingsPage, COLOR_ID, SHORTCUT_ID, STATUS_ID},
+        page::{SettingsAction, SettingsPage, STATUS_ID},
         Preferences,
     },
     theme::{self, Fonts, Palette},
@@ -41,6 +41,7 @@ mod command_prompt;
 mod console;
 mod footer;
 mod icon_cache;
+mod media_bar;
 mod output;
 mod paint;
 mod power;
@@ -51,6 +52,10 @@ use icon_cache::IconCache;
 use preference_changes::PreferenceChanges;
 
 pub use footer::CLOCK_TIMER;
+pub use media_bar::{
+    button_areas as media_button_areas, BarPresence, MediaBarClick, MediaBarContent, MEDIA_INFO_ID,
+    MEDIA_NEXT_ID, MEDIA_PLAY_ID, MEDIA_PREVIOUS_ID, MEDIA_PROGRESS_TIMER,
+};
 pub use output::OUTPUT_ID;
 
 pub use super::theme::scale;
@@ -79,6 +84,8 @@ struct LayoutKey {
     grid: bool,
     /// The settings page has its own size and controls.
     settings: bool,
+    /// The now-playing bar is above the search box.
+    media_bar: bool,
 }
 
 impl LayoutKey {
@@ -90,6 +97,7 @@ impl LayoutKey {
         terminal: false,
         grid: false,
         settings: false,
+        media_bar: false,
     };
 }
 
@@ -139,6 +147,12 @@ pub struct View {
     rows: RefCell<Vec<DisplayRow>>,
     /// Icons shown recently, for results that come back.
     icon_cache: RefCell<IconCache>,
+    /// Created the first time something plays.
+    media_bar: OnceCell<media_bar::MediaBar>,
+    media_bar_shown: Cell<bool>,
+    /// Core is visible, so the track's progress may move.
+    media_progress_active: Cell<bool>,
+    media_timer_set: Cell<bool>,
 }
 
 impl View {
@@ -185,6 +199,10 @@ impl View {
             layout_key: Cell::new(LayoutKey::STALE),
             rows: RefCell::new(Vec::new()),
             icon_cache: RefCell::new(IconCache::default()),
+            media_bar: OnceCell::new(),
+            media_bar_shown: Cell::new(false),
+            media_progress_active: Cell::new(false),
+            media_timer_set: Cell::new(false),
         };
         unsafe {
             view.input = child(
@@ -325,8 +343,14 @@ impl View {
             output_height,
             terminal,
             grid,
+            media_bar,
             ..
         } = key;
+        let bar = if media_bar {
+            theme::MEDIA_BAR_HEIGHT
+        } else {
+            0
+        };
         let row_count = count.max(1) as i32;
         let preferences = self.preferences.get();
         let spacing = scale(preferences.edge_spacing.logical(), dpi);
@@ -343,7 +367,7 @@ impl View {
                 }
                 (false, _) => row_count * row_height,
             };
-            let height = theme::RESULTS_TOP + body + theme::FOOTER_HEIGHT;
+            let height = bar + theme::RESULTS_TOP + body + theme::FOOTER_HEIGHT;
             if self.power_menu_open() {
                 height.max(280)
             } else {
@@ -361,15 +385,16 @@ impl View {
         let bounds = window_placement::bounds(area, width, height, preferences.position);
         let client_width = bounds.right - bounds.left;
         let client_height = bounds.bottom - bounds.top;
-        // The search box row keeps its pixels unless its width, scale or page changed.
+        // The search box row keeps its pixels unless its width, scale, page or place changed.
         let keeps_search_row = !settings_open
             && previous != LayoutKey::STALE
             && previous.dpi == dpi
+            && previous.media_bar == media_bar
             && self.width.get() == client_width;
         self.width.set(client_width);
         self.height.set(client_height);
         self.bounds.set(bounds);
-        let search = SearchLayout::new(client_width, client_height, dpi);
+        let search = SearchLayout::new(client_width, client_height, dpi, scale(bar, dpi));
         unsafe {
             SendMessageW(
                 self.results,
@@ -418,6 +443,7 @@ impl View {
                 )?;
             }
             EndDeferWindowPos(batch)?;
+            self.place_media_bar(&search)?;
             let _ = ShowWindow(
                 self.results,
                 if settings_open || terminal || grid || self.rows.borrow().is_empty() {
@@ -477,6 +503,7 @@ impl View {
             terminal,
             grid,
             settings: settings_open,
+            media_bar: self.media_bar_height() > 0,
         }
     }
 
@@ -485,7 +512,7 @@ impl View {
     fn invalidate_below_search(&self, settings_open: bool) {
         let area = painting::rectangle(
             0,
-            scale(SECTION_LABEL_TOP, self.dpi.get()),
+            scale(self.media_bar_height() + SECTION_LABEL_TOP, self.dpi.get()),
             self.width.get(),
             self.height.get(),
         );

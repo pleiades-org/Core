@@ -2,15 +2,16 @@ use super::{
     foreground_observer::FOREGROUND_CHANGED,
     icon_worker::ICONS_READY,
     launcher_state::{run_mode, LauncherState, Options, COMMAND_OUTPUT_TIMER},
+    media::MEDIA_READY,
     search_worker::WORKER_READY,
-    settings::{
-        page::{COLOR_ID, DONE_ID, SHORTCUT_ID},
-        SETTINGS_SAVED,
-    },
+    settings::{page::DONE_ID, shortcut_recorder, SETTINGS_SAVED},
     tray::{Tray, TrayAction, TRAY_EVENT},
 };
 use super::{
-    view::{View, INPUT_ID, RESULTS_ID, SETTINGS_ID},
+    view::{
+        View, INPUT_ID, MEDIA_INFO_ID, MEDIA_NEXT_ID, MEDIA_PLAY_ID, MEDIA_PREVIOUS_ID,
+        MEDIA_PROGRESS_TIMER, RESULTS_ID, SETTINGS_ID,
+    },
     wide,
 };
 use core_engine::search::RunMode;
@@ -134,6 +135,13 @@ pub fn run() -> windows::core::Result<()> {
                     view.set_footer(&error);
                 }
             }
+            let music = shell.borrow().settings.saved.music.clone();
+            if let Err(error) = shell.borrow_mut().configure_media_hotkeys(window, &music) {
+                eprintln!("Media shortcuts could not be registered: {error}");
+                if let Some(view) = context.view.get() {
+                    view.set_footer(&error);
+                }
+            }
             // Explorer may not be ready at sign-in. TaskbarCreated retries the icon later.
             let mut tray = Tray::new(window, shortcut);
             if let Err(error) = tray.show() {
@@ -167,6 +175,28 @@ unsafe fn message_loop(window: HWND, shell: &RefCell<LauncherState>) -> windows:
         }
         if status == -1 {
             return Err(windows::core::Error::from_win32());
+        }
+        // Typing fixes the now-playing bar's place, so the search box does not move under it.
+        if message.message == WM_CHAR
+            && shell
+                .borrow()
+                .view
+                .as_ref()
+                .is_some_and(|view| view.is_input(message.hwnd))
+        {
+            shell.borrow_mut().note_typing();
+        }
+        // Media shortcuts that work while Core is in front; Alt combinations arrive as system
+        // keys. Bit 30 marks a key held down and repeating.
+        if matches!(message.message, WM_KEYDOWN | WM_SYSKEYDOWN)
+            && !is_composing(message.hwnd)
+            && shell.borrow_mut().media_shortcut_key(
+                message.hwnd,
+                VIRTUAL_KEY(message.wParam.0 as u16),
+                message.lParam.0 & (1 << 30) != 0,
+            )
+        {
+            continue;
         }
         if message.message == WM_KEYDOWN && !is_composing(message.hwnd) {
             let view = shell.borrow().view.clone();
@@ -231,6 +261,14 @@ unsafe fn message_loop(window: HWND, shell: &RefCell<LauncherState>) -> windows:
                 DispatchMessageW(&message);
                 continue;
             }
+            // A shortcut field records every key except those that work Settings itself.
+            if in_settings
+                && shortcut_recorder::is_recorder(message.hwnd)
+                && !shortcut_recorder::settings_key(VIRTUAL_KEY(message.wParam.0 as u16))
+            {
+                DispatchMessageW(&message);
+                continue;
+            }
             if in_settings {
                 match VIRTUAL_KEY(message.wParam.0 as u16) {
                     VK_ESCAPE => shell.borrow_mut().dismiss_settings(window),
@@ -238,7 +276,7 @@ unsafe fn message_loop(window: HWND, shell: &RefCell<LauncherState>) -> windows:
                         let identifier = GetDlgCtrlID(message.hwnd) as usize;
                         shell.borrow_mut().settings_command(
                             window,
-                            if matches!(identifier, COLOR_ID | SHORTCUT_ID)
+                            if super::settings::page::is_text_field(identifier)
                                 || super::settings::quicklink_table::is_edit(identifier)
                             {
                                 DONE_ID
@@ -286,6 +324,10 @@ unsafe fn message_loop(window: HWND, shell: &RefCell<LauncherState>) -> windows:
                     let identifier = GetDlgCtrlID(message.hwnd) as usize;
                     if identifier == super::power_menu::POWER_ID
                         || super::power_menu::action(identifier).is_some()
+                        || matches!(
+                            identifier,
+                            MEDIA_PREVIOUS_ID | MEDIA_PLAY_ID | MEDIA_NEXT_ID
+                        )
                     {
                         post(
                             window,
@@ -406,6 +448,7 @@ unsafe extern "system" fn window_proc(
                     }
                     state.worker.take();
                     state.icon_worker.take();
+                    state.media.stop();
                     state.foreground_observer.take();
                     state.tray.take();
                     // Stops a running command; programs it already left running are untouched.
@@ -550,6 +593,19 @@ unsafe extern "system" fn window_proc(
             );
             LRESULT(0)
         }
+        WM_COMMAND
+            if matches!(
+                word.0 & 0xffff,
+                MEDIA_PREVIOUS_ID | MEDIA_PLAY_ID | MEDIA_NEXT_ID
+            ) && (word.0 >> 16) as u32 == BN_CLICKED =>
+        {
+            shell.media_bar_button(word.0 & 0xffff);
+            LRESULT(0)
+        }
+        WM_COMMAND if word.0 & 0xffff == MEDIA_INFO_ID && (word.0 >> 16) as u32 == STN_CLICKED => {
+            shell.media_info_clicked();
+            LRESULT(0)
+        }
         WM_LBUTTONDOWN => {
             if let Some(view) = &shell.view {
                 view.close_power_menu();
@@ -638,6 +694,14 @@ unsafe extern "system" fn window_proc(
             shell.command_output_timer();
             LRESULT(0)
         }
+        WM_TIMER if word.0 == MEDIA_PROGRESS_TIMER => {
+            if let Some(view) = &shell.view {
+                view.tick_media_progress();
+            }
+            LRESULT(0)
+        }
+        // Media shortcuts that work in every app have identifiers of their own.
+        WM_HOTKEY if shell.media_hotkey(word.0) => LRESULT(0),
         WM_HOTKEY => {
             // Open but behind another app (Windows refused it the foreground): come forward
             // rather than hide, so one press always shows Core. Background tests never have
@@ -727,6 +791,14 @@ unsafe extern "system" fn window_proc(
         }
         super::exchange_rates::RATES_READY => {
             shell.receive_exchange_rates();
+            LRESULT(0)
+        }
+        MEDIA_READY => {
+            shell.receive_media();
+            LRESULT(0)
+        }
+        shortcut_recorder::RECORDER_FOCUS => {
+            shell.recorder_focus(window, word.0 != 0, HWND(long.0 as *mut _));
             LRESULT(0)
         }
         ICONS_READY => {

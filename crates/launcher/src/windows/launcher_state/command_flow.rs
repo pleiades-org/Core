@@ -313,6 +313,7 @@ impl LauncherState {
     /// Typing ends a history recall; the next ↑ starts from the newest match again. A typed
     /// `/` at the start switches the box to a command prompt.
     pub fn query_edited(&mut self) {
+        self.typed_since_show = true;
         if let Some(view) = &self.view {
             if let Err(error) = view.absorb_command_prefix() {
                 view.set_footer(&format!("Could not start a command: {error}"));

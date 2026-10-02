@@ -2,6 +2,7 @@ use super::discover_applications::{discover_applications, Discovery};
 use core_engine::{
     applications::ApplicationCatalog,
     conversions::ExchangeRates,
+    media::MediaState,
     quicklinks::Quicklink,
     search::{SearchBatch, SearchEngine},
 };
@@ -17,13 +18,19 @@ use windows::Win32::{
 
 pub const WORKER_READY: u32 = WM_APP + 1;
 
+/// What a search uses besides its text: shared snapshots, cheap to hand over.
+pub struct SearchContext {
+    pub catalog: Arc<ApplicationCatalog>,
+    pub quicklinks: Arc<[Quicklink]>,
+    pub exchange_rates: Option<Arc<ExchangeRates>>,
+    pub recent_applications: Arc<[Arc<str>]>,
+    pub media: Option<Arc<MediaState>>,
+}
+
 struct Request {
     generation: u64,
     query: String,
-    catalog: Arc<ApplicationCatalog>,
-    quicklinks: Arc<[Quicklink]>,
-    exchange_rates: Option<Arc<ExchangeRates>>,
-    recent_applications: Arc<[Arc<str>]>,
+    context: SearchContext,
 }
 pub struct Completion {
     pub generation: u64,
@@ -99,24 +106,13 @@ impl SearchWorker {
         Ok(worker)
     }
 
-    pub fn submit(
-        &self,
-        generation: u64,
-        query: String,
-        catalog: Arc<ApplicationCatalog>,
-        quicklinks: Arc<[Quicklink]>,
-        exchange_rates: Option<Arc<ExchangeRates>>,
-        recent_applications: Arc<[Arc<str>]>,
-    ) {
+    pub fn submit(&self, generation: u64, query: String, context: SearchContext) {
         self.generation.store(generation, Ordering::Release);
         let (lock, changed) = &*self.pending;
         lock.lock().expect("search request lock").request = Some(Request {
             generation,
             query,
-            catalog,
-            quicklinks,
-            exchange_rates,
-            recent_applications,
+            context,
         });
         changed.notify_one();
     }
@@ -169,26 +165,28 @@ fn run_search(
         }
         // Quicklinks are ranked in their own catalog and merged with the apps' results, so only
         // a quicklink edit rebuilds a catalog here; new apps from discovery are used as they are.
-        if !Arc::ptr_eq(&source_quicklinks, &request.quicklinks) {
-            quicklink_catalog = if request.quicklinks.is_empty() {
+        if !Arc::ptr_eq(&source_quicklinks, &request.context.quicklinks) {
+            quicklink_catalog = if request.context.quicklinks.is_empty() {
                 ApplicationCatalog::default()
             } else {
                 ApplicationCatalog::new(
                     request
+                        .context
                         .quicklinks
                         .iter()
                         .map(Quicklink::application)
                         .collect(),
                 )
             };
-            source_quicklinks = request.quicklinks.clone();
+            source_quicklinks = request.context.quicklinks.clone();
         }
-        engine.set_exchange_rates(request.exchange_rates.clone());
-        engine.set_recent_applications(request.recent_applications.clone());
+        engine.set_exchange_rates(request.context.exchange_rates.clone());
+        engine.set_recent_applications(request.context.recent_applications.clone());
+        engine.set_media(request.context.media.clone());
         let batch = engine.search_catalogs(
             &request.query,
-            &request.catalog,
-            &request.catalog,
+            &request.context.catalog,
+            &request.context.catalog,
             &quicklink_catalog,
             &|| {
                 stopped.load(Ordering::Relaxed)
@@ -233,6 +231,16 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
+    fn context(catalog: &Arc<ApplicationCatalog>, quicklinks: &Arc<[Quicklink]>) -> SearchContext {
+        SearchContext {
+            catalog: catalog.clone(),
+            quicklinks: quicklinks.clone(),
+            exchange_rates: None,
+            recent_applications: Arc::from([]),
+            media: None,
+        }
+    }
+
     fn next_completion(worker: &SearchWorker) -> Completion {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
@@ -255,14 +263,7 @@ mod tests {
         let catalog = Arc::new(ApplicationCatalog::default());
         let quicklinks: Arc<[Quicklink]> = Arc::from([]);
         for (generation, query) in [(1, "1+1"), (2, "2+2"), (3, "3+3")] {
-            worker.submit(
-                generation,
-                query.into(),
-                catalog.clone(),
-                quicklinks.clone(),
-                None,
-                Arc::from([]),
-            );
+            worker.submit(generation, query.into(), context(&catalog, &quicklinks));
         }
         let latest = loop {
             let completion = next_completion(&worker);
@@ -273,7 +274,7 @@ mod tests {
         };
         assert_eq!(latest.batch.results[0].title.as_ref(), "6");
 
-        worker.submit(4, "4+4".into(), catalog, quicklinks, None, Arc::from([]));
+        worker.submit(4, "4+4".into(), context(&catalog, &quicklinks));
         worker.cancel(5);
         assert!(worker.pending.0.lock().unwrap().request.is_none());
         thread::sleep(Duration::from_millis(200));

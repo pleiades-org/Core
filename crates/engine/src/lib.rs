@@ -4,6 +4,7 @@
 pub mod applications;
 pub mod calculator;
 pub mod conversions;
+pub mod media;
 pub mod quicklinks;
 pub mod search;
 pub mod time_conversion;

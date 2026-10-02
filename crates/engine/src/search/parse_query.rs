@@ -26,6 +26,8 @@ const COMMAND_NAMES: &[&str] = &[
     "shell",
     "terminal",
     "update",
+    "media",
+    "music",
 ];
 
 use super::ShellKind;
@@ -40,6 +42,8 @@ pub enum CommandKind {
     Power,
     Taskbar,
     Update,
+    /// Media controls: `@media`, `@music`.
+    Media,
     /// A shell command: `/ipconfig`, `@pwsh Get-Process`.
     Shell(ShellKind),
     /// A Windows Run-dialog target: `@run notepad`.
@@ -117,6 +121,7 @@ fn parse_command<'query>(command: &'query str, payload: &'query str) -> ParsedQu
         "taskbar" | "tb" => CommandKind::Taskbar,
         "run" => CommandKind::Run,
         "update" => CommandKind::Update,
+        "media" | "music" => CommandKind::Media,
         "shell" | "terminal" => CommandKind::Shell(ShellKind::Default),
         "cmd" => CommandKind::Shell(ShellKind::Cmd),
         "ps" | "powershell" => CommandKind::Shell(ShellKind::WindowsPowerShell),

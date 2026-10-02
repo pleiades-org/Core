@@ -39,7 +39,7 @@ impl View {
     /// the command should get: as wide as the output and as tall as it can grow.
     pub fn start_console(&self, header: &str) -> (u16, u16) {
         let dpi = self.dpi.get();
-        let area = SearchLayout::new(scale(theme::WIDTH, dpi), 0, dpi).output;
+        let area = SearchLayout::new(scale(theme::WIDTH, dpi), 0, dpi, 0).output;
         let height = scale(theme::OUTPUT_HEIGHT - OUTPUT_PADDING, dpi);
         let (columns, rows) = self.console.size_for(area.right - area.left, height);
         self.console.start(header, columns, rows);

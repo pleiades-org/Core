@@ -1,6 +1,7 @@
 mod command_flow;
 pub use command_flow::{run_mode, COMMAND_OUTPUT_TIMER};
 mod footer;
+mod media_flow;
 mod settings_flow;
 mod update_flow;
 
@@ -14,7 +15,7 @@ use super::{
     motion::{MotionPreference, VisibilityTransition},
     recent_applications::{self, ApplicationAliases, WindowsRecent},
     recent_list::{RecentKind, RecentList},
-    search_worker::SearchWorker,
+    search_worker::{SearchContext, SearchWorker},
     settings::{AutoSave, SettingsStore},
     tray::Tray,
     view::View,
@@ -50,6 +51,9 @@ pub struct Options {
     /// Website icons and exchange rates may be downloaded. Off for probes and dry runs
     /// unless a test opts in with `--test-network`.
     pub network: bool,
+    /// The person's media players are read. Off for probes and dry runs unless a test opts in
+    /// with `--test-media`, so checks do not depend on what happens to be playing.
+    pub media: bool,
     pub motion: MotionPreference,
 }
 impl Options {
@@ -75,6 +79,8 @@ impl Options {
                     || arguments.iter().any(|argument| {
                         argument == "--test-network" || argument == "--test-website-icons"
                     })),
+            media: !probe
+                && (!dry_run || arguments.iter().any(|argument| argument == "--test-media")),
             stay_open_for_test: background_for_test
                 || (dry_run
                     && arguments
@@ -148,6 +154,11 @@ pub struct LauncherState {
     working_directory: PathBuf,
     /// How Enter runs a shell command; kept until an accept that had to wait completes.
     accept_mode: RunMode,
+    pub media: media_flow::MediaFlow,
+    /// Something was typed since Core was shown, so the now-playing bar keeps its place.
+    typed_since_show: bool,
+    /// A settings shortcut field is recording, so Core's shortcuts are released meanwhile.
+    shortcuts_suspended: bool,
 }
 
 impl LauncherState {
@@ -214,6 +225,9 @@ impl LauncherState {
             recall: None,
             working_directory: super::commands::home(),
             accept_mode: RunMode::Capture,
+            media: media_flow::MediaFlow::default(),
+            typed_since_show: false,
+            shortcuts_suspended: false,
         }
     }
 
@@ -242,6 +256,10 @@ impl LauncherState {
                 && !std::env::args().any(|argument| argument == "--test-shortcut"))
         {
             return Ok(());
+        }
+        if self.shortcuts_suspended {
+            // A shortcut field is recording: check the shortcut is free, register it later.
+            return super::activation::ActivationBinding::install(window, shortcut, 3).map(drop);
         }
         let identifier = if self
             .binding
@@ -293,14 +311,20 @@ impl LauncherState {
         self.generation += 1;
         self.pending_accept = None;
         self.searched_query = view.query();
+        let query = self.searched_query.clone();
+        self.media_for_query(&query);
+        let media = self.media_state();
         if let Some(worker) = &self.worker {
             worker.submit(
                 self.generation,
                 self.searched_query.clone(),
-                self.catalog.clone(),
-                self.settings.saved.quicklinks.clone(),
-                self.exchange_rates.clone(),
-                self.recent_applications.clone(),
+                SearchContext {
+                    catalog: self.catalog.clone(),
+                    quicklinks: self.settings.saved.quicklinks.clone(),
+                    exchange_rates: self.exchange_rates.clone(),
+                    recent_applications: self.recent_applications.clone(),
+                    media,
+                },
             );
         }
     }
@@ -359,6 +383,7 @@ impl LauncherState {
         // New aliases, so Windows' record is resolved again.
         self.windows_recent.invalidate();
         self.refresh_recent_applications();
+        self.offer_music_apps();
         self.queue_search();
         if accepting_current {
             self.pending_accept = Some(self.generation);
@@ -434,8 +459,13 @@ impl LauncherState {
         if !visible && self.view.as_ref().is_some_and(|view| view.settings_open()) {
             self.flush_settings(window);
         }
-        self.visible = visible;
+        let was_visible = std::mem::replace(&mut self.visible, visible);
         self.pending_accept = None;
+        // Opening, not re-showing an open Core: typing so far keeps the bar in place.
+        if visible && !was_visible {
+            // Before placing the window, so the bar's height is part of the first layout.
+            self.media_shown();
+        }
         if let Some(view) = &self.view {
             if !visible {
                 view.close_power_menu();
@@ -474,6 +504,7 @@ impl LauncherState {
             if visible {
                 self.rate_service.refresh(window);
                 self.update_service.refresh(window);
+                self.media_after_show();
                 self.queue_search();
                 if !self.options.background_for_test {
                     take_foreground(window);
@@ -485,6 +516,7 @@ impl LauncherState {
                 }
             } else {
                 self.cancel_background_work();
+                self.media_hidden(window);
             }
         }
     }
@@ -563,6 +595,11 @@ impl LauncherState {
             view.set_footer("Verified action for the current query · no side effect");
             return;
         }
+        // Media controls keep Core open, so another press can follow.
+        if let Action::Media { command, target } = action {
+            self.send_media(super::media::MediaAction::Control(command), target);
+            return;
+        }
         self.pending_action = Some(match action {
             Action::Update => {
                 self.accept_update();
@@ -600,6 +637,9 @@ impl LauncherState {
             }
             Action::FillQuery(_) => {
                 unreachable!("query editing is handled before platform dispatch")
+            }
+            Action::Media { .. } => {
+                unreachable!("media controls are sent before platform dispatch")
             }
         });
     }
