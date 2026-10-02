@@ -29,6 +29,7 @@ mod search_layout;
 mod search_worker;
 mod settings;
 mod shell;
+mod spotify;
 mod taskbar;
 mod theme;
 mod time_converter;

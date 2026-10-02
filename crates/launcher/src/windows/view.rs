@@ -156,6 +156,11 @@ pub struct View {
 }
 
 impl View {
+    pub fn spotify_status(&self, text: &str) {
+        if let Some(page) = self.settings_page.get() {
+            page.spotify_status(text);
+        }
+    }
     /// Starts with the saved preferences, so the first appearance is applied and laid out once.
     pub fn create(
         parent: HWND,

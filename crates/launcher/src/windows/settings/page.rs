@@ -67,7 +67,10 @@ pub fn is_dropdown(identifier: usize) -> bool {
 
 /// Text boxes: drawn on the field colour, and Enter in one means Done.
 pub fn is_text_field(identifier: usize) -> bool {
-    matches!(identifier, COLOR_ID | SHORTCUT_ID) || music_section::is_recorder(identifier)
+    matches!(
+        identifier,
+        COLOR_ID | SHORTCUT_ID | super::spotify_section::CLIENT_ID
+    ) || music_section::is_recorder(identifier)
 }
 const RADIUS_LABEL_ID: usize = 250;
 const RADIUS_ID: usize = 251;
@@ -106,6 +109,7 @@ enum Section {
     Behaviour,
     Quicklinks,
     Music,
+    Spotify,
 }
 
 pub enum SettingsAction {
@@ -116,6 +120,9 @@ pub enum SettingsAction {
     Retry,
     Done,
     ClearHistory,
+    ConnectSpotify,
+    DisconnectSpotify,
+    SpotifySetup,
     None,
 }
 
@@ -123,6 +130,7 @@ pub struct SettingsPage {
     pub color: HWND,
     quicklinks: QuicklinkTable,
     music: MusicSection,
+    spotify: super::spotify_section::SpotifySection,
     controls: Vec<(usize, HWND)>,
     position: Cell<ScreenPosition>,
     section: Cell<Section>,
@@ -139,6 +147,9 @@ pub struct SettingsPage {
 }
 
 impl SettingsPage {
+    pub fn spotify_status(&self, text: &str) {
+        self.spotify.status(text);
+    }
     pub fn scroll_quicklinks(&self, command: u16, wheel: Option<i16>) {
         if self.section.get() == Section::Quicklinks {
             self.quicklinks.scroll(command, wheel);
@@ -155,6 +166,7 @@ impl SettingsPage {
             color: HWND::default(),
             quicklinks: QuicklinkTable::create(parent, instance)?,
             music: MusicSection::create(parent, instance)?,
+            spotify: super::spotify_section::SpotifySection::create(parent, instance)?,
             controls: Vec::new(),
             position: Cell::new(ScreenPosition::Center),
             section: Cell::new(Section::Appearance),
@@ -399,6 +411,7 @@ impl SettingsPage {
     pub fn reset(&self, document: SettingsDocument, music_apps: &[MusicApp]) {
         self.quicklinks.reset(&document.quicklinks);
         self.music.reset(&document.music, music_apps);
+        self.spotify.reset(&document.music.spotify);
         let settings = document.preferences;
         self.section.set(Section::Appearance);
         self.position.set(settings.position);
@@ -440,7 +453,8 @@ impl SettingsPage {
             corner_radius: CornerRadius::new(slider::position(self.control(RADIUS_ID))),
             edge_spacing: EdgeSpacing::new(slider::position(self.control(SPACING_ID))),
         };
-        let music = self.music.draft()?;
+        let mut music = self.music.draft()?;
+        music.spotify = self.spotify.draft()?;
         music.validate(preferences.shortcut)?;
         Ok(SettingsDocument {
             preferences,
@@ -455,10 +469,35 @@ impl SettingsPage {
             Section::Behaviour => self.control(SHORTCUT_ID),
             Section::Quicklinks => self.quicklinks.focus_target(),
             Section::Music => self.music.focus_target(),
+            Section::Spotify => self.spotify.focus_target(),
         }
     }
 
     pub fn command(&self, identifier: usize, notification: u32) -> SettingsAction {
+        if notification == BN_CLICKED
+            && matches!(
+                identifier,
+                music_section::SPOTIFY_SETTINGS_ID | super::spotify_section::BACK_ID
+            )
+        {
+            self.section
+                .set(if identifier == music_section::SPOTIFY_SETTINGS_ID {
+                    Section::Spotify
+                } else {
+                    Section::Music
+                });
+            self.show(true);
+            unsafe {
+                let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetFocus(Some(
+                    self.focus_target(),
+                ));
+                let _ = InvalidateRect(Some(GetParent(self.color).unwrap_or_default()), None, true);
+            }
+            return SettingsAction::None;
+        }
+        if let Some(action) = self.spotify.command(identifier, notification) {
+            return action;
+        }
         if matches!(identifier, RADIUS_ID | SPACING_ID) {
             return self.slide(identifier, SlideStage::from_code(notification));
         }
@@ -616,6 +655,8 @@ impl SettingsPage {
     }
 
     pub fn show(&self, visible: bool) {
+        self.spotify
+            .show(visible && self.section.get() == Section::Spotify);
         self.quicklinks
             .show(visible && self.section.get() == Section::Quicklinks);
         self.music
@@ -961,6 +1002,7 @@ impl SettingsPage {
         }
         self.quicklinks.layout(dpi, fonts, new_fonts)?;
         self.music.layout(dpi, fonts, new_fonts)?;
+        self.spotify.layout(dpi, fonts, new_fonts)?;
         Ok(())
     }
 
@@ -983,6 +1025,10 @@ impl SettingsPage {
             Section::Music => (
                 "Music",
                 "Which player Core controls, the now-playing bar and media shortcuts.",
+            ),
+            Section::Spotify => (
+                "Spotify song search",
+                "Optional catalog search and playback through your Spotify account.",
             ),
         };
         for (label, left, top, bottom, font, color) in [
@@ -1048,6 +1094,10 @@ impl SettingsPage {
             self.music.paint(context, dpi, palette);
             return;
         }
+        if self.section.get() == Section::Spotify {
+            self.spotify.paint(context, dpi, palette);
+            return;
+        }
         painting::rounded(
             context,
             &layout::area(
@@ -1091,7 +1141,14 @@ impl SettingsPage {
             .iter()
             .any(|(candidate, _)| *candidate == identifier)
         {
-            return false;
+            return self.spotify.draw(
+                item,
+                Look {
+                    dpi,
+                    fonts,
+                    palette,
+                },
+            );
         }
         let position = identifier
             .checked_sub(POSITION_FIRST_ID)
@@ -1134,7 +1191,8 @@ impl SettingsPage {
             || (identifier == APPEARANCE_CATEGORY_ID && self.section.get() == Section::Appearance)
             || (identifier == BEHAVIOUR_CATEGORY_ID && self.section.get() == Section::Behaviour)
             || (identifier == QUICKLINKS_CATEGORY_ID && self.section.get() == Section::Quicklinks)
-            || (identifier == MUSIC_CATEGORY_ID && self.section.get() == Section::Music)
+            || (identifier == MUSIC_CATEGORY_ID
+                && matches!(self.section.get(), Section::Music | Section::Spotify))
             || active;
         painting::fill(item.hDC, &item.rcItem, palette.background);
         if emphasized {

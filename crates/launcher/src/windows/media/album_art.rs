@@ -7,12 +7,14 @@ use crate::windows::{
 };
 use std::sync::Arc;
 use windows::{
-    core::Result,
+    core::{Interface, Result},
     Graphics::Imaging::{
         BitmapAlphaMode, BitmapBounds, BitmapDecoder, BitmapInterpolationMode, BitmapPixelFormat,
         BitmapTransform, ColorManagementMode, ExifOrientationMode,
     },
-    Storage::Streams::IRandomAccessStreamReference,
+    Storage::Streams::{
+        DataWriter, IRandomAccessStream, IRandomAccessStreamReference, InMemoryRandomAccessStream,
+    },
     Win32::{
         Foundation::{E_FAIL, TRUE},
         Graphics::Gdi::*,
@@ -71,7 +73,21 @@ impl ArtCache {
 
 fn decode(reference: &IRandomAccessStreamReference, edge: u32) -> Result<ApplicationIcon> {
     let stream = finish!(reference.OpenReadAsync()?, OPERATION_TIMEOUT)?;
-    let decoder = finish!(BitmapDecoder::CreateAsync(&stream)?, OPERATION_TIMEOUT)?;
+    decode_stream(&stream.cast()?, edge)
+}
+
+/// Catalog artwork uses the same decoder and rounding as the now-playing bar.
+pub(super) fn from_bytes(bytes: &[u8], edge: u32) -> Result<ApplicationIcon> {
+    let stream = InMemoryRandomAccessStream::new()?;
+    let writer = DataWriter::CreateDataWriter(&stream)?;
+    writer.WriteBytes(bytes)?;
+    finish!(writer.StoreAsync()?, OPERATION_TIMEOUT)?;
+    stream.Seek(0)?;
+    decode_stream(&stream.cast()?, edge.clamp(1, MAX_EDGE))
+}
+
+fn decode_stream(stream: &IRandomAccessStream, edge: u32) -> Result<ApplicationIcon> {
+    let decoder = finish!(BitmapDecoder::CreateAsync(stream)?, OPERATION_TIMEOUT)?;
     let (width, height) = (decoder.PixelWidth()?.max(1), decoder.PixelHeight()?.max(1));
     let short_side = width.min(height);
     let scaled_width = (u64::from(width) * u64::from(edge) / u64::from(short_side)) as u32;
@@ -174,6 +190,32 @@ fn icon_from_pixels(pixels: &[u8], edge: i32) -> Result<ApplicationIcon> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_image_bytes_decode_in_memory_without_opening_a_window() {
+        use windows::Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED};
+        let _serial = crate::windows::GUI_RESOURCE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        unsafe { RoInitialize(RO_INIT_MULTITHREADED) }.unwrap();
+        // A two-by-two 24-bit BMP with eight bytes per row, including row padding.
+        let mut bitmap = vec![0_u8; 70];
+        bitmap[..2].copy_from_slice(b"BM");
+        bitmap[2..6].copy_from_slice(&70_u32.to_le_bytes());
+        bitmap[10..14].copy_from_slice(&54_u32.to_le_bytes());
+        bitmap[14..18].copy_from_slice(&40_u32.to_le_bytes());
+        bitmap[18..22].copy_from_slice(&2_i32.to_le_bytes());
+        bitmap[22..26].copy_from_slice(&2_i32.to_le_bytes());
+        bitmap[26..28].copy_from_slice(&1_u16.to_le_bytes());
+        bitmap[28..30].copy_from_slice(&24_u16.to_le_bytes());
+        bitmap[34..38].copy_from_slice(&16_u32.to_le_bytes());
+        bitmap[54..].fill(128);
+        let icon = from_bytes(&bitmap, 48).unwrap();
+        drop(icon);
+        unsafe {
+            RoUninitialize();
+        }
+    }
 
     #[test]
     fn rounded_corners_fade_only_the_corner_pixels() {

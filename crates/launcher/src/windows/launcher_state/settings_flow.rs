@@ -25,6 +25,10 @@ impl LauncherState {
         self.pending_accept = None;
         self.cancel_background_work();
         self.set_visible(window, true);
+        view.spotify_status(&crate::windows::spotify::connection_status(
+            self.settings.folder(),
+            &self.auto_save.latest(&self.settings.saved).music.spotify,
+        ));
         if self.settings.is_saving() {
             view.settings_status("Saving changes…");
         }
@@ -82,6 +86,18 @@ impl LauncherState {
                 Ok(()) => view.settings_status("Command history cleared."),
                 Err(error) => view.settings_status(&error),
             },
+            SettingsAction::ConnectSpotify => {
+                self.change_settings(window, false);
+                if self.auto_save.error.is_none() {
+                    self.connect_spotify();
+                }
+            }
+            SettingsAction::DisconnectSpotify => self.disconnect_spotify(),
+            SettingsAction::SpotifySetup => {
+                self.pending_action = Some(crate::windows::execute_action::NativeAction::OpenUrl(
+                    "https://developer.spotify.com/dashboard".into(),
+                ))
+            }
 
             SettingsAction::None => {}
         }
@@ -112,6 +128,7 @@ impl LauncherState {
         self.auto_save.error = None;
         view.settings_save_error(false);
         self.auto_save.queued = Some(draft);
+        self.spotify_settings_changed();
         view.settings_status("Saving changes…");
         if typing && self.auto_save.defer(window) {
             return;
@@ -204,6 +221,7 @@ impl LauncherState {
         if let Err(error) = outcome {
             self.auto_save.cancel_timer(window);
             self.auto_save.queued = None;
+            self.spotify_settings_changed();
             if let Some(view) = &self.view {
                 if !view.settings_open() {
                     if let Err(restore) = view.apply_preferences(self.settings.saved.preferences) {

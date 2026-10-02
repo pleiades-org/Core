@@ -36,6 +36,13 @@ mod window_players;
 pub use hotkeys::MediaHotkeys;
 pub use title_watch::{TitleWatch, MEDIA_TITLE_CHANGED};
 
+pub fn decode_artwork(
+    bytes: &[u8],
+    edge: u32,
+) -> windows::core::Result<super::application_icon::ApplicationIcon> {
+    album_art::from_bytes(bytes, edge)
+}
+
 use super::application_icon::ApplicationIcon;
 use core_engine::media::{MediaCommand, MediaPolicy, MediaSession, PlaybackState};
 use std::{

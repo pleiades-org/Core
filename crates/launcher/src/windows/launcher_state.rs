@@ -3,6 +3,7 @@ pub use command_flow::{run_mode, COMMAND_OUTPUT_TIMER};
 mod footer;
 mod media_flow;
 mod settings_flow;
+mod song_flow;
 mod update_flow;
 
 use super::{
@@ -155,6 +156,7 @@ pub struct LauncherState {
     /// How Enter runs a shell command; kept until an accept that had to wait completes.
     accept_mode: RunMode,
     pub media: media_flow::MediaFlow,
+    songs: song_flow::SongFlow,
     /// Something was typed since Core was shown, so the now-playing bar keeps its place.
     typed_since_show: bool,
     /// A settings shortcut field is recording, so Core's shortcuts are released meanwhile.
@@ -226,6 +228,7 @@ impl LauncherState {
             working_directory: super::commands::home(),
             accept_mode: RunMode::Capture,
             media: media_flow::MediaFlow::default(),
+            songs: song_flow::SongFlow::default(),
             typed_since_show: false,
             shortcuts_suspended: false,
         }
@@ -314,6 +317,7 @@ impl LauncherState {
         let query = self.searched_query.clone();
         self.media_for_query(&query);
         self.info_requested(&query);
+        self.songs_for_query(&query);
         let media = self.media_state();
         let app_info = Some(self.app_info());
         if let Some(worker) = &self.worker {
@@ -327,6 +331,7 @@ impl LauncherState {
                     recent_applications: self.recent_applications.clone(),
                     media,
                     app_info,
+                    songs: self.songs.snapshot.clone(),
                 },
             );
         }
@@ -438,6 +443,7 @@ impl LauncherState {
                         IconSource::Shell(self.targets.get(identifier)?.clone())
                     }
                     Action::OpenQuicklink(link) => quicklink_icon_source(link)?,
+                    Action::PlaySong(song) => IconSource::SpotifyArtwork(song.artwork.clone()?),
                     _ => return None,
                 };
                 Some(IconRequest {
@@ -604,6 +610,10 @@ impl LauncherState {
             return;
         }
         self.pending_action = Some(match action {
+            Action::PlaySong(song) => {
+                self.play_song(song);
+                return;
+            }
             Action::Update => {
                 self.accept_update();
                 return;

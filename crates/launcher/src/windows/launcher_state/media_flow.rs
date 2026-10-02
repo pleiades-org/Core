@@ -118,7 +118,7 @@ impl LauncherState {
         }
     }
 
-    fn request_media_reading(&mut self) {
+    pub(super) fn request_media_reading(&mut self) {
         let (watch, art) = (self.visible, self.media_art_size());
         if let Some(service) = self.media_service() {
             service.refresh(watch, art);

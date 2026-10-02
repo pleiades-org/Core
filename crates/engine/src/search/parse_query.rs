@@ -28,6 +28,7 @@ const COMMAND_NAMES: &[&str] = &[
     "update",
     "media",
     "music",
+    "song",
     "info",
     "about",
     "version",
@@ -47,6 +48,8 @@ pub enum CommandKind {
     Update,
     /// Media controls: `@media`, `@music`.
     Media,
+    /// Spotify catalog search, separate from controls for existing players.
+    Songs,
     /// Core's version and the latest release: `@info`, `@about`, `@version`.
     Info,
     /// A shell command: `/ipconfig`, `@pwsh Get-Process`.
@@ -127,6 +130,7 @@ fn parse_command<'query>(command: &'query str, payload: &'query str) -> ParsedQu
         "run" => CommandKind::Run,
         "update" => CommandKind::Update,
         "media" | "music" => CommandKind::Media,
+        "song" => CommandKind::Songs,
         "info" | "about" | "version" => CommandKind::Info,
         "shell" | "terminal" => CommandKind::Shell(ShellKind::Default),
         "cmd" => CommandKind::Shell(ShellKind::Cmd),

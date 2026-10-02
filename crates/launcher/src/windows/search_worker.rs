@@ -26,6 +26,7 @@ pub struct SearchContext {
     pub recent_applications: Arc<[Arc<str>]>,
     pub media: Option<Arc<MediaState>>,
     pub app_info: Option<Arc<AppInfo>>,
+    pub songs: Option<Arc<core_engine::search::SongSearch>>,
 }
 
 struct Request {
@@ -185,6 +186,7 @@ fn run_search(
         engine.set_recent_applications(request.context.recent_applications.clone());
         engine.set_media(request.context.media.clone());
         engine.set_app_info(request.context.app_info.clone());
+        engine.set_songs(request.context.songs.clone());
         let batch = engine.search_catalogs(
             &request.query,
             &request.context.catalog,
@@ -240,6 +242,7 @@ mod tests {
             exchange_rates: None,
             recent_applications: Arc::from([]),
             media: None,
+            songs: None,
             app_info: None,
         }
     }
