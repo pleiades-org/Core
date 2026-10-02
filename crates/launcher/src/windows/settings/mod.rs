@@ -1,5 +1,5 @@
 mod auto_save;
-mod control_style;
+pub(crate) mod control_style;
 mod document;
 pub mod quicklink_table;
 mod scrollbar;

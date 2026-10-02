@@ -9,6 +9,16 @@ fn main() {
         return;
     }
     #[cfg(windows)]
+    match windows::installer::dispatch() {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(error) => {
+            eprintln!("Core setup failed: {error}");
+            windows::show_fatal_error(&error);
+            std::process::exit(1);
+        }
+    }
+    #[cfg(windows)]
     if let Err(error) = windows::run() {
         eprintln!("Core could not start: {error}");
         if std::env::args().any(|argument| {

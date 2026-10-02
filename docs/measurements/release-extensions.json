@@ -1,8 +1,8 @@
 {
-  "Date": "2026-10-02T19:05:56.7501091+01:00",
+  "Date": "2026-10-02T20:02:12.7931929+01:00",
   "Passed": true,
   "Interactive": false,
-  "Sha256": "66F18C5352B2760145B8173476EBA302C39CFE45F1D60B59E29491D27E36F6AE",
+  "Sha256": "FBFBA1DF311C1CF201765B6AACF5D2EC436708BD8FCE54BC4B16B4F149257FEB",
   "Scenarios": [
     "relative dates and leap-year month end",
     "smart conversions: currency with fixture ECB rates, download time, number bases, percentages, colours, pints versus Pacific time",
@@ -20,6 +20,6 @@
     "startup preference persisted without registry side effects",
     "Windows-key preset"
   ],
-  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\extensions-tests\\e6561cc78dd84178818c293b089b3b46",
+  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\extensions-tests\\9436fc7fe9c441a6a88097cfb7fdbb62",
   "SideEffects": "External actions, startup registration and global shortcuts disabled by --dry-run. Separate shortcut tests are required."
 }

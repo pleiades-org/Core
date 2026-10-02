@@ -7,8 +7,8 @@ param(
     # With -Interactive, also injects physical keystrokes for shortcuts and quicklink tabbing.
     [switch]$PhysicalKeyboard
 )
-# Runs every release validation script against one executable. By default nothing takes the
-# foreground, moves the pointer or types, so you can keep working while it runs.
+# Runs every release validation script against one executable. Background mode still opens
+# native windows and can interrupt focus. Run these UI checks only with explicit authorization.
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 if (-not $Executable) { $Executable = Join-Path $projectRoot 'target\styling\release\core-v2.exe' }
@@ -27,7 +27,8 @@ $runs = @(
     @{ Script = 'test-windows.ps1'; Label = 'release-integration'; Extra = @() },
     @{ Script = 'test-styling.ps1'; Label = 'release-styling'; Extra = @() },
     @{ Script = 'test-quicklinks.ps1'; Label = 'release-quicklinks'; Extra = $(if ($PhysicalKeyboard) { @() } else { @('-SkipKeyboard') }) },
-    @{ Script = 'test-commands.ps1'; Label = 'release-commands'; Extra = @() }
+    @{ Script = 'test-commands.ps1'; Label = 'release-commands'; Extra = @() },
+    @{ Script = 'test-installer.ps1'; Label = 'release-installer'; Extra = @() }
 )
 if ($Interactive) {
     $runs += @{ Script = 'test-dismissal.ps1'; Label = 'release-dismissal'; Extra = @() }

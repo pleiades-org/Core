@@ -14,6 +14,7 @@ mod favicon;
 mod foreground_observer;
 mod http;
 mod icon_worker;
+pub mod installer;
 mod launcher_state;
 mod local_cache;
 mod media;

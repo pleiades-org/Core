@@ -1,7 +1,7 @@
 {
-  "Date": "2026-10-02T19:06:37.5782719+01:00",
+  "Date": "2026-10-02T20:02:56.8249109+01:00",
   "Passed": true,
-  "Sha256": "66F18C5352B2760145B8173476EBA302C39CFE45F1D60B59E29491D27E36F6AE",
+  "Sha256": "FBFBA1DF311C1CF201765B6AACF5D2EC436708BD8FCE54BC4B16B4F149257FEB",
   "Scenarios": [
     "Hidden startup probe",
     "Running executable renamed",
@@ -14,6 +14,6 @@
     "Ordinary next-start timeout rollback",
     "Ordinary next-start tampering rollback"
   ],
-  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\update-tests\\5b0abe5a407348f598884495e3eaa2f3",
+  "TestDirectory": "C:\\Users\\Robert\\code\\Pleiades\\Core\\target\\update-tests\\5f42c971adb54aeeba1a8a2ed4a30fa7",
   "SideEffects": "Isolated copies, background dry-run windows; no installed Core process is stopped and no network requests are made."
 }

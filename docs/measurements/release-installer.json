@@ -1,0 +1,26 @@
+{
+  "Date": "2026-10-02T20:02:42.4085601+01:00",
+  "Passed": true,
+  "Sha256": "FBFBA1DF311C1CF201765B6AACF5D2EC436708BD8FCE54BC4B16B4F149257FEB",
+  "PayloadSha256": "FBFBA1DF311C1CF201765B6AACF5D2EC436708BD8FCE54BC4B16B4F149257FEB",
+  "AutomaticSetup": false,
+  "Scenarios": [
+    "Cancel makes no changes",
+    "Current-user installation",
+    "Start Menu and optional desktop shortcuts",
+    "Installed binary matches package",
+    "Windows uninstall entry",
+    "Existing startup path migrated",
+    "Repair preserves desktop preference",
+    "Older setup rejects a downgrade",
+    "Failed repair restores original files",
+    "Installed uninstall and app executables relocate before removal",
+    "Temporary uninstall executable cleaned after exit",
+    "Uninstall removes owned files and registration",
+    "Preferences and user-added files retained",
+    "Foreign and unverifiable shortcuts preserved",
+    "Redirected install path rejected"
+  ],
+  "TestDirectory": "C:\\Users\\Robert\\AppData\\Local\\Temp\\core-installer-test-c0b1e1ffe22746a69277726bfc08c190",
+  "SideEffects": "Only isolated files in Windows Temp and a unique HKCU InstallerTests key; installed Core and real startup settings untouched."
+}

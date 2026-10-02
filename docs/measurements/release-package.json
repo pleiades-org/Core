@@ -1,8 +1,9 @@
 {
-  "Executable": "C:\\Users\\Robert\\code\\Pleiades\\Core\\dist\\Core-2.2.2-windows-x64\\core-v2.exe",
-  "Archive": "C:\\Users\\Robert\\code\\Pleiades\\Core\\dist\\Core-2.2.2-windows-x64.zip",
+  "SetupExecutable": "C:\\Users\\Robert\\code\\Pleiades\\Core\\dist\\Core-2.3.0-windows-x64\\Core-Setup-2.3.0.exe",
+  "Executable": "C:\\Users\\Robert\\code\\Pleiades\\Core\\dist\\Core-2.3.0-windows-x64\\core-v2.exe",
+  "Archive": "C:\\Users\\Robert\\code\\Pleiades\\Core\\dist\\Core-2.3.0-windows-x64.zip",
   "InteractiveChecksSkipped": true,
-  "ExecutableBytes": 1907200,
-  "ArchiveBytes": 886968,
-  "Sha256": "66F18C5352B2760145B8173476EBA302C39CFE45F1D60B59E29491D27E36F6AE"
+  "ExecutableBytes": 2063360,
+  "ArchiveBytes": 950088,
+  "Sha256": "FBFBA1DF311C1CF201765B6AACF5D2EC436708BD8FCE54BC4B16B4F149257FEB"
 }

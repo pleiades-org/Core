@@ -47,6 +47,13 @@ replacement and before a guarded restart.
 
 ## Installation and recovery
 
+From 2.3.0, `Core-Setup-<version>.exe` installs for the current Windows user in
+`%LOCALAPPDATA%\Programs\Pleiades\Core`, with Start Menu and Windows uninstall entries.
+See [installing Core](INSTALLER.md). The existing updater still downloads `core-v2.exe`
+and installs it in place; the setup artifact is for installation or repair. Portable
+copies remain portable until setup is run. Windows' installed-app version refreshes
+on the next normal Core launch after an update.
+
 The download is staged beside the current executable as `core-v2.update.exe` with its
 signed manifest in `core-v2.update.txt`. The executable is unchanged while Core runs.
 Before marking the download ready, an isolated, hidden startup probe checks that Windows
@@ -87,9 +94,10 @@ startup, timeout rollback, ordinary next-start recovery, a hidden startup probe,
 between staging and restart. They do not close an
 installed Core. Omit `-SkipInteractive` only after running the interactive release checks.
 Packaging checks the executable's reported version, validation-record hashes, and signing-key
-match. It produces a versioned ZIP, `core-v2.exe`, and `core-update.txt` in
-`dist/Core-2.1.0-windows-x64/`. For a release tagged `v2.1.0`, upload **both standalone assets**
-alongside the ZIP. The updater does not read manifests inside ZIP files. Publish a full release
+match, including installer validation. It produces `Core-Setup-<version>.exe`, a portable ZIP,
+`core-v2.exe`, `core-update.txt` and checksums under `dist/Core-<version>-windows-x64/`.
+Upload the setup, **both standalone updater assets**, checksums and ZIP for the matching tag.
+The updater does not read manifests inside ZIP files. Publish a full release
 (not a draft or prerelease) to make it available through GitHub's `latest` URL.
 
 Future releases must increase the Cargo workspace version and use the same signing key.
