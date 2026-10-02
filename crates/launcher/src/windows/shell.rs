@@ -81,6 +81,9 @@ pub fn run() -> windows::core::Result<()> {
         super::updates::handoff::Startup::prepare(options.probe || options.dry_run)
             .map_err(update_error)?;
     let _apartment = UiApartment::initialize()?;
+    if !options.probe && !options.dry_run {
+        super::installer::refresh_registration();
+    }
     let context = Box::new(WindowContext {
         state: RefCell::new(LauncherState::new(options)),
         view: OnceCell::new(),

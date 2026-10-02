@@ -15,7 +15,7 @@ $version = ($metadata.packages | Where-Object name -eq 'core-launcher-v2').versi
 if (-not $Candidate) { $Candidate = Join-Path $projectRoot 'target\styling\release\core-v2.exe' }
 if ((& $Candidate --version | Out-String).Trim() -ne "Core $version") { throw 'Candidate version does not match Cargo.toml.' }
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Candidate).Hash
-$required = @('release-controls','release-extensions','release-settings','release-shortcuts','release-integration','release-styling','release-quicklinks','release-commands','release-updates')
+$required = @('release-controls','release-extensions','release-settings','release-shortcuts','release-integration','release-styling','release-quicklinks','release-commands','release-updates','release-installer')
 if (-not $SkipInteractive) { $required += 'release-dismissal' }
 foreach ($name in $required) {
     $record = Get-Content -LiteralPath (Join-Path "$projectRoot\docs\measurements" "$name.json") -Raw | ConvertFrom-Json
@@ -28,14 +28,24 @@ foreach ($name in $required) {
 $packageDirectory = Join-Path $projectRoot "dist\Core-$version-windows-x64"
 New-Item -ItemType Directory -Path $packageDirectory -Force | Out-Null
 Copy-Item -LiteralPath $Candidate -Destination "$packageDirectory\core-v2.exe" -Force
+$setupName = "Core-Setup-$version.exe"
+$setupExecutable = Join-Path $packageDirectory $setupName
+Copy-Item -LiteralPath $Candidate -Destination $setupExecutable -Force
+$markerBytes = [IO.File]::ReadAllBytes("$projectRoot/crates/launcher/src/windows/installer/setup-marker.txt")
+$setupStream = [IO.File]::Open($setupExecutable, [IO.FileMode]::Append, [IO.FileAccess]::Write)
+try { $setupStream.Write($markerBytes, 0, $markerBytes.Length) } finally { $setupStream.Dispose() }
 Write-CoreUpdateManifest -Executable "$packageDirectory\core-v2.exe" -Version $version -SigningKeyPath $SigningKeyPath -PublicKeyPath "$projectRoot\crates\launcher\assets\release-key.bin" -OutputPath "$packageDirectory\core-update.txt"
 $releaseNotes = "$projectRoot\docs\RELEASE_$version.md"
 if (-not (Test-Path -LiteralPath $releaseNotes)) { throw "Write docs\RELEASE_$version.md before packaging." }
 Copy-Item -LiteralPath $releaseNotes -Destination "$packageDirectory\RELEASE_NOTES.md" -Force
 @'
-Core v2 — Windows x64 portable alpha
+Core v2 — Windows x64
 
-Extract the entire ZIP, then run core-v2.exe.
+Run Core-Setup-<version>.exe to install for your current Windows account.
+No administrator prompt is needed. Setup adds Core to the Start Menu and
+Windows Installed apps, with an optional desktop shortcut. Exit a running
+Core from its tray menu before installing or uninstalling.
+For portable use, extract the ZIP and run core-v2.exe instead.
 Requires 64-bit Windows and the Microsoft Visual C++ v14 x64 runtime.
 Ctrl+Alt+Space opens or hides Core by default. Escape or clicking outside hides it.
 With nothing typed, Core shows your recently used apps as a grid: apps opened
@@ -133,11 +143,11 @@ Core keeps core-v2.previous.exe and rolls back if an updated restart fails to
 show its window within five seconds. Back up the external release-signing key.
 
 Updates use signed manifests; the executable does not have Authenticode signing.
-No installer, administrator account, browser runtime or
+No administrator account, browser runtime or
 network connection is required for local calculations and application search.
 See RELEASE_NOTES.md for tested behavior, benchmarks and remaining limitations.
 '@ | Set-Content -LiteralPath "$packageDirectory\README.txt" -Encoding utf8
-$checksums = foreach ($name in @('core-v2.exe','core-update.txt','README.txt','RELEASE_NOTES.md')) {
+$checksums = foreach ($name in @($setupName,'core-v2.exe','core-update.txt','README.txt','RELEASE_NOTES.md')) {
     $fileHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $packageDirectory $name)).Hash.ToLowerInvariant()
     "$fileHash  $name"
 }
@@ -154,4 +164,4 @@ try {
     finally { $hasher.Dispose(); $stream.Dispose() }
     if ($archivedHash -ne $hash) { throw 'Archived executable hash mismatch.' }
 } finally { $opened.Dispose() }
-[pscustomobject]@{Executable="$packageDirectory\core-v2.exe"; Archive=$archive; InteractiveChecksSkipped=[bool]$SkipInteractive; ExecutableBytes=(Get-Item "$packageDirectory\core-v2.exe").Length; ArchiveBytes=(Get-Item $archive).Length; Sha256=$hash} | ConvertTo-Json | Tee-Object -FilePath "$projectRoot\docs\measurements\release-package.json"
+[pscustomobject]@{SetupExecutable=$setupExecutable; Executable="$packageDirectory\core-v2.exe"; Archive=$archive; InteractiveChecksSkipped=[bool]$SkipInteractive; ExecutableBytes=(Get-Item "$packageDirectory\core-v2.exe").Length; ArchiveBytes=(Get-Item $archive).Length; Sha256=$hash} | ConvertTo-Json | Tee-Object -FilePath "$projectRoot\docs\measurements\release-package.json"
