@@ -4,10 +4,11 @@ mod authorization;
 mod encoding;
 mod playback;
 mod token_store;
+mod volume;
 use crate::windows::settings::SpotifySettings;
 use api::Client;
 pub use authorization::REDIRECT_URI;
-use core_engine::search::{SongSearch, SongStatus};
+use core_engine::search::{Song, SongSearch, SongStatus};
 use std::{
     path::PathBuf,
     sync::{Arc, Condvar, Mutex},
@@ -48,11 +49,20 @@ pub fn load_artwork(url: &str) -> Option<crate::windows::application_icon::Appli
     icon
 }
 const SEARCH_SETTLE: Duration = Duration::from_millis(350);
+const DISABLED: &str = "Enable Spotify song search in Music settings first.";
+const BUSY: &str = "Spotify is busy. Finish the current action and try again.";
 
 enum Command {
     Connect,
     Disconnect,
-    Play { request_id: u64, uri: String },
+    Play { request_id: u64, song: Song },
+}
+/// What the bar's volume slider asks of Spotify's volume: a change, a reading, or a change
+/// and then a reading.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct VolumeWork {
+    set: Option<u8>,
+    read: bool,
 }
 pub enum Event {
     Search(SongSearch),
@@ -61,6 +71,8 @@ pub enum Event {
         request_id: u64,
         result: Result<String, String>,
     },
+    /// The active device's volume, or why Spotify could not read or change it.
+    Volume(Result<u8, String>),
 }
 
 #[derive(Default)]
@@ -70,7 +82,12 @@ struct Pending {
     search: Option<String>,
     current_query: Option<String>,
     command: Option<Command>,
+    /// The slider's newest wish. Changes made faster than Spotify answers collapse into it,
+    /// so a drag sends one request at a time.
+    volume: Option<VolumeWork>,
     busy: bool,
+    /// The command in flight starts a song, which a newer choice may take the place of.
+    starting_song: bool,
     events: Vec<Event>,
     shutdown: bool,
 }
@@ -84,6 +101,7 @@ struct Work {
     revision: u64,
     settings: SpotifySettings,
     command: Option<Command>,
+    volume: Option<VolumeWork>,
     query: Option<String>,
 }
 
@@ -132,11 +150,30 @@ impl SpotifyService {
     pub fn connect(&self) -> Result<(), String> {
         self.command(Command::Connect)
     }
-    pub fn play(&self, request_id: u64, uri: &str) -> Result<(), String> {
-        self.command(Command::Play {
+    /// Starts `song`. A newer choice takes the place of a song that is still waiting or being
+    /// started, so choosing again never finds Spotify busy: the earlier song's checks stop at
+    /// their next step and its result is dropped. Only a sign-in is not interrupted.
+    pub fn play(&self, request_id: u64, song: &Song) -> Result<(), String> {
+        let mut pending = self.shared.pending.lock().expect("Spotify work lock");
+        if !pending.settings.enabled {
+            return Err(DISABLED.into());
+        }
+        let song_waiting = matches!(pending.command, Some(Command::Play { .. }));
+        let other_waiting = pending.command.is_some() && !song_waiting;
+        let other_in_flight = pending.busy && !pending.starting_song;
+        if other_waiting || other_in_flight {
+            return Err(BUSY.into());
+        }
+        if pending.starting_song {
+            // Work compares this number to learn that it was given up on.
+            pending.revision += 1;
+        }
+        pending.command = Some(Command::Play {
             request_id,
-            uri: uri.to_owned(),
-        })
+            song: song.clone(),
+        });
+        self.shared.wake.notify_one();
+        Ok(())
     }
 
     pub fn disconnect(&self) -> Result<(), String> {
@@ -150,12 +187,34 @@ impl SpotifyService {
     fn command(&self, command: Command) -> Result<(), String> {
         let mut pending = self.shared.pending.lock().expect("Spotify work lock");
         if !pending.settings.enabled {
-            return Err("Enable Spotify song search in Music settings first.".into());
+            return Err(DISABLED.into());
         }
         if pending.busy || pending.command.is_some() {
-            return Err("Spotify is busy. Finish the current action and try again.".into());
+            return Err(BUSY.into());
         }
         pending.command = Some(command);
+        self.shared.wake.notify_one();
+        Ok(())
+    }
+
+    /// Reads the active device's volume; the answer arrives as `Event::Volume`.
+    pub fn read_volume(&self) -> Result<(), String> {
+        self.ask_volume(|work| work.read = true)
+    }
+
+    /// Sets it. Only a failure is answered: the slider already shows what the person chose.
+    pub fn set_volume(&self, percent: u8) -> Result<(), String> {
+        self.ask_volume(|work| work.set = Some(percent))
+    }
+
+    /// Unlike a command, a wish for the volume never finds Spotify busy: it waits its turn,
+    /// and a newer one replaces it.
+    fn ask_volume(&self, ask: impl FnOnce(&mut VolumeWork)) -> Result<(), String> {
+        let mut pending = self.shared.pending.lock().expect("Spotify work lock");
+        if !pending.settings.enabled {
+            return Err(DISABLED.into());
+        }
+        ask(pending.volume.get_or_insert_with(VolumeWork::default));
         self.shared.wake.notify_one();
         Ok(())
     }
@@ -177,6 +236,7 @@ fn invalidate(pending: &mut Pending) {
     pending.search = None;
     pending.current_query = None;
     pending.command = None;
+    pending.volume = None;
     pending.events.clear();
 }
 
@@ -214,7 +274,10 @@ fn serve(address: usize, path: PathBuf, shared: &Arc<Shared>) {
         };
         let client = client.as_mut().expect("configured Spotify client");
         client.settings = work.settings;
-        let event = perform(client, work.command, work.query, &cancelled);
+        let event = match work.volume {
+            Some(volume) => change_volume(client, volume, &cancelled),
+            None => perform(client, work.command, work.query, &cancelled),
+        };
         publish(address, shared, work.revision, event);
     }
 }
@@ -222,13 +285,18 @@ fn serve(address: usize, path: PathBuf, shared: &Arc<Shared>) {
 fn next_work(shared: &Shared) -> Option<Work> {
     let mut pending = shared.pending.lock().expect("Spotify work lock");
     loop {
-        while pending.command.is_none() && pending.search.is_none() && !pending.shutdown {
+        while pending.command.is_none()
+            && pending.volume.is_none()
+            && pending.search.is_none()
+            && !pending.shutdown
+        {
             pending = shared.wake.wait(pending).expect("Spotify wake lock");
         }
         if pending.shutdown {
             return None;
         }
-        if pending.command.is_none() {
+        // Only a search waits for a pause in typing; commands and the volume act at once.
+        if pending.command.is_none() && pending.volume.is_none() {
             let (settled, timeout) = shared
                 .wake
                 .wait_timeout(pending, SEARCH_SETTLE)
@@ -241,17 +309,26 @@ fn next_work(shared: &Shared) -> Option<Work> {
         if pending.shutdown {
             return None;
         }
+        // One thing at a time: a command, else the volume, else the search, which stays
+        // queued behind the other two.
         let command = pending.command.take();
-        let query = if command.is_none() {
+        let volume = if command.is_none() {
+            pending.volume.take()
+        } else {
+            None
+        };
+        let query = if command.is_none() && volume.is_none() {
             pending.search.take()
         } else {
             None
         };
         pending.busy = command.is_some();
+        pending.starting_song = matches!(command, Some(Command::Play { .. }));
         return Some(Work {
             revision: pending.revision,
             settings: pending.settings.clone(),
             command,
+            volume,
             query,
         });
     }
@@ -260,6 +337,7 @@ fn next_work(shared: &Shared) -> Option<Work> {
 fn publish(address: usize, shared: &Shared, revision: u64, event: Option<Event>) {
     let mut pending = shared.pending.lock().expect("Spotify work lock");
     pending.busy = false;
+    pending.starting_song = false;
     if pending.shutdown || pending.revision != revision {
         return;
     }
@@ -273,6 +351,12 @@ fn publish(address: usize, shared: &Shared, revision: u64, event: Option<Event>)
         pending
             .events
             .retain(|waiting| !matches!(waiting, Event::Search(_)));
+    }
+    if matches!(event, Event::Volume(_)) {
+        // Only the newest answer about the volume matters.
+        pending
+            .events
+            .retain(|waiting| !matches!(waiting, Event::Volume(_)));
     }
     pending.events.push(event);
     // The shutdown lock prevents notifications from outliving Core's window.
@@ -312,9 +396,9 @@ fn perform(
             );
             Some(Event::Account(result))
         }
-        Some(Command::Play { request_id, uri }) => {
+        Some(Command::Play { request_id, song }) => {
             let result = client
-                .play(&uri, cancelled)
+                .play(&song.uri, song.album_uri.as_deref(), cancelled)
                 .map(|device| format!("Playing in Spotify · {}", device.name))
                 .map_err(|error| error.message.to_owned());
             Some(Event::Playback { request_id, result })
@@ -337,6 +421,33 @@ fn perform(
     }
 }
 
+/// A change, then a reading. A change that worked says nothing, because the slider already
+/// shows what the person chose.
+fn change_volume(
+    client: &mut Client,
+    work: VolumeWork,
+    cancelled: &impl Fn() -> bool,
+) -> Option<Event> {
+    if !client.settings.enabled || cancelled() {
+        return None;
+    }
+    let level = (|| {
+        if let Some(percent) = work.set {
+            volume::set_volume(client, percent, cancelled)?;
+        }
+        if work.read {
+            volume::read_volume(client).map(Some)
+        } else {
+            Ok(None)
+        }
+    })();
+    match level {
+        Ok(None) => None,
+        Ok(Some(percent)) => Some(Event::Volume(Ok(percent))),
+        Err(error) => Some(Event::Volume(Err(error.message.to_owned()))),
+    }
+}
+
 pub fn connection_status(folder: Option<PathBuf>, settings: &SpotifySettings) -> String {
     let Some(folder) = folder else {
         return "Core's settings folder is unavailable.".into();
@@ -351,6 +462,18 @@ pub fn connection_status(folder: Option<PathBuf>, settings: &SpotifySettings) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn song() -> Song {
+        Song {
+            uri: "spotify:track:0123456789abcdefghijkl".into(),
+            title: "Song".into(),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            album_uri: Some("spotify:album:abcdefghijkl0123456789".into()),
+            artwork: None,
+        }
+    }
+
     #[test]
     fn configuration_changes_discard_stale_work_and_results() {
         let service = SpotifyService {
@@ -359,8 +482,10 @@ mod tests {
         service.configure(SpotifySettings {
             enabled: true,
             client_id: "a".repeat(32),
+            volume: true,
         });
         service.search("old song".into());
+        service.set_volume(40).unwrap();
         service
             .shared
             .pending
@@ -373,12 +498,122 @@ mod tests {
         assert!(
             pending.search.is_none()
                 && pending.current_query.is_none()
+                && pending.volume.is_none()
                 && pending.events.is_empty()
         );
         drop(pending);
-        assert!(service
-            .play(1, "spotify:track:0123456789abcdefghijkl")
-            .is_err());
+        assert!(service.play(1, &song()).is_err());
+        // Switched off, Spotify is not asked about the volume either.
+        assert!(service.read_volume().is_err());
+        assert!(service.set_volume(40).is_err());
+        assert!(service.shared.pending.lock().unwrap().volume.is_none());
+    }
+
+    #[test]
+    fn the_volume_acts_at_once_and_leaves_a_search_waiting_for_its_typing_pause() {
+        let service = SpotifyService {
+            shared: Arc::new(Shared::default()),
+        };
+        service.configure(SpotifySettings {
+            enabled: true,
+            client_id: "a".repeat(32),
+            volume: true,
+        });
+        service.search("song".into());
+        service.read_volume().unwrap();
+        service.set_volume(30).unwrap();
+        service.set_volume(45).unwrap();
+        let started = std::time::Instant::now();
+        let work = next_work(&service.shared).unwrap();
+        assert!(started.elapsed() < SEARCH_SETTLE);
+        // A drag's changes collapsed into the newest, and the reading asked first survived.
+        assert_eq!(
+            work.volume,
+            Some(VolumeWork {
+                set: Some(45),
+                read: true
+            })
+        );
+        assert!(work.command.is_none() && work.query.is_none());
+        let work = next_work(&service.shared).unwrap();
+        assert_eq!(work.query.as_deref(), Some("song"));
+        assert!(work.volume.is_none());
+    }
+
+    #[test]
+    fn a_newer_song_choice_replaces_one_still_starting_but_never_a_sign_in() {
+        let service = SpotifyService {
+            shared: Arc::new(Shared::default()),
+        };
+        service.configure(SpotifySettings {
+            enabled: true,
+            client_id: "a".repeat(32),
+            volume: false,
+        });
+        let request = |work: &Work| match &work.command {
+            Some(Command::Play { request_id, .. }) => Some(*request_id),
+            _ => None,
+        };
+        // Still waiting: the second choice takes the first one's place.
+        service.play(1, &song()).unwrap();
+        service.play(2, &song()).unwrap();
+        let started = next_work(&service.shared).unwrap();
+        assert_eq!(request(&started), Some(2));
+        // Being started and confirmed: choosing again is not refused as busy. The song in
+        // flight learns it was given up on, and what it reports afterwards is dropped.
+        let given_up = || service.shared.pending.lock().unwrap().revision != started.revision;
+        assert!(!given_up());
+        service.play(3, &song()).unwrap();
+        assert!(given_up());
+        service.play(4, &song()).unwrap();
+        publish(
+            0,
+            &service.shared,
+            started.revision,
+            Some(Event::Playback {
+                request_id: 2,
+                result: Ok("Playing in Spotify".into()),
+            }),
+        );
+        assert!(service.take_events().is_empty());
+        let newest = next_work(&service.shared).unwrap();
+        assert_eq!(request(&newest), Some(4));
+        publish(
+            0,
+            &service.shared,
+            newest.revision,
+            Some(Event::Playback {
+                request_id: 4,
+                result: Ok("Playing in Spotify".into()),
+            }),
+        );
+        assert!(matches!(
+            service.take_events().as_slice(),
+            [Event::Playback { request_id: 4, .. }]
+        ));
+
+        // A sign-in waits for the person in their browser and is not interrupted by a song.
+        service.connect().unwrap();
+        assert!(service.play(5, &song()).is_err());
+        let signing_in = next_work(&service.shared).unwrap();
+        assert!(matches!(signing_in.command, Some(Command::Connect)));
+        assert_eq!(service.play(6, &song()), Err(BUSY.into()));
+        publish(0, &service.shared, signing_in.revision, None);
+        assert!(service.play(7, &song()).is_ok());
+    }
+
+    #[test]
+    fn only_the_newest_answer_about_the_volume_is_kept() {
+        let shared = Shared::default();
+        publish(0, &shared, 0, Some(Event::Volume(Ok(30))));
+        publish(
+            0,
+            &shared,
+            0,
+            Some(Event::Volume(Err("No Spotify device is active.".into()))),
+        );
+        let pending = shared.pending.lock().unwrap();
+        assert!(matches!(pending.events.as_slice(), [Event::Volume(Err(_))]));
     }
 
     #[test]
@@ -392,12 +627,19 @@ mod tests {
             &mut client,
             Some(Command::Play {
                 request_id: 1,
-                uri: "spotify:track:0123456789abcdefghijkl".into()
+                song: song()
             }),
             None,
             &|| true
         )
         .is_none());
+        let volume = VolumeWork {
+            set: Some(40),
+            read: true,
+        };
+        assert!(change_volume(&mut client, volume, &|| true).is_none());
+        // Not cancelled, but song search is off: Spotify is still not asked.
+        assert!(change_volume(&mut client, volume, &|| false).is_none());
     }
 
     #[test]

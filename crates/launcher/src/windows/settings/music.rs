@@ -174,6 +174,10 @@ impl MusicSettings {
                 "music_spotify_enabled={}\nmusic_spotify_client_id={}\n",
                 self.spotify.enabled, self.spotify.client_id
             ));
+            // Written only when on, so files from before the volume slider stay as they were.
+            if self.spotify.volume {
+                text.push_str("music_spotify_volume=true\n");
+            }
         }
         for (action, shortcut) in MediaShortcutAction::ALL.iter().zip(&self.shortcuts) {
             text.push_str(&format!(
@@ -214,6 +218,13 @@ impl MusicSettings {
                 self.spotify.client_id = value.trim().to_owned();
                 self.spotify.validate()?;
                 MusicFields::SPOTIFY_CLIENT
+            }
+            "music_spotify_volume" => {
+                self.spotify.volume = value
+                    .trim()
+                    .parse()
+                    .map_err(|_| "The Spotify volume setting must be true or false.")?;
+                MusicFields::SPOTIFY_VOLUME
             }
             "music_priority" => {
                 self.priority = PriorityMode::parse(value.trim())
@@ -368,6 +379,7 @@ pub struct MusicFields(u8);
 impl MusicFields {
     const SPOTIFY_ENABLED: u8 = 32;
     const SPOTIFY_CLIENT: u8 = 64;
+    const SPOTIFY_VOLUME: u8 = 128;
     const PRIORITY: u8 = 1;
     const BAR: u8 = 2;
     const SHORTCUT: u8 = 4;
@@ -415,6 +427,7 @@ mod tests {
             spotify: super::super::SpotifySettings {
                 enabled: true,
                 client_id: "0123456789abcdef0123456789abcdef".into(),
+                volume: true,
             },
             priority: PriorityMode::PlayingFirst,
             bar: false,
@@ -439,6 +452,11 @@ mod tests {
             ignored: Arc::from([MusicApp::new("chrome", "Google Chrome").unwrap()]),
         };
         assert_eq!(decode(&settings.encode()), Ok(settings.clone()));
+        // The volume switch writes nothing while off, as before it existed.
+        let mut mixer_volume = settings.clone();
+        mixer_volume.spotify.volume = false;
+        assert!(!mixer_volume.encode().contains("music_spotify_volume"));
+        assert_eq!(decode(&mixer_volume.encode()), Ok(mixer_volume));
         let policy = settings.policy();
         assert_eq!(&*policy.preferred[1], "applemusic");
         assert_eq!(&*policy.ignored[0], "chrome");
@@ -453,6 +471,8 @@ mod tests {
             "music_spotify_enabled=true\nmusic_spotify_enabled=false",
             "music_spotify_client_id=not-a-client-id",
             "music_spotify_client_id=\nmusic_spotify_client_id=",
+            "music_spotify_volume=loud",
+            "music_spotify_volume=true\nmusic_spotify_volume=true",
             "music_shortcut=play-pause\tAlt+P",
             "music_shortcut=rewind\tAlt+R\tcore",
             "music_shortcut=next\tAlt+Right\tsomewhere",

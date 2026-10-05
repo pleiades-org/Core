@@ -1,12 +1,12 @@
 //! Explicit device selection and confirmation for a user-selected song.
-use super::api::{valid_track_uri, ApiError, ApiResult, Client};
+use super::api::{valid_album_uri, valid_track_uri, ApiError, ApiResult, Client};
 use super::encoding::url_encode;
 use core_engine::search::SongStatus;
 use std::{sync::Arc, thread, time::Duration};
 use windows::{core::HSTRING, Data::Json::JsonObject};
 
 const DEVICES_PATH: &str = "/v1/me/player/devices";
-const PLAYBACK_PATH: &str = "/v1/me/player";
+pub(super) const PLAYBACK_PATH: &str = "/v1/me/player";
 const CONFIRMATION_ATTEMPTS: usize = 5;
 const CONFIRMATION_PAUSE: Duration = Duration::from_millis(500);
 
@@ -37,9 +37,11 @@ impl Reading {
     }
 }
 
+/// `album`: the album the song is on, inside which it is started; see `play_request`.
 pub fn play_song(
     client: &mut Client,
     uri: &str,
+    album: Option<&str>,
     computer_name: &str,
     wait: impl Fn(Duration),
     cancelled: &impl Fn() -> bool,
@@ -53,7 +55,7 @@ pub fn play_song(
         .map_err(device_access_error)?;
     let device = choose_device(&parse_devices(&devices.body)?, computer_name)?;
     let path = format!("/v1/me/player/play?device_id={}", url_encode(&device.id));
-    let body = format!("{{\"uris\":[\"{uri}\"],\"position_ms\":0}}");
+    let body = play_request(uri, album);
     check_cancelled(cancelled)?;
     client.authenticated_if_current("PUT", &path, body.as_bytes(), cancelled)?;
     confirm_playback(
@@ -66,6 +68,24 @@ pub fn play_song(
         cancelled,
     )?;
     Ok(PlaybackTarget { name: device.name })
+}
+
+/// What Spotify is asked to play, from the song's start.
+///
+/// The song is started inside its album, at that song. Asked for a song on its own, Spotify's
+/// desktop app accepts the request, stops what was playing and starts nothing, while its Web
+/// Player and other devices play it; a song inside its album starts on all of them. Checked
+/// against the desktop app on 5 October 2026. Afterwards the album plays on, as it does when
+/// the song is started from its album in Spotify.
+///
+/// A song without a usable album address is asked for on its own, which is all that is left.
+fn play_request(uri: &str, album: Option<&str>) -> String {
+    match album.filter(|album| valid_album_uri(album)) {
+        Some(album) => format!(
+            "{{\"context_uri\":\"{album}\",\"offset\":{{\"uri\":\"{uri}\"}},\"position_ms\":0}}"
+        ),
+        None => format!("{{\"uris\":[\"{uri}\"],\"position_ms\":0}}"),
+    }
 }
 
 pub fn wait(duration: Duration) {
@@ -227,6 +247,27 @@ mod tests {
             name: name.into(),
             computer,
             active,
+        }
+    }
+
+    #[test]
+    fn a_song_is_started_inside_its_album_and_alone_only_without_one() {
+        let uri = "spotify:track:0123456789abcdefghijkl";
+        let album = "spotify:album:abcdefghijkl0123456789";
+        assert_eq!(
+            play_request(uri, Some(album)),
+            r#"{"context_uri":"spotify:album:abcdefghijkl0123456789","offset":{"uri":"spotify:track:0123456789abcdefghijkl"},"position_ms":0}"#
+        );
+        let alone = r#"{"uris":["spotify:track:0123456789abcdefghijkl"],"position_ms":0}"#;
+        assert_eq!(play_request(uri, None), alone);
+        // Anything that is not an album's address is left out rather than sent.
+        for invalid in [
+            "",
+            "spotify:playlist:abcdefghijkl0123456789",
+            "spotify:album:short",
+            "spotify:album:abcdefghijkl01234567\"}",
+        ] {
+            assert_eq!(play_request(uri, Some(invalid)), alone, "{invalid}");
         }
     }
 

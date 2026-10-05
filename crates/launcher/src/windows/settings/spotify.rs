@@ -3,6 +3,9 @@
 pub struct SpotifySettings {
     pub enabled: bool,
     pub client_id: String,
+    /// The now-playing bar's volume slider sets Spotify's own volume on its active device,
+    /// instead of Spotify's level in Windows' mixer. Needs the connection, so `enabled` too.
+    pub volume: bool,
 }
 
 impl SpotifySettings {
@@ -24,18 +27,21 @@ mod tests {
     #[test]
     fn spotify_is_optional_and_client_ids_are_validated() {
         assert!(!SpotifySettings::default().enabled);
+        assert!(!SpotifySettings::default().volume);
         assert!(SpotifySettings::default().validate().is_ok());
         for client_id in ["abc", "../../token", "gggggggggggggggggggggggggggggggg"] {
             assert!(SpotifySettings {
                 enabled: true,
-                client_id: client_id.into()
+                client_id: client_id.into(),
+                volume: false,
             }
             .validate()
             .is_err());
         }
         assert!(SpotifySettings {
             enabled: true,
-            client_id: "0123456789abcdef0123456789abcdef".into()
+            client_id: "0123456789abcdef0123456789abcdef".into(),
+            volume: true,
         }
         .validate()
         .is_ok());

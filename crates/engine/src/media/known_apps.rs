@@ -36,6 +36,21 @@ pub struct KnownApp {
 }
 
 const PREFIX_LENGTH: usize = 6;
+/// The key of the one player whose own volume Core can reach through its account.
+const SPOTIFY_KEY: &str = "spotify";
+const EXECUTABLE_SUFFIX: &str = ".exe";
+/// Folders above an executable that may name the app it belongs to, nearest first:
+/// `Helium\Application\chrome.exe`, `Discord\app-1.0.9\Discord.exe`.
+const INSTALL_FOLDERS: usize = 3;
+
+/// How a word of some text may match a known app's word.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WordMatch {
+    /// Long words also match the start of a word, because identifiers decorate names.
+    Prefix,
+    /// Folders and executables carry the app's own name: `msedgewebview2.exe` is not Edge.
+    Whole,
+}
 
 const fn app(
     key: &'static str,
@@ -116,6 +131,10 @@ const KNOWN_APPS: &[KnownApp] = &[
 
 /// The known app an identifier or display name belongs to.
 pub fn known_app(text: &str) -> Option<&'static KnownApp> {
+    recognise(text, WordMatch::Prefix)
+}
+
+fn recognise(text: &str, matching: WordMatch) -> Option<&'static KnownApp> {
     let lower = text.to_lowercase();
     let words = lower
         .split(|character: char| !character.is_alphanumeric())
@@ -127,7 +146,10 @@ pub fn known_app(text: &str) -> Option<&'static KnownApp> {
                     lower.contains(key)
                 } else {
                     words.clone().any(|word| {
-                        word == *key || (key.len() >= PREFIX_LENGTH && word.starts_with(key))
+                        word == *key
+                            || (matching == WordMatch::Prefix
+                                && key.len() >= PREFIX_LENGTH
+                                && word.starts_with(key))
                     })
                 }
             })
@@ -147,6 +169,61 @@ pub fn classify_app(app_id: &str, name: &str) -> AppClass {
     known_app(app_id)
         .or_else(|| known_app(name))
         .map_or(AppClass::Other, |known| known.class)
+}
+
+/// Whether an identifier or name is Spotify's, however it was installed.
+pub fn is_spotify(app_id: &str) -> bool {
+    known_app(app_id).is_some_and(|known| known.key == SPOTIFY_KEY)
+}
+
+/// Whether a process playing sound belongs to the player Windows names `app_id`.
+/// `executable` is the process's program, with its folders when they are known.
+///
+/// Store apps carry the identifier on every process (`process_app_id`). A desktop app without
+/// an identifier of its own is named by its executable (`Spotify.exe`). Otherwise the program
+/// says which app it is: a known player by its install folder or else its executable's name,
+/// an unknown one by the readable part of its identifier.
+pub fn is_app_process(app_id: &str, executable: &str, process_app_id: Option<&str>) -> bool {
+    if process_app_id.is_some_and(|process| process.eq_ignore_ascii_case(app_id)) {
+        return true;
+    }
+    let mut parts = executable.rsplit(['\\', '/']);
+    let file = parts.next().unwrap_or_default();
+    let stem = executable_stem(file);
+    if stem.is_empty() {
+        return false;
+    }
+    if app_id.eq_ignore_ascii_case(file) {
+        return true;
+    }
+    let mut folders = parts.take(INSTALL_FOLDERS);
+    match known_app(app_id) {
+        // The folder is asked before the executable: browsers built on Chromium keep the name
+        // `chrome.exe`, and only their folder tells them apart.
+        Some(player) => folders
+            .find_map(|folder| recognise(folder, WordMatch::Whole))
+            .or_else(|| recognise(stem, WordMatch::Whole))
+            .is_some_and(|process| process.key == player.key),
+        None => {
+            let name = known_app_name(app_id);
+            std::iter::once(stem)
+                .chain(folders)
+                .any(|part| part.eq_ignore_ascii_case(&name) || part.eq_ignore_ascii_case(app_id))
+        }
+    }
+}
+
+/// An executable's file name without `.exe`, in any case.
+fn executable_stem(file: &str) -> &str {
+    match file.len().checked_sub(EXECUTABLE_SUFFIX.len()) {
+        Some(end)
+            if file.is_char_boundary(end)
+                && file[end..].eq_ignore_ascii_case(EXECUTABLE_SUFFIX) =>
+        {
+            &file[..end]
+        }
+        _ => file,
+    }
 }
 
 /// A readable name for a player Windows identifies only by its AppUserModelID:
@@ -243,6 +320,113 @@ mod tests {
         assert_eq!(classify_app("unknown", "Apple Music"), AppClass::Music);
         assert_eq!(classify_app("unknown", "Media Player"), AppClass::Music);
         assert_eq!(known_app("Amazon Music").unwrap().key, "amazonmusic");
+    }
+
+    const CHROME: &str = r"C:\Program Files\Google\Chrome\Application\chrome.exe";
+    const EDGE: &str = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe";
+    /// Helium is built on Chromium and keeps its executable's name.
+    const HELIUM: &str = r"C:\Users\me\AppData\Local\imput\Helium\Application\chrome.exe";
+    const HELIUM_ID: &str = "Helium.QOOR667UA6MLNAR7ZY2SGJF3MA";
+    const STORE_SPOTIFY: &str = "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify";
+    const MEDIA_PLAYER: &str = "Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic";
+
+    #[test]
+    fn processes_playing_sound_are_matched_to_the_player_windows_names() {
+        for (app_id, executable, process_app_id) in [
+            ("Spotify.exe", "Spotify.exe", None),
+            (
+                "Spotify.exe",
+                r"C:\Users\me\AppData\Roaming\Spotify\SPOTIFY.EXE",
+                None,
+            ),
+            // A browser's sound comes from a helper process running the same program.
+            ("Chrome", CHROME, None),
+            ("Chrome", "chrome.exe", None),
+            ("MSEdge", EDGE, None),
+            (
+                "308046B0AF4A39CB",
+                r"C:\Program Files\Mozilla Firefox\firefox.exe",
+                None,
+            ),
+            (HELIUM_ID, HELIUM, None),
+            (
+                "com.squirrel.Discord.Discord",
+                r"C:\Users\me\AppData\Local\Discord\app-1.0.9175\Discord.exe",
+                None,
+            ),
+            (
+                "com.github.th-ch.youtube-music",
+                r"C:\Users\me\AppData\Local\Programs\youtube-music\YouTube Music.exe",
+                None,
+            ),
+            // Players Core does not know, by the readable part of their identifier.
+            (
+                "Thorium.ABCDEFGHIJ0123456789",
+                r"C:\Tools\thorium.exe",
+                None,
+            ),
+            (
+                "Thorium.ABCDEFGHIJ0123456789",
+                r"C:\Users\me\AppData\Local\Thorium\Application\chrome.exe",
+                None,
+            ),
+            (STORE_SPOTIFY, "Spotify.exe", Some(STORE_SPOTIFY)),
+            // The executable says nothing here; the process carries the Store identifier.
+            (
+                MEDIA_PLAYER,
+                "Microsoft.Media.Player.exe",
+                Some(MEDIA_PLAYER),
+            ),
+        ] {
+            assert!(
+                is_app_process(app_id, executable, process_app_id),
+                "{app_id} {executable}"
+            );
+        }
+    }
+
+    #[test]
+    fn another_apps_process_is_never_taken_for_the_player() {
+        let web_view = r"C:\Program Files (x86)\Microsoft\EdgeWebView\Application\131.0.2903.86\msedgewebview2.exe";
+        for (app_id, executable, process_app_id) in [
+            ("Spotify.exe", CHROME, None),
+            ("Chrome", EDGE, None),
+            // Two browsers with the same executable name are told apart by their folders.
+            ("Chrome", HELIUM, None),
+            (HELIUM_ID, CHROME, None),
+            // Apps that embed Edge's engine are not Edge.
+            ("MSEdge", web_view, None),
+            ("Spotify.exe", "", None),
+            ("Spotify.exe", r"C:\Users\me\AppData\Roaming\Spotify\", None),
+            (MEDIA_PLAYER, "Microsoft.Media.Player.exe", None),
+            (MEDIA_PLAYER, "Spotify.exe", Some(STORE_SPOTIFY)),
+            (
+                "Contoso.Recorder_abc!App",
+                r"C:\Tools\Player.exe",
+                Some("Other.Player_abc!App"),
+            ),
+            // A folder too far above the program says nothing about it.
+            (HELIUM_ID, r"C:\Helium\one\two\three\player.exe", None),
+        ] {
+            assert!(
+                !is_app_process(app_id, executable, process_app_id),
+                "{app_id} {executable}"
+            );
+        }
+    }
+
+    #[test]
+    fn spotify_is_recognised_however_it_was_installed() {
+        for identifier in [
+            "Spotify.exe",
+            "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify",
+            "Spotify",
+        ] {
+            assert!(is_spotify(identifier), "{identifier}");
+        }
+        for identifier in ["Chrome", "AppleInc.AppleMusicWin_nzyj5cx40ttqa!App", ""] {
+            assert!(!is_spotify(identifier), "{identifier}");
+        }
     }
 
     #[test]

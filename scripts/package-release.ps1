@@ -123,9 +123,17 @@ Media: type @media or @music to control Spotify or any player Windows knows
 (play, pause, next, previous), or type play, pause, next or now playing on
 their own. Core prefers music apps over a paused browser tab. A now-playing bar
 above the search box shows the track, its art and progress, with buttons.
+Rest the pointer on the album art for a volume slider: it changes that
+player's volume in Windows' volume mixer, not the whole PC's.
 Settings > Music chooses Music apps first or Playing media first, preferred
 and ignored apps, the bar, and media shortcuts that work while Core is open
 or in every app. Shortcut boxes record keys: click one and press the keys.
+
+Optional: Settings > Music > Spotify song search connects your own Spotify
+Premium account. Type @song and a song or artist, then press Enter to play
+the chosen song. The Spotify volume switch beside it makes the bar's slider
+set Spotify's own volume. Off by default; docs/SPOTIFY.md in the source
+repository has the one-time setup.
 
 Keep the executable in a stable folder before enabling Start with Windows.
 Startup runs at your Windows sign-in. Core's tray menu can exit the application.

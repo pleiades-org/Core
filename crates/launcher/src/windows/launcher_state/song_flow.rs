@@ -67,7 +67,7 @@ impl SongFlow {
 }
 
 impl LauncherState {
-    fn spotify_settings(&self) -> SpotifySettings {
+    pub(super) fn spotify_settings(&self) -> SpotifySettings {
         self.auto_save.latest(&self.settings.saved).music.spotify
     }
 
@@ -91,7 +91,7 @@ impl LauncherState {
         }
     }
 
-    fn spotify_service(&mut self) -> Result<&SpotifyService, String> {
+    pub(super) fn spotify_service(&mut self) -> Result<&SpotifyService, String> {
         if !self.options.network || self.options.dry_run || self.options.probe {
             return Err("Spotify connections are disabled in dry runs and probes.".into());
         }
@@ -197,6 +197,7 @@ impl LauncherState {
                     self.refresh_footer();
                     self.request_media_reading();
                 }
+                Event::Volume(answer) => self.receive_spotify_volume(answer),
             }
         }
     }
@@ -237,7 +238,7 @@ impl LauncherState {
         let request_id = self.songs.new_playback_request();
         let result = self
             .spotify_service()
-            .and_then(|service| service.play(request_id, &song.uri));
+            .and_then(|service| service.play(request_id, &song));
         let query = self
             .view
             .as_ref()
@@ -259,6 +260,7 @@ mod tests {
             title: "Selected song".into(),
             artist: "Artist".into(),
             album: "Album".into(),
+            album_uri: None,
             artwork: None,
         }
     }

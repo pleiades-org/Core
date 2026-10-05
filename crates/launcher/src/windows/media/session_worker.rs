@@ -2,9 +2,10 @@
 //! subscribes to the players' change events so the bar and results stay current.
 use super::{
     album_art::ArtCache,
+    app_volume::{self, AppVolume},
     post_ready,
     read_sessions::{read_sessions, read_timeline, ReadSession, SessionRead},
-    send_command, window_players, MediaOutcome, MediaReading, Shared,
+    send_command, window_players, MediaOutcome, MediaReading, Shared, VolumeReading,
 };
 use core_engine::media::MediaSession;
 use std::{sync::Arc, thread, time::Duration};
@@ -34,6 +35,7 @@ pub(super) fn run(address: usize, shared: Arc<Shared>) {
         watch: None,
         sessions: Vec::new(),
         art: ArtCache::default(),
+        volume: None,
     }
     .serve();
     if initialized {
@@ -50,6 +52,8 @@ struct Worker {
     /// The sessions of the last full reading, for reading track positions alone.
     sessions: Vec<(MediaSession, Session)>,
     art: ArtCache,
+    /// The mixer sessions of the player whose volume the bar's slider last moved.
+    volume: Option<AppVolume>,
 }
 
 impl Worker {
@@ -58,6 +62,11 @@ impl Worker {
             let Some(work) = self.next_work() else {
                 return;
             };
+            // First, and without asking any player: the slider must follow the pointer.
+            let volume = work
+                .volume
+                .as_ref()
+                .and_then(|volume| app_volume::perform(&mut self.volume, volume));
             let manager = self.manager();
             let mut outcomes = Vec::new();
             for request in &work.requests {
@@ -77,7 +86,7 @@ impl Worker {
             } else {
                 None
             };
-            if !self.publish(reading, outcomes) {
+            if !self.publish(reading, outcomes, volume) {
                 return;
             }
         }
@@ -89,7 +98,8 @@ impl Worker {
         while !work.pending() && !work.shutdown {
             work = self.shared.wake.wait(work).expect("media wake lock");
         }
-        if !work.requested && work.requests.is_empty() && !work.shutdown {
+        let asked = work.requested || !work.requests.is_empty() || work.volume.is_some();
+        if !asked && !work.shutdown {
             drop(work);
             thread::sleep(EVENT_SETTLE);
             work = self.shared.work.lock().expect("media work lock");
@@ -105,6 +115,7 @@ impl Worker {
             watch_changed: work.watch_changed,
             art_edge: work.art_edge,
             requests: std::mem::take(&mut work.requests),
+            volume: work.volume.take(),
             shutdown: false,
         };
         work.requested = false;
@@ -204,7 +215,12 @@ impl Worker {
     }
 
     /// False once Core has shut the service down.
-    fn publish(&self, reading: Option<MediaReading>, outcomes: Vec<MediaOutcome>) -> bool {
+    fn publish(
+        &self,
+        reading: Option<MediaReading>,
+        outcomes: Vec<MediaOutcome>,
+        volume: Option<VolumeReading>,
+    ) -> bool {
         if self.shared.work.lock().expect("media work lock").shutdown {
             return false;
         }
@@ -235,6 +251,11 @@ impl Worker {
             let mut slot = self.shared.outcomes.lock().expect("media outcome lock");
             notify |= slot.is_empty();
             slot.extend(outcomes);
+        }
+        if let Some(volume) = volume {
+            let mut slot = self.shared.volume.lock().expect("media volume lock");
+            notify |= slot.is_none();
+            *slot = Some(volume);
         }
         if notify {
             post_ready(self.address);

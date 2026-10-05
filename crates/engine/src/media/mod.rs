@@ -3,10 +3,15 @@
 mod choose_session;
 mod known_apps;
 mod timeline;
+mod volume;
 
 pub use choose_session::{bar_session, choose_target, MediaPolicy, PriorityMode};
-pub use known_apps::{app_key, classify_app, known_app, known_app_name, AppClass, KnownApp};
+pub use known_apps::{
+    app_key, classify_app, is_app_process, is_spotify, known_app, known_app_name, AppClass,
+    KnownApp,
+};
 pub use timeline::{format_clock, playback_position, PlaybackProgress, Timeline};
+pub use volume::VolumeLevel;
 
 use std::sync::Arc;
 

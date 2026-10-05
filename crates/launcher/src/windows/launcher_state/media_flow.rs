@@ -111,6 +111,15 @@ impl LauncherState {
         self.media.service.as_ref()
     }
 
+    /// The worker that is already running, for the bar's volume slider: the bar it belongs to
+    /// only shows what that worker read.
+    pub(super) fn media_worker(&self) -> Result<&MediaService, String> {
+        self.media
+            .service
+            .as_ref()
+            .ok_or_else(|| "Media controls are unavailable".to_owned())
+    }
+
     fn media_art_size(&self) -> u32 {
         match &self.view {
             Some(view) if self.music().bar => view.media_art_size(),
@@ -172,6 +181,7 @@ impl LauncherState {
         };
         let reading = service.take_reading();
         let outcomes = service.take_outcomes();
+        let volume = service.take_volume();
         let mut results_changed = false;
         // The first full reading after showing corrects a bar drawn from the previous one,
         // removing it if the player closed meanwhile; until something is typed.
@@ -196,6 +206,10 @@ impl LauncherState {
             self.apply_media_outcome(outcome);
         }
         self.refresh_media_bar(presence);
+        // After the bar, which may have changed players: the slider is the shown player's.
+        if let Some(volume) = volume {
+            self.receive_mixer_volume(volume);
+        }
         let shows_media = self
             .view
             .as_ref()

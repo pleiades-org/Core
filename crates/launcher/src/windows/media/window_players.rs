@@ -209,6 +209,12 @@ fn class_name(window: HWND) -> String {
 }
 
 fn executable_name(process: u32) -> Option<String> {
+    let path = executable_path(process)?;
+    path.rsplit(['\\', '/']).next().map(str::to_owned)
+}
+
+/// The program a process runs, with its folders.
+pub(super) fn executable_path(process: u32) -> Option<String> {
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process) }.ok()?;
     let mut path = [0_u16; 1024];
     let mut length = path.len() as u32;
@@ -224,8 +230,7 @@ fn executable_name(process: u32) -> Option<String> {
         let _ = CloseHandle(handle);
     }
     read.ok()?;
-    let path = String::from_utf16_lossy(&path[..length as usize]);
-    path.rsplit(['\\', '/']).next().map(str::to_owned)
+    Some(String::from_utf16_lossy(&path[..length as usize]))
 }
 
 #[cfg(test)]

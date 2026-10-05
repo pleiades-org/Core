@@ -33,12 +33,20 @@ const DISCONNECT_ID: usize = 345;
 const SETUP_ID: usize = 346;
 const STATUS_ID: usize = 347;
 const HELP_FIRST_ID: usize = 348;
+const HELP_LINES: usize = 4;
+/// Whether the now-playing bar's volume slider sets Spotify's own volume.
+const VOLUME_ID: usize = HELP_FIRST_ID + HELP_LINES;
 const FIELD_TOP: i32 = 188;
 const FIELD_WIDTH: i32 = layout::CONTENT_RIGHT - layout::CONTENT_LEFT;
+/// The two switches share the first row: song search, then the bar's volume beside it.
+const SWITCH_TOP: i32 = 104;
+const ENABLE_WIDTH: i32 = 380;
+const SWITCH_GAP: i32 = 12;
 
 pub struct SpotifySection {
     controls: Vec<(usize, HWND)>,
     enabled: Cell<bool>,
+    volume: Cell<bool>,
 }
 
 impl SpotifySection {
@@ -46,8 +54,16 @@ impl SpotifySection {
         let mut section = Self {
             controls: Vec::new(),
             enabled: Cell::new(false),
+            volume: Cell::new(false),
         };
+        // Switch text carries the state for screen readers; only the name is drawn.
         section.add_button(parent, instance, ENABLE_ID, "Spotify song search: Off")?;
+        section.add_button(
+            parent,
+            instance,
+            VOLUME_ID,
+            "Now playing bar's volume slider sets Spotify's volume: Off",
+        )?;
         section.add(
             parent,
             instance,
@@ -160,14 +176,16 @@ impl SpotifySection {
 
     pub fn reset(&self, settings: &SpotifySettings) {
         self.enabled.set(settings.enabled);
+        self.volume.set(settings.volume);
         self.set_text(CLIENT_ID, &settings.client_id);
-        self.update_toggle();
+        self.update_toggles();
     }
 
     pub fn draft(&self) -> Result<SpotifySettings, String> {
         let settings = SpotifySettings {
             enabled: self.enabled.get(),
             client_id: control_text(self.control(CLIENT_ID)).trim().to_owned(),
+            volume: self.volume.get(),
         };
         settings.validate()?;
         Ok(settings)
@@ -188,16 +206,23 @@ impl SpotifySection {
         }
     }
 
-    fn update_toggle(&self) {
-        self.set_text(
-            ENABLE_ID,
-            &format!(
-                "Spotify song search: {}",
-                if self.enabled.get() { "On" } else { "Off" }
+    /// Switch text, which screen readers announce; the switches repaint to match.
+    fn update_toggles(&self) {
+        for (identifier, name, on) in [
+            (ENABLE_ID, "Spotify song search", self.enabled.get()),
+            (
+                VOLUME_ID,
+                "Now playing bar's volume slider sets Spotify's volume",
+                self.volume.get(),
             ),
-        );
-        unsafe {
-            let _ = InvalidateRect(Some(self.control(ENABLE_ID)), None, false);
+        ] {
+            self.set_text(
+                identifier,
+                &format!("{name}: {}", if on { "On" } else { "Off" }),
+            );
+            unsafe {
+                let _ = InvalidateRect(Some(self.control(identifier)), None, false);
+            }
         }
     }
 
@@ -218,7 +243,12 @@ impl SpotifySection {
         Some(match identifier {
             ENABLE_ID => {
                 self.enabled.set(!self.enabled.get());
-                self.update_toggle();
+                self.update_toggles();
+                SettingsAction::Change
+            }
+            VOLUME_ID => {
+                self.volume.set(!self.volume.get());
+                self.update_toggles();
                 SettingsAction::Change
             }
             CONNECT_ID => SettingsAction::ConnectSpotify,
@@ -239,7 +269,13 @@ impl SpotifySection {
     fn area(identifier: usize) -> (i32, i32, i32, i32) {
         let left = layout::CONTENT_LEFT;
         match identifier {
-            ENABLE_ID => (left, 104, 380, 40),
+            ENABLE_ID => (left, SWITCH_TOP, ENABLE_WIDTH, layout::BUTTON_HEIGHT),
+            VOLUME_ID => (
+                left + ENABLE_WIDTH + SWITCH_GAP,
+                SWITCH_TOP,
+                FIELD_WIDTH - ENABLE_WIDTH - SWITCH_GAP,
+                layout::BUTTON_HEIGHT,
+            ),
             CLIENT_LABEL_ID => (left, 158, FIELD_WIDTH, 22),
             CLIENT_ID => (
                 left + layout::INPUT_INSET,
@@ -300,30 +336,29 @@ impl SpotifySection {
         let identifier = item.CtlID as usize;
         if !matches!(
             identifier,
-            ENABLE_ID | CONNECT_ID | DISCONNECT_ID | SETUP_ID | BACK_ID
+            ENABLE_ID | VOLUME_ID | CONNECT_ID | DISCONNECT_ID | SETUP_ID | BACK_ID
         ) {
             return false;
         }
         let active = button_hover::is_hovered(item.hwndItem)
             || item.itemState.0 & (ODS_FOCUS.0 | ODS_SELECTED.0) != 0;
-        if identifier == ENABLE_ID {
-            control_style::draw_toggle(
-                item.hDC,
-                item.rcItem,
-                "Spotify song search",
-                self.enabled.get(),
-                active,
-                look,
-            );
-        } else {
-            control_style::draw_action(
+        let switch = match identifier {
+            ENABLE_ID => Some(("Spotify song search", self.enabled.get())),
+            VOLUME_ID => Some(("Spotify volume", self.volume.get())),
+            _ => None,
+        };
+        match switch {
+            Some((name, on)) => {
+                control_style::draw_toggle(item.hDC, item.rcItem, name, on, active, look)
+            }
+            None => control_style::draw_action(
                 item.hDC,
                 item.rcItem,
                 &control_text(item.hwndItem),
                 None,
                 active,
                 look,
-            );
+            ),
         }
         true
     }
@@ -346,13 +381,21 @@ mod tests {
     use super::*;
     #[test]
     fn spotify_controls_fit_the_existing_settings_page_without_covering_the_footer() {
-        for identifier in BACK_ID..=HELP_FIRST_ID + 3 {
+        for identifier in BACK_ID..=VOLUME_ID {
             assert!(identifier > super::super::quicklink_table::SCROLL_ID);
             assert!(identifier > super::super::music_section::LAST_ID);
             let (left, top, width, height) = SpotifySection::area(identifier);
             assert!(left >= layout::CONTENT_LEFT && left + width <= layout::CONTENT_RIGHT);
             assert!(top >= layout::FIRST_LABEL_TOP && top + height < layout::FOOTER_TOP);
         }
+        // The volume switch sits beside song search, as tall, without touching it.
+        let (enable_left, enable_top, enable_width, enable_height) =
+            SpotifySection::area(ENABLE_ID);
+        let (volume_left, volume_top, volume_width, volume_height) =
+            SpotifySection::area(VOLUME_ID);
+        assert!(volume_left > enable_left + enable_width);
+        assert_eq!((volume_top, volume_height), (enable_top, enable_height));
+        assert_eq!(volume_left + volume_width, layout::CONTENT_RIGHT);
         let (_, status_top, _, status_height) = SpotifySection::area(STATUS_ID);
         let (_, help_top, _, _) = SpotifySection::area(HELP_FIRST_ID);
         assert!(status_top + status_height <= help_top);

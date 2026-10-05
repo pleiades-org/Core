@@ -8,6 +8,9 @@ pub struct Song {
     pub title: Arc<str>,
     pub artist: Arc<str>,
     pub album: Arc<str>,
+    /// The album's own address. The song is started inside its album, which every Spotify
+    /// device accepts; None plays the song on its own.
+    pub album_uri: Option<Arc<str>>,
     pub artwork: Option<Arc<str>>,
 }
 
@@ -125,6 +128,7 @@ mod tests {
             title: "Jóga".into(),
             artist: "Björk".into(),
             album: "Homogenic".into(),
+            album_uri: None,
             artwork: None,
         };
         let snapshot = SongSearch {

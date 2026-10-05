@@ -53,8 +53,9 @@ use preference_changes::PreferenceChanges;
 
 pub use footer::CLOCK_TIMER;
 pub use media_bar::{
-    button_areas as media_button_areas, BarPresence, MediaBarClick, MediaBarContent, MEDIA_INFO_ID,
-    MEDIA_NEXT_ID, MEDIA_PLAY_ID, MEDIA_PREVIOUS_ID, MEDIA_PROGRESS_TIMER,
+    button_areas as media_button_areas, BarPresence, BarVolume, MediaBarClick, MediaBarContent,
+    MEDIA_INFO_ID, MEDIA_NEXT_ID, MEDIA_PLAY_ID, MEDIA_PREVIOUS_ID, MEDIA_PROGRESS_TIMER,
+    VOLUME_CHANGED as MEDIA_VOLUME_CHANGED, VOLUME_WANTED as MEDIA_VOLUME_WANTED,
 };
 pub use output::OUTPUT_ID;
 

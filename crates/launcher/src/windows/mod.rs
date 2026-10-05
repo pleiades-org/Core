@@ -46,6 +46,47 @@ pub use shell::{run, show_fatal_error};
 #[cfg(test)]
 pub static GUI_RESOURCE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// A test thread's stay in Windows' runtime, which it leaves again when dropped. Declare it
+/// first in a test, so everything obtained from the runtime is released before it.
+///
+/// The first test to enter also starts a thread that stays inside for as long as the test
+/// process runs. Without it each test left the runtime as it ended, and whenever no thread was
+/// inside, Windows unloaded classes the `windows` crate still held on to: the next test to use
+/// one died with an access violation. Core itself is always inside on its window's thread, so
+/// only tests were affected.
+#[cfg(test)]
+pub struct TestRuntime(bool);
+
+#[cfg(test)]
+impl TestRuntime {
+    pub fn enter() -> Self {
+        use ::windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
+        static KEPT: std::sync::Once = std::sync::Once::new();
+        KEPT.call_once(|| {
+            let (entered, inside) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = unsafe { RoInitialize(RO_INIT_MULTITHREADED) };
+                let _ = entered.send(());
+                loop {
+                    std::thread::park();
+                }
+            });
+            // Entered before this test goes on, so there is never a moment with no one inside.
+            let _ = inside.recv();
+        });
+        Self(unsafe { RoInitialize(RO_INIT_MULTITHREADED) }.is_ok())
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestRuntime {
+    fn drop(&mut self) {
+        if self.0 {
+            unsafe { ::windows::Win32::System::WinRT::RoUninitialize() };
+        }
+    }
+}
+
 pub fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
 }

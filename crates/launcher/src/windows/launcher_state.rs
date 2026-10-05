@@ -5,6 +5,7 @@ mod media_flow;
 mod settings_flow;
 mod song_flow;
 mod update_flow;
+mod volume_flow;
 
 use super::{
     discover_applications::Discovery,

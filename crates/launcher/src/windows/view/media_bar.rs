@@ -1,12 +1,19 @@
 //! The now-playing bar above the search box: album art, title and artist, the track's progress,
 //! and previous, play / pause and next buttons. The buttons are native, for the keyboard and
 //! screen readers; art, text and progress are drawn in one owner-drawn static control, whose
-//! text is what a screen reader announces.
+//! text is what a screen reader announces. While the pointer is on the art, a volume slider
+//! takes the title's place.
 use super::*;
+
+mod volume;
+
+pub use volume::{BarVolume, VOLUME_CHANGED, VOLUME_WANTED};
+
 use crate::windows::power_menu::icon_button;
 use core_engine::media::{
     format_clock, playback_position, MediaControls, PlaybackProgress, Timeline,
 };
+use volume::{SliderLayout, SliderView, VolumeSlider};
 use windows::Win32::{
     System::SystemInformation::GetSystemTimePreciseAsFileTime,
     UI::Input::KeyboardAndMouse::SetFocus,
@@ -45,6 +52,8 @@ const PLAY_GLYPH: &str = "\u{e768}";
 const PAUSE_GLYPH: &str = "\u{e769}";
 /// Shown in place of album art when the player provides none.
 const MUSIC_GLYPH: &str = "\u{e8d6}";
+/// The size the icon font draws a glyph at, to centre one on the art. In 96-DPI pixels.
+const GLYPH_SIZE: i32 = 20;
 
 #[derive(Clone)]
 pub struct MediaBarContent {
@@ -98,6 +107,8 @@ pub(super) struct MediaBar {
     info: HWND,
     buttons: [(usize, HWND); 3],
     content: RefCell<Option<MediaBarContent>>,
+    /// Boxed: the info control's window procedure keeps its address.
+    slider: Box<VolumeSlider>,
 }
 
 impl MediaBar {
@@ -110,6 +121,7 @@ impl MediaBar {
                 (MEDIA_NEXT_ID, HWND::default()),
             ],
             content: RefCell::new(None),
+            slider: VolumeSlider::new(),
         };
         for (identifier, button) in &mut bar.buttons {
             let label = match *identifier {
@@ -143,6 +155,7 @@ impl MediaBar {
                 MEDIA_INFO_ID,
             )?
         };
+        bar.slider.install(bar.info)?;
         Ok(bar)
     }
 
@@ -164,6 +177,9 @@ impl MediaBar {
     }
 
     fn show(&self, visible: bool) {
+        if !visible {
+            self.slider.hide(self.info);
+        }
         unsafe {
             let _ = ShowWindow(self.info, if visible { SW_SHOWNA } else { SW_HIDE });
             for (identifier, button) in self.buttons {
@@ -183,6 +199,13 @@ impl MediaBar {
         } else {
             "Play"
         };
+        let same_player = match (self.content.borrow().as_ref(), &content) {
+            (Some(shown), Some(next)) => shown.app_id == next.app_id,
+            _ => false,
+        };
+        if !same_player {
+            self.slider.reset(self.info, content.is_some());
+        }
         *self.content.borrow_mut() = content;
         for (control, label) in [(self.info, text.as_str()), (self.buttons[1].1, play_label)] {
             if control_text(control) != label {
@@ -292,6 +315,7 @@ impl View {
         let Some(bar) = self.media_bar.get() else {
             return Ok(());
         };
+        bar.slider.set_dpi(self.dpi.get());
         let visible = self.media_bar_height() > 0;
         if visible {
             for (control, area) in [
@@ -328,6 +352,31 @@ impl View {
     pub fn set_media_progress_active(&self, active: bool) {
         self.media_progress_active.set(active);
         self.schedule_media_progress();
+        // Core is hiding: the pointer no longer holds the volume slider open.
+        if let Some(bar) = self.media_bar.get().filter(|_| !active) {
+            bar.slider.hide(bar.info);
+        }
+    }
+
+    /// The level the person chose on the bar's volume slider; None unless it shows one.
+    pub fn media_volume(&self) -> Option<u8> {
+        self.media_bar.get()?.slider.level()
+    }
+
+    /// A player's volume was read, or could not be reached. The slider shows it if the bar
+    /// still shows that player.
+    pub fn set_media_volume(&self, app_id: &str, volume: BarVolume) {
+        let Some(bar) = self.media_bar.get() else {
+            return;
+        };
+        let shows_player = bar
+            .content
+            .borrow()
+            .as_ref()
+            .is_some_and(|content| &*content.app_id == app_id);
+        if shows_player {
+            bar.slider.set_volume(bar.info, volume);
+        }
     }
 
     pub fn tick_media_progress(&self) {
@@ -422,7 +471,19 @@ impl View {
         let (dpi, fonts) = (self.dpi.get(), self.fonts.get());
         match item.CtlID as usize {
             MEDIA_INFO_ID => {
-                draw_info(item, bar.content.borrow().as_ref(), dpi, fonts, palette);
+                let content = bar.content.borrow();
+                // Off screen first: the slider repaints the bar as fast as the pointer moves.
+                painting::buffered(item.hDC, &item.rcItem, |context| {
+                    draw_info(
+                        context,
+                        item.rcItem,
+                        content.as_ref(),
+                        bar.slider.view(),
+                        dpi,
+                        fonts,
+                        palette,
+                    );
+                });
                 true
             }
             identifier @ (MEDIA_PREVIOUS_ID | MEDIA_PLAY_ID | MEDIA_NEXT_ID) => {
@@ -468,15 +529,42 @@ pub fn button_areas(width: i32, top: i32, dpi: u32) -> [RECT; 3] {
     })
 }
 
+/// Where the album art is drawn, in the info control's client pixels.
+fn art_area(client: RECT, dpi: u32) -> RECT {
+    let left = client.left + scale(ART_LEFT, dpi);
+    let top = client.top + scale(ART_TOP, dpi);
+    let size = scale(theme::MEDIA_ART, dpi);
+    painting::rectangle(left, top, left + size, top + size)
+}
+
+/// The title's row: from the text column to just before the buttons over the bar's right side.
+fn title_row(client: RECT, dpi: u32) -> RECT {
+    let buttons = button_areas(client.right - client.left, 0, dpi);
+    painting::rectangle(
+        client.left + scale(TEXT_LEFT, dpi),
+        client.top + scale(TITLE_TOP, dpi),
+        client.left + buttons[0].left - scale(12, dpi),
+        client.top + scale(DETAIL_TOP, dpi),
+    )
+}
+
+/// A glyph of the icon font, centred on the art.
+fn art_glyph(context: HDC, art: RECT, glyph: &str, dpi: u32, font: HFONT, color: COLORREF) {
+    let mut area = art;
+    area.left += (art.right - art.left - scale(GLYPH_SIZE, dpi)) / 2;
+    painting::text(context, glyph, area, font, color);
+}
+
+/// `slider`: the volume slider is showing, over the art and in place of the title.
 fn draw_info(
-    item: &DRAWITEMSTRUCT,
+    context: HDC,
+    area: RECT,
     content: Option<&MediaBarContent>,
+    slider: Option<SliderView>,
     dpi: u32,
     fonts: Fonts,
     palette: Palette,
 ) {
-    let area = item.rcItem;
-    let context = item.hDC;
     painting::fill(context, &area, palette.background);
     let at = |left: i32, top: i32, right: i32, bottom: i32| {
         painting::rectangle(
@@ -504,30 +592,33 @@ fn draw_info(
         );
         return;
     };
-    let art_size = scale(theme::MEDIA_ART, dpi);
-    let art = painting::rectangle(
-        area.left + scale(ART_LEFT, dpi),
-        area.top + scale(ART_TOP, dpi),
-        area.left + scale(ART_LEFT, dpi) + art_size,
-        area.top + scale(ART_TOP, dpi) + art_size,
-    );
+    let art = art_area(area, dpi);
     let art_drawn = content
         .art
         .as_ref()
-        .is_some_and(|icon| icon.draw(context, art, art_size));
+        .is_some_and(|icon| icon.draw(context, art, art.right - art.left));
     if !art_drawn {
         painting::rounded(context, &art, scale(7, dpi), palette.selected);
-        let mut glyph = art;
-        glyph.left += (art_size - scale(20, dpi)) / 2;
-        painting::text(context, MUSIC_GLYPH, glyph, fonts.icon, palette.accent);
     }
-    painting::text(
-        context,
-        &content.title,
-        at(TEXT_LEFT, TITLE_TOP, text_right, DETAIL_TOP),
-        fonts.title,
-        palette.text,
-    );
+    match slider {
+        Some(slider) => {
+            volume::draw_art_overlay(context, art, art_drawn, slider.volume, dpi, fonts, palette);
+            let layout = SliderLayout::new(area, dpi);
+            volume::draw_slider(context, &layout, slider, dpi, fonts, palette);
+        }
+        None => {
+            if !art_drawn {
+                art_glyph(context, art, MUSIC_GLYPH, dpi, fonts.icon, palette.accent);
+            }
+            painting::text(
+                context,
+                &content.title,
+                title_row(area, dpi),
+                fonts.title,
+                palette.text,
+            );
+        }
+    }
     let progress = content.progress();
     let time_left = if progress.is_some() {
         text_right - scale(TIME_WIDTH, dpi)

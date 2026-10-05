@@ -193,11 +193,10 @@ mod tests {
 
     #[test]
     fn catalog_image_bytes_decode_in_memory_without_opening_a_window() {
-        use windows::Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED};
+        let _runtime = crate::windows::TestRuntime::enter();
         let _serial = crate::windows::GUI_RESOURCE_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        unsafe { RoInitialize(RO_INIT_MULTITHREADED) }.unwrap();
         // A two-by-two 24-bit BMP with eight bytes per row, including row padding.
         let mut bitmap = vec![0_u8; 70];
         bitmap[..2].copy_from_slice(b"BM");
@@ -212,9 +211,6 @@ mod tests {
         bitmap[54..].fill(128);
         let icon = from_bytes(&bitmap, 48).unwrap();
         drop(icon);
-        unsafe {
-            RoUninitialize();
-        }
     }
 
     #[test]

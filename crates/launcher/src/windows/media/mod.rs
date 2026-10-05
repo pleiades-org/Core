@@ -26,6 +26,7 @@ macro_rules! finish {
 }
 
 mod album_art;
+mod app_volume;
 mod hotkeys;
 mod read_sessions;
 mod send_command;
@@ -44,7 +45,7 @@ pub fn decode_artwork(
 }
 
 use super::application_icon::ApplicationIcon;
-use core_engine::media::{MediaCommand, MediaPolicy, MediaSession, PlaybackState};
+use core_engine::media::{MediaCommand, MediaPolicy, MediaSession, PlaybackState, VolumeLevel};
 use std::{
     collections::VecDeque,
     sync::{Arc, Condvar, Mutex},
@@ -100,6 +101,21 @@ pub struct MediaReading {
     pub window_processes: Vec<u32>,
 }
 
+/// What the bar's volume slider asks of a player's volume in Windows' mixer: a change, a
+/// reading, or a change and then a reading.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct VolumeWork {
+    app_id: Arc<str>,
+    set: Option<u8>,
+    read: bool,
+}
+
+pub struct VolumeReading {
+    pub app_id: Arc<str>,
+    /// The level read, or why the player has no volume in Windows' mixer right now.
+    pub level: Result<VolumeLevel, String>,
+}
+
 #[derive(Default)]
 struct Work {
     /// Core asked to read the sessions again.
@@ -115,6 +131,8 @@ struct Work {
     /// Album art size in pixels; 0 when no art is shown.
     art_edge: u32,
     requests: VecDeque<MediaRequest>,
+    /// The slider's newest wish; it acts at once, without waiting for players to settle.
+    volume: Option<VolumeWork>,
     shutdown: bool,
 }
 
@@ -125,6 +143,7 @@ impl Work {
             || self.timelines
             || self.watch_changed
             || !self.requests.is_empty()
+            || self.volume.is_some()
     }
 }
 
@@ -134,6 +153,7 @@ struct Shared {
     wake: Condvar,
     reading: Mutex<Option<MediaReading>>,
     outcomes: Mutex<Vec<MediaOutcome>>,
+    volume: Mutex<Option<VolumeReading>>,
 }
 
 impl Shared {
@@ -212,6 +232,38 @@ impl MediaService {
     pub fn take_outcomes(&self) -> Vec<MediaOutcome> {
         std::mem::take(&mut *self.shared.outcomes.lock().expect("media outcome lock"))
     }
+
+    /// Reads a player's volume in Windows' mixer; the reading arrives as the sessions do.
+    pub fn read_volume(&self, app_id: Arc<str>) {
+        self.ask_volume(app_id, |work| work.read = true);
+    }
+
+    /// Sets it. Changes made faster than the worker applies them collapse into the newest.
+    pub fn set_volume(&self, app_id: Arc<str>, percent: u8) {
+        self.ask_volume(app_id, |work| work.set = Some(percent));
+    }
+
+    /// What still waits for the same player is kept, so a reading asked for just before a
+    /// drag is not lost; anything waiting for another player is dropped.
+    fn ask_volume(&self, app_id: Arc<str>, ask: impl FnOnce(&mut VolumeWork)) {
+        let mut work = self.shared.work.lock().expect("media work lock");
+        let mut volume = work
+            .volume
+            .take()
+            .filter(|waiting| waiting.app_id == app_id)
+            .unwrap_or(VolumeWork {
+                app_id,
+                set: None,
+                read: false,
+            });
+        ask(&mut volume);
+        work.volume = Some(volume);
+        self.shared.wake.notify_one();
+    }
+
+    pub fn take_volume(&self) -> Option<VolumeReading> {
+        self.shared.volume.lock().expect("media volume lock").take()
+    }
 }
 
 impl Drop for MediaService {
@@ -239,7 +291,7 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
-    fn wait_for<T>(mut poll: impl FnMut() -> Option<T>, what: &str) -> T {
+    pub(super) fn wait_for<T>(mut poll: impl FnMut() -> Option<T>, what: &str) -> T {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             if let Some(found) = poll() {
@@ -248,6 +300,36 @@ mod tests {
             assert!(Instant::now() < deadline, "{what} did not arrive");
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn slider_wishes_for_one_player_merge_and_another_player_replaces_them() {
+        let service = MediaService {
+            shared: Arc::new(Shared::default()),
+        };
+        let waiting = || service.shared.work.lock().unwrap().volume.clone();
+        service.read_volume("Spotify.exe".into());
+        service.set_volume("Spotify.exe".into(), 40);
+        service.set_volume("Spotify.exe".into(), 55);
+        assert_eq!(
+            waiting(),
+            Some(VolumeWork {
+                app_id: "Spotify.exe".into(),
+                set: Some(55),
+                read: true,
+            })
+        );
+        assert!(service.shared.work.lock().unwrap().pending());
+        service.read_volume("Chrome".into());
+        assert_eq!(
+            waiting(),
+            Some(VolumeWork {
+                app_id: "Chrome".into(),
+                set: None,
+                read: true,
+            })
+        );
+        assert!(service.take_volume().is_none());
     }
 
     /// The whole path a press takes, against the person's own player. It only asks a player

@@ -10,7 +10,7 @@ use super::{
 use super::{
     view::{
         View, INPUT_ID, MEDIA_INFO_ID, MEDIA_NEXT_ID, MEDIA_PLAY_ID, MEDIA_PREVIOUS_ID,
-        MEDIA_PROGRESS_TIMER, RESULTS_ID, SETTINGS_ID,
+        MEDIA_PROGRESS_TIMER, MEDIA_VOLUME_CHANGED, MEDIA_VOLUME_WANTED, RESULTS_ID, SETTINGS_ID,
     },
     wide,
 };
@@ -607,6 +607,20 @@ unsafe extern "system" fn window_proc(
         }
         WM_COMMAND if word.0 & 0xffff == MEDIA_INFO_ID && (word.0 >> 16) as u32 == STN_CLICKED => {
             shell.media_info_clicked();
+            LRESULT(0)
+        }
+        // The bar's volume slider: revealed by the pointer on the album art, then moved.
+        WM_COMMAND
+            if word.0 & 0xffff == MEDIA_INFO_ID && (word.0 >> 16) as u32 == MEDIA_VOLUME_WANTED =>
+        {
+            shell.media_volume_wanted();
+            LRESULT(0)
+        }
+        WM_COMMAND
+            if word.0 & 0xffff == MEDIA_INFO_ID
+                && (word.0 >> 16) as u32 == MEDIA_VOLUME_CHANGED =>
+        {
+            shell.media_volume_changed();
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {

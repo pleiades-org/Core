@@ -329,6 +329,9 @@ mod tests {
                     Err(error) => panic!("could not accept test request: {error}"),
                 }
             };
+            // A connection accepted from a non-blocking listener is non-blocking too, and
+            // would be read before the request arrives.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
@@ -384,6 +387,68 @@ mod tests {
         for length in ["11", "18446744073709551615", "-1", "invalid"] {
             assert!(validate_length(Some(length), 10).is_err());
         }
+    }
+
+    /// Spotify's volume is set by a PUT without a body, which it refuses unless the request
+    /// still declares a length of zero.
+    #[test]
+    fn a_put_without_a_body_still_declares_its_empty_length() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0; 1024];
+            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                let read = stream.read(&mut chunk).unwrap();
+                assert_ne!(read, 0);
+                request.extend_from_slice(&chunk[..read]);
+                assert!(request.len() < 8192);
+            }
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        let response = exchange(
+            Exchange {
+                endpoint: Request {
+                    secure: false,
+                    host: "127.0.0.1",
+                    port,
+                    path: "/v1/me/player/volume?volume_percent=40",
+                    max_bytes: 1024,
+                },
+                method: "PUT",
+                headers: "Authorization: Bearer test-only\r\nContent-Type: application/json\r\n",
+                body: &[],
+            },
+            Instant::now() + Duration::from_secs(4),
+        )
+        .unwrap();
+        let request = server.join().unwrap();
+        assert!(request.starts_with("PUT /v1/me/player/volume?volume_percent=40 HTTP/1.1"));
+        let (headers, body) = request.split_once("\r\n\r\n").unwrap();
+        let content_length = headers.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("Content-Length")
+                .then_some(value.trim())
+        });
+        assert_eq!(content_length, Some("0"));
+        assert!(body.is_empty());
+        assert_eq!(response.status, 204);
+        assert!(response.body.is_empty());
     }
 
     #[test]

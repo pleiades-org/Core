@@ -73,6 +73,76 @@ pub fn fill(context: HDC, area: &RECT, color: COLORREF) {
     }
 }
 
+/// Blends `color` over what is already drawn in `area`, at `opacity` of 255: a flat colour has
+/// no shape of its own, so one pixel of it stretched over the area is enough.
+pub fn veil(context: HDC, area: &RECT, color: COLORREF, opacity: u8) {
+    unsafe {
+        let source = CreateCompatibleDC(Some(context));
+        let pixel = CreateCompatibleBitmap(context, 1, 1);
+        if !source.0.is_null() && !pixel.0.is_null() {
+            let previous = SelectObject(source, pixel.into());
+            let _ = SetPixelV(source, 0, 0, color);
+            let _ = AlphaBlend(
+                context,
+                area.left,
+                area.top,
+                area.right - area.left,
+                area.bottom - area.top,
+                source,
+                0,
+                0,
+                1,
+                1,
+                BLENDFUNCTION {
+                    BlendOp: AC_SRC_OVER as u8,
+                    BlendFlags: 0,
+                    SourceConstantAlpha: opacity,
+                    AlphaFormat: 0,
+                },
+            );
+            SelectObject(source, previous);
+        }
+        let _ = DeleteObject(pixel.into());
+        let _ = DeleteDC(source);
+    }
+}
+
+/// Draws `area` off screen and copies it over in one step, so a control that repaints as fast
+/// as the pointer moves never shows a half-drawn frame. `draw` uses the same coordinates as on
+/// screen; if no off-screen surface can be made, it draws on screen directly.
+pub fn buffered(context: HDC, area: &RECT, draw: impl FnOnce(HDC)) {
+    let width = area.right - area.left;
+    let height = area.bottom - area.top;
+    unsafe {
+        let memory = CreateCompatibleDC(Some(context));
+        let surface = CreateCompatibleBitmap(context, width.max(1), height.max(1));
+        if memory.0.is_null() || surface.0.is_null() {
+            let _ = DeleteObject(surface.into());
+            let _ = DeleteDC(memory);
+            draw(context);
+            return;
+        }
+        let previous = SelectObject(memory, surface.into());
+        let _ = SetViewportOrgEx(memory, -area.left, -area.top, None);
+        draw(memory);
+        let _ = SetViewportOrgEx(memory, 0, 0, None);
+        let _ = BitBlt(
+            context,
+            area.left,
+            area.top,
+            width,
+            height,
+            Some(memory),
+            0,
+            0,
+            SRCCOPY,
+        );
+        SelectObject(memory, previous);
+        let _ = DeleteObject(surface.into());
+        let _ = DeleteDC(memory);
+    }
+}
+
 pub fn rounded(context: HDC, area: &RECT, radius: i32, fill: COLORREF) {
     unsafe {
         let state = SaveDC(context);
@@ -377,6 +447,102 @@ fn result_icon(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 4 x 4 off-screen surface filled with `color`, for reading back what was drawn on it.
+    struct Surface {
+        context: HDC,
+        bitmap: HBITMAP,
+        previous: HGDIOBJ,
+    }
+
+    impl Surface {
+        const SIZE: i32 = 4;
+
+        fn filled(color: COLORREF) -> Self {
+            unsafe {
+                let screen = GetDC(None);
+                let context = CreateCompatibleDC(Some(screen));
+                let bitmap = CreateCompatibleBitmap(screen, Self::SIZE, Self::SIZE);
+                ReleaseDC(None, screen);
+                let previous = SelectObject(context, bitmap.into());
+                fill(context, &rectangle(0, 0, Self::SIZE, Self::SIZE), color);
+                Self {
+                    context,
+                    bitmap,
+                    previous,
+                }
+            }
+        }
+
+        fn pixel(&self, x: i32, y: i32) -> COLORREF {
+            unsafe { GetPixel(self.context, x, y) }
+        }
+    }
+
+    impl Drop for Surface {
+        fn drop(&mut self) {
+            unsafe {
+                SelectObject(self.context, self.previous);
+                let _ = DeleteObject(self.bitmap.into());
+                let _ = DeleteDC(self.context);
+            }
+        }
+    }
+
+    fn gdi_objects() -> u32 {
+        use windows::Win32::System::Threading::{
+            GetCurrentProcess, GetGuiResources, GR_GDIOBJECTS,
+        };
+        unsafe { GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS) }
+    }
+
+    #[test]
+    fn a_veil_dims_only_its_area_toward_its_colour_and_releases_what_it_made() {
+        let _serial = crate::windows::GUI_RESOURCE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let white = COLORREF(0x00FF_FFFF);
+        let surface = Surface::filled(white);
+        let before = gdi_objects();
+        // Black at 178 of 255 leaves 30% of the white.
+        veil(surface.context, &rectangle(0, 0, 2, 4), COLORREF(0), 178);
+        assert_eq!(gdi_objects(), before);
+        let dimmed = surface.pixel(1, 3);
+        for shift in [0, 8, 16] {
+            let channel = (dimmed.0 >> shift) & 0xff;
+            assert!((74..=80).contains(&channel), "{channel}");
+        }
+        assert_eq!(surface.pixel(2, 3), white);
+        // The background's own colour over itself changes nothing, so corners stay as drawn.
+        veil(surface.context, &rectangle(2, 0, 4, 4), white, 178);
+        assert_eq!(surface.pixel(3, 0), white);
+    }
+
+    #[test]
+    fn buffered_drawing_arrives_whole_at_the_same_coordinates() {
+        let _serial = crate::windows::GUI_RESOURCE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (white, red, blue) = (
+            COLORREF(0x00FF_FFFF),
+            COLORREF(0x0000_00FF),
+            COLORREF(0x00FF_0000),
+        );
+        let surface = Surface::filled(white);
+        let before = gdi_objects();
+        let area = rectangle(1, 1, 4, 3);
+        buffered(surface.context, &area, |context| {
+            fill(context, &area, red);
+            fill(context, &rectangle(2, 2, 3, 3), blue);
+        });
+        assert_eq!(gdi_objects(), before);
+        assert_eq!(surface.pixel(1, 1), red);
+        assert_eq!(surface.pixel(3, 2), red);
+        assert_eq!(surface.pixel(2, 2), blue);
+        // Outside the area nothing changed.
+        assert_eq!(surface.pixel(0, 1), white);
+        assert_eq!(surface.pixel(1, 3), white);
+    }
 
     #[test]
     fn rectangles_intersect_only_when_they_share_a_pixel() {

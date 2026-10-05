@@ -125,14 +125,17 @@ impl Client {
         parse_songs(&response.body).map_err(|_| ApiError::invalid())
     }
 
+    /// `album`: the album the song is on, inside which it is started.
     pub fn play(
         &mut self,
         uri: &str,
+        album: Option<&str>,
         cancelled: &impl Fn() -> bool,
     ) -> ApiResult<super::playback::PlaybackTarget> {
         super::playback::play_song(
             self,
             uri,
+            album,
             &std::env::var("COMPUTERNAME").unwrap_or_default(),
             super::playback::wait,
             cancelled,
@@ -320,7 +323,17 @@ pub(super) fn string(object: &JsonObject, name: &str) -> ApiResult<String> {
 }
 
 pub fn valid_track_uri(uri: &str) -> bool {
-    uri.strip_prefix("spotify:track:")
+    valid_uri(uri, "spotify:track:")
+}
+
+pub fn valid_album_uri(uri: &str) -> bool {
+    valid_uri(uri, "spotify:album:")
+}
+
+/// Spotify's addresses are a kind and 22 letters or digits. They are written into requests,
+/// so nothing else may pass.
+fn valid_uri(uri: &str, kind: &str) -> bool {
+    uri.strip_prefix(kind)
         .is_some_and(|id| id.len() == 22 && id.bytes().all(|byte| byte.is_ascii_alphanumeric()))
 }
 
@@ -367,11 +380,17 @@ fn parse_songs(bytes: &[u8]) -> ApiResult<Vec<Song>> {
             .and_then(|image| string(&image, "url").ok())
             .filter(|url| artwork_path(url).is_some())
             .map(Arc::from);
+        // A song whose album has no usable address still plays, on its own.
+        let album_uri = string(&album, "uri")
+            .ok()
+            .filter(|uri| valid_album_uri(uri))
+            .map(Arc::from);
         songs.push(Song {
             uri: uri.into(),
             title: bounded(string(&item, "name")?),
             artist: bounded(names.join(", ")),
             album: bounded(string(&album, "name")?),
+            album_uri,
             artwork,
         });
     }
@@ -392,26 +411,6 @@ pub fn artwork_path(url: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use std::{collections::VecDeque, sync::Mutex};
-
-    struct Apartment;
-    impl Apartment {
-        fn new() -> Self {
-            unsafe {
-                windows::Win32::System::WinRT::RoInitialize(
-                    windows::Win32::System::WinRT::RO_INIT_MULTITHREADED,
-                )
-            }
-            .unwrap();
-            Self
-        }
-    }
-    impl Drop for Apartment {
-        fn drop(&mut self) {
-            unsafe {
-                windows::Win32::System::WinRT::RoUninitialize();
-            }
-        }
-    }
 
     struct TestStorage(PathBuf);
     impl TestStorage {
@@ -501,6 +500,7 @@ mod tests {
             SpotifySettings {
                 enabled: true,
                 client_id: "a".repeat(32),
+                volume: true,
             },
             storage.path(),
         );
@@ -517,12 +517,20 @@ mod tests {
     }
     #[test]
     fn catalog_responses_produce_validated_playable_rows() {
-        let _apartment = Apartment::new();
-        let bytes = br#"{"tracks":{"items":[{"uri":"spotify:track:0123456789abcdefghijkl","name":"Song","artists":[{"name":"Artist"}],"album":{"name":"Album","images":[{"url":"https://i.scdn.co/image/abc"}]}}]}}"#;
+        let _runtime = crate::windows::TestRuntime::enter();
+        let bytes = br#"{"tracks":{"items":[{"uri":"spotify:track:0123456789abcdefghijkl","name":"Song","artists":[{"name":"Artist"}],"album":{"name":"Album","uri":"spotify:album:abcdefghijkl0123456789","images":[{"url":"https://i.scdn.co/image/abc"}]}},{"uri":"spotify:track:abcdefghijkl0123456789","name":"Other","artists":[{"name":"Artist"}],"album":{"name":"Album","uri":"spotify:album:bad\",\"uris\":[]"}},{"uri":"spotify:track:ABCDEFGHIJKL0123456789","name":"Third","artists":[{"name":"Artist"}],"album":{"name":"Album"}}]}}"#;
         let songs = parse_songs(bytes).unwrap_or_else(|_| panic!("valid catalog response"));
         assert_eq!(songs[0].title.as_ref(), "Song");
         assert_eq!(songs[0].artist.as_ref(), "Artist");
+        assert_eq!(
+            songs[0].album_uri.as_deref(),
+            Some("spotify:album:abcdefghijkl0123456789")
+        );
         assert!(songs[0].artwork.is_some());
+        // An album address that is malformed or missing leaves a song that plays on its own.
+        assert_eq!(songs.len(), 3);
+        assert!(songs[1].album_uri.is_none() && songs[2].album_uri.is_none());
+        assert!(!valid_album_uri("spotify:track:0123456789abcdefghijkl"));
         assert!(!valid_track_uri("spotify:track:bad\"injection"));
         assert!(artwork_path("https://i.scdn.co.evil/image/abc").is_none());
         assert!(parse_songs(br#"{"tracks":{"items":[{}]}}"#).is_err());
@@ -547,7 +555,7 @@ mod tests {
 
     #[test]
     fn catalog_search_encodes_unicode_and_authenticates_only_to_spotify() {
-        let _apartment = Apartment::new();
+        let _runtime = crate::windows::TestRuntime::enter();
         let storage = TestStorage::new();
         let (mut client, requests) = mock_client(
             &storage,
@@ -566,39 +574,62 @@ mod tests {
 
     #[test]
     fn enter_plays_exactly_the_selected_track_and_rejects_invalid_uris_before_sending() {
-        let _apartment = Apartment::new();
+        let _runtime = crate::windows::TestRuntime::enter();
         let storage = TestStorage::new();
         let uri = "spotify:track:0123456789abcdefghijkl";
-        let (mut client, requests) = mock_client(
-            &storage,
+        let album = "spotify:album:abcdefghijkl0123456789";
+        let started = || {
             vec![
                 devices_response(),
                 response(204, "", None),
                 playback_response(uri, true),
-            ],
-        );
+            ]
+        };
+        let mut responses = started();
+        responses.extend(started());
+        responses.extend(started());
+        let (mut client, requests) = mock_client(&storage, responses);
         assert_eq!(
-            client.play(uri, &|| false).unwrap().name.as_ref(),
+            client
+                .play(uri, Some(album), &|| false)
+                .unwrap()
+                .name
+                .as_ref(),
             "This PC"
         );
-        assert!(client.play("spotify:track:invalid", &|| false).is_err());
+        assert!(client
+            .play("spotify:track:invalid", Some(album), &|| false)
+            .is_err());
+        // Without an album, or with an address that is not one, the song is asked for on its
+        // own; a malformed address is never written into the request.
+        assert!(client.play(uri, None, &|| false).is_ok());
+        assert!(client
+            .play(uri, Some("spotify:album:bad\",\"uris\":[]"), &|| false)
+            .is_ok());
         let requests = requests.lock().unwrap();
-        assert_eq!(requests.len(), 3);
+        assert_eq!(requests.len(), 9);
         assert_eq!(requests[0].method, "GET");
         assert_eq!(requests[0].path, "/v1/me/player/devices");
         assert_eq!(requests[1].method, "PUT");
         assert_eq!(requests[1].path, "/v1/me/player/play?device_id=pc_device");
+        // Inside its album, at the song, from its start: the form the desktop app plays.
         assert_eq!(
             requests[1].body,
-            br#"{"uris":["spotify:track:0123456789abcdefghijkl"],"position_ms":0}"#
+            br#"{"context_uri":"spotify:album:abcdefghijkl0123456789","offset":{"uri":"spotify:track:0123456789abcdefghijkl"},"position_ms":0}"#
         );
         assert_eq!(requests[2].method, "GET");
         assert_eq!(requests[2].path, "/v1/me/player");
+        for alone in [&requests[4], &requests[7]] {
+            assert_eq!(
+                alone.body,
+                br#"{"uris":["spotify:track:0123456789abcdefghijkl"],"position_ms":0}"#
+            );
+        }
     }
 
     #[test]
     fn expired_access_is_refreshed_once_and_rotated_credentials_are_saved() {
-        let _apartment = Apartment::new();
+        let _runtime = crate::windows::TestRuntime::enter();
         let storage = TestStorage::new();
         let tokens = r#"{"access_token":"replacement-access","refresh_token":"replacement-refresh","token_type":"Bearer","expires_in":3600}"#;
         let (mut client, requests) = mock_client(
@@ -612,7 +643,7 @@ mod tests {
             ],
         );
         assert!(client
-            .play("spotify:track:0123456789abcdefghijkl", &|| false)
+            .play("spotify:track:0123456789abcdefghijkl", None, &|| false)
             .is_ok());
         assert_eq!(
             token_store::load(&storage.path(), &client.settings.client_id)
@@ -632,7 +663,7 @@ mod tests {
 
     #[test]
     fn choosing_the_web_player_in_spotify_keeps_playback_off_the_inactive_desktop() {
-        let _apartment = Apartment::new();
+        let _runtime = crate::windows::TestRuntime::enter();
         let storage = TestStorage::new();
         let devices = r#"{"devices":[{"id":"pc_device","name":"This PC","type":"Computer","is_active":false,"is_restricted":false},{"id":"web_device","name":"Web Player (Chrome)","type":"Computer","is_active":true,"is_restricted":false}]}"#;
         let playback = r#"{"device":{"id":"web_device"},"is_playing":true,"item":{"uri":"spotify:track:0123456789abcdefghijkl"}}"#;
@@ -648,6 +679,7 @@ mod tests {
         let result = super::super::playback::play_song(
             &mut client,
             "spotify:track:0123456789abcdefghijkl",
+            None,
             "This PC",
             |_| {},
             &|| false,
@@ -666,7 +698,7 @@ mod tests {
 
     #[test]
     fn a_successful_http_response_without_playback_is_reported_as_a_failure() {
-        let _apartment = Apartment::new();
+        let _runtime = crate::windows::TestRuntime::enter();
         let storage = TestStorage::new();
         let mut responses = vec![devices_response(), response(204, "", None)];
         responses.extend((0..5).map(|_| response(204, "", None)));
@@ -675,6 +707,7 @@ mod tests {
         let result = super::super::playback::play_song(
             &mut client,
             "spotify:track:0123456789abcdefghijkl",
+            None,
             "This PC",
             |_| {},
             &|| false,
@@ -694,7 +727,7 @@ mod tests {
 
     #[test]
     fn a_selected_track_that_remains_paused_is_resumed_once_on_the_same_device() {
-        let _apartment = Apartment::new();
+        let _runtime = crate::windows::TestRuntime::enter();
         let storage = TestStorage::new();
         let uri = "spotify:track:0123456789abcdefghijkl";
         let (mut client, requests) = mock_client(
@@ -709,8 +742,14 @@ mod tests {
             ],
         );
 
-        let result =
-            super::super::playback::play_song(&mut client, uri, "This PC", |_| {}, &|| false);
+        let result = super::super::playback::play_song(
+            &mut client,
+            uri,
+            Some("spotify:album:abcdefghijkl0123456789"),
+            "This PC",
+            |_| {},
+            &|| false,
+        );
 
         assert!(result.is_ok());
         let requests = requests.lock().unwrap();
@@ -720,12 +759,92 @@ mod tests {
             .collect();
         assert_eq!(commands.len(), 2);
         assert_eq!(commands[0].path, commands[1].path);
+        // The retry asks for the same song inside the same album again.
         assert_eq!(commands[1].body, commands[0].body);
+        assert!(commands[0].body.starts_with(br#"{"context_uri":"#));
+    }
+
+    #[test]
+    fn the_sliders_volume_is_read_from_and_set_on_the_active_device() {
+        use super::super::volume::{read_volume, set_volume};
+        let _runtime = crate::windows::TestRuntime::enter();
+        let storage = TestStorage::new();
+        let (mut client, requests) = mock_client(
+            &storage,
+            vec![
+                response(
+                    200,
+                    r#"{"device":{"id":"pc_device","volume_percent":64,"supports_volume":true},"is_playing":true}"#,
+                    None,
+                ),
+                response(204, "", None),
+            ],
+        );
+        assert_eq!(read_volume(&mut client).unwrap(), 64);
+        // Levels above full, as a careless caller might send, are full.
+        assert!(set_volume(&mut client, 130, &|| false).is_ok());
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].method, "GET");
+        assert_eq!(requests[0].path, "/v1/me/player");
+        assert_eq!(requests[1].host, "api.spotify.com");
+        assert_eq!(requests[1].method, "PUT");
+        assert_eq!(requests[1].path, "/v1/me/player/volume?volume_percent=100");
+        assert!(requests[1].body.is_empty());
+        assert!(requests[1]
+            .headers
+            .contains("Authorization: Bearer initial-access\r\n"));
+    }
+
+    #[test]
+    fn a_missing_or_fixed_volume_is_explained_instead_of_shown_as_zero() {
+        use super::super::volume::{read_volume, set_volume};
+        let _runtime = crate::windows::TestRuntime::enter();
+        let storage = TestStorage::new();
+        let (mut client, requests) = mock_client(
+            &storage,
+            vec![
+                // Nothing is playing anywhere.
+                response(204, "", None),
+                response(
+                    200,
+                    r#"{"device":{"id":"tv","volume_percent":100,"supports_volume":false}}"#,
+                    None,
+                ),
+                response(
+                    200,
+                    r#"{"device":{"id":"cast","volume_percent":null}}"#,
+                    None,
+                ),
+                response(200, r#"{"is_playing":true}"#, None),
+                // A free account may read the volume but not change it.
+                response(403, "", None),
+            ],
+        );
+        assert!(read_volume(&mut client)
+            .unwrap_err()
+            .message
+            .contains("No Spotify device is active"));
+        for _ in 0..2 {
+            assert!(read_volume(&mut client)
+                .unwrap_err()
+                .message
+                .contains("does not let apps change its volume"));
+        }
+        assert!(read_volume(&mut client)
+            .unwrap_err()
+            .message
+            .contains("invalid response"));
+        let refused = set_volume(&mut client, 40, &|| false).unwrap_err();
+        assert_eq!(refused.status, SongStatus::AccessDenied);
+        // A cancelled change sends nothing.
+        assert!(set_volume(&mut client, 40, &|| true).is_err());
+        assert_eq!(requests.lock().unwrap().len(), 5);
     }
 
     #[test]
     fn an_old_track_is_never_resumed_or_reported_as_the_selected_song() {
-        let _apartment = Apartment::new();
+        let _runtime = crate::windows::TestRuntime::enter();
         let storage = TestStorage::new();
         let mut responses = vec![devices_response(), response(204, "", None)];
         responses.extend(
@@ -736,6 +855,7 @@ mod tests {
         assert!(super::super::playback::play_song(
             &mut client,
             "spotify:track:0123456789abcdefghijkl",
+            None,
             "This PC",
             |_| {},
             &|| false
@@ -756,7 +876,7 @@ mod tests {
     #[test]
     fn cancellation_after_device_lookup_never_sends_a_play_command() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let _apartment = Apartment::new();
+        let _runtime = crate::windows::TestRuntime::enter();
         let storage = TestStorage::new();
         let (mut client, requests) = mock_client(&storage, vec![devices_response()]);
         let checks = AtomicUsize::new(0);
@@ -765,6 +885,7 @@ mod tests {
         assert!(super::super::playback::play_song(
             &mut client,
             "spotify:track:0123456789abcdefghijkl",
+            None,
             "This PC",
             |_| {},
             &cancelled
@@ -782,7 +903,7 @@ mod tests {
         let (mut client, requests) = mock_client(&storage, vec![response(403, "", None)]);
 
         let error = client
-            .play("spotify:track:0123456789abcdefghijkl", &|| false)
+            .play("spotify:track:0123456789abcdefghijkl", None, &|| false)
             .unwrap_err();
 
         assert_eq!(error.status, SongStatus::ConnectRequired);
@@ -793,7 +914,7 @@ mod tests {
     #[test]
     fn cancellation_during_token_refresh_prevents_retrying_the_play_command() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let _apartment = Apartment::new();
+        let _runtime = crate::windows::TestRuntime::enter();
         let storage = TestStorage::new();
         let tokens = r#"{"access_token":"replacement-access","refresh_token":"replacement-refresh","token_type":"Bearer","expires_in":3600}"#;
         let (mut client, requests) = mock_client(
@@ -810,6 +931,7 @@ mod tests {
         let error = super::super::playback::play_song(
             &mut client,
             "spotify:track:0123456789abcdefghijkl",
+            None,
             "This PC",
             |_| {},
             &cancelled,
@@ -831,13 +953,13 @@ mod tests {
 
     #[test]
     fn restricted_devices_and_missing_or_invalid_ids_are_never_targeted() {
-        let _apartment = Apartment::new();
+        let _runtime = crate::windows::TestRuntime::enter();
         let storage = TestStorage::new();
         let devices = r#"{"devices":[{"id":null,"is_restricted":false},{"id":"restricted_pc","is_restricted":true},{"id":"bad&id=other","is_restricted":false}]}"#;
         let (mut client, requests) = mock_client(&storage, vec![response(200, devices, None)]);
 
         assert!(client
-            .play("spotify:track:0123456789abcdefghijkl", &|| false)
+            .play("spotify:track:0123456789abcdefghijkl", None, &|| false)
             .is_err());
 
         let requests = requests.lock().unwrap();
@@ -847,7 +969,7 @@ mod tests {
 
     #[test]
     fn the_final_confirmation_read_never_sends_a_retry_it_cannot_observe() {
-        let _apartment = Apartment::new();
+        let _runtime = crate::windows::TestRuntime::enter();
         let storage = TestStorage::new();
         let uri = "spotify:track:0123456789abcdefghijkl";
         let mut responses = vec![devices_response(), response(204, "", None)];
@@ -855,10 +977,15 @@ mod tests {
         responses.push(playback_response(uri, false));
         let (mut client, requests) = mock_client(&storage, responses);
 
-        assert!(
-            super::super::playback::play_song(&mut client, uri, "This PC", |_| {}, &|| false)
-                .is_err()
-        );
+        assert!(super::super::playback::play_song(
+            &mut client,
+            uri,
+            None,
+            "This PC",
+            |_| {},
+            &|| false
+        )
+        .is_err());
 
         let requests = requests.lock().unwrap();
         assert_eq!(requests.len(), 7);
@@ -873,19 +1000,19 @@ mod tests {
 
     #[test]
     fn throttled_requests_wait_for_spotify_and_failed_tokens_never_become_credentials() {
-        let _apartment = Apartment::new();
+        let _runtime = crate::windows::TestRuntime::enter();
         let storage = TestStorage::new();
         let (mut client, requests) = mock_client(&storage, vec![response(429, "", Some(3600))]);
         assert_eq!(
             client
-                .play("spotify:track:0123456789abcdefghijkl", &|| false)
+                .play("spotify:track:0123456789abcdefghijkl", None, &|| false)
                 .unwrap_err()
                 .status,
             SongStatus::RateLimited
         );
         assert_eq!(
             client
-                .play("spotify:track:0123456789abcdefghijkl", &|| false)
+                .play("spotify:track:0123456789abcdefghijkl", None, &|| false)
                 .unwrap_err()
                 .status,
             SongStatus::RateLimited
