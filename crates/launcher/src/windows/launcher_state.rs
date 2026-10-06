@@ -1,7 +1,10 @@
+mod alias_flow;
 mod command_flow;
 pub use command_flow::{run_mode, COMMAND_OUTPUT_TIMER};
 mod footer;
 mod media_flow;
+mod mixer_flow;
+pub use mixer_flow::MIXER_TIMER;
 mod settings_flow;
 mod song_flow;
 mod update_flow;
@@ -157,6 +160,7 @@ pub struct LauncherState {
     /// How Enter runs a shell command; kept until an accept that had to wait completes.
     accept_mode: RunMode,
     pub media: media_flow::MediaFlow,
+    mixer: mixer_flow::MixerFlow,
     songs: song_flow::SongFlow,
     /// Something was typed since Core was shown, so the now-playing bar keeps its place.
     typed_since_show: bool,
@@ -229,6 +233,7 @@ impl LauncherState {
             working_directory: super::commands::home(),
             accept_mode: RunMode::Capture,
             media: media_flow::MediaFlow::default(),
+            mixer: mixer_flow::MixerFlow::default(),
             songs: song_flow::SongFlow::default(),
             typed_since_show: false,
             shortcuts_suspended: false,
@@ -315,8 +320,10 @@ impl LauncherState {
         self.generation += 1;
         self.pending_accept = None;
         self.searched_query = view.query();
-        let query = self.searched_query.clone();
+        // An alias typed as the first word stands for something longer; Core acts on that.
+        let query = self.expand_aliases(&self.searched_query);
         self.media_for_query(&query);
+        self.mixer_for_query(&query);
         self.info_requested(&query);
         self.songs_for_query(&query);
         let media = self.media_state();
@@ -324,13 +331,14 @@ impl LauncherState {
         if let Some(worker) = &self.worker {
             worker.submit(
                 self.generation,
-                self.searched_query.clone(),
+                query,
                 SearchContext {
                     catalog: self.catalog.clone(),
                     quicklinks: self.settings.saved.quicklinks.clone(),
                     exchange_rates: self.exchange_rates.clone(),
                     recent_applications: self.recent_applications.clone(),
                     media,
+                    mixer: self.mixer_snapshot(),
                     app_info,
                     songs: self.songs.snapshot.clone(),
                 },
@@ -445,6 +453,7 @@ impl LauncherState {
                     }
                     Action::OpenQuicklink(link) => quicklink_icon_source(link)?,
                     Action::PlaySong(song) => IconSource::SpotifyArtwork(song.artwork.clone()?),
+                    Action::Mixer { app, .. } => mixer_icon_source(app)?,
                     _ => return None,
                 };
                 Some(IconRequest {
@@ -527,6 +536,7 @@ impl LauncherState {
             } else {
                 self.cancel_background_work();
                 self.media_hidden(window);
+                self.stop_mixer();
             }
         }
     }
@@ -610,6 +620,11 @@ impl LauncherState {
             self.send_media(super::media::MediaAction::Control(command), target);
             return;
         }
+        // So does the volume mixer: Enter mutes a row or lets it be heard again.
+        if let Action::Mixer { .. } = action {
+            self.toggle_mixer_mute();
+            return;
+        }
         self.pending_action = Some(match action {
             Action::PlaySong(song) => {
                 self.play_song(song);
@@ -654,6 +669,9 @@ impl LauncherState {
             }
             Action::Media { .. } => {
                 unreachable!("media controls are sent before platform dispatch")
+            }
+            Action::Mixer { .. } => {
+                unreachable!("the volume mixer's rows are muted before platform dispatch")
             }
         });
     }
@@ -740,6 +758,12 @@ fn quicklink_icon_source(link: &str) -> Option<IconSource> {
     })
 }
 
+/// A program in the volume mixer shows its own icon; the whole PC's volume is no program's and
+/// keeps the speakers.
+fn mixer_icon_source(app: &str) -> Option<IconSource> {
+    (app != core_engine::media::SYSTEM_VOLUME_ID).then(|| IconSource::Shell(PathBuf::from(app)))
+}
+
 /// `--exchange-rates-file <path>` uses a fixed ECB file and never downloads.
 fn exchange_rates_file() -> Option<PathBuf> {
     let mut arguments = std::env::args_os();
@@ -791,5 +815,14 @@ mod tests {
         ] {
             assert!(quicklink_icon_source(link).is_none(), "{link}");
         }
+    }
+
+    #[test]
+    fn programs_in_the_mixer_show_their_own_icon_and_the_pc_does_not() {
+        assert!(matches!(
+            mixer_icon_source(r"c:\apps\spotify.exe"),
+            Some(IconSource::Shell(path)) if path.as_os_str() == r"c:\apps\spotify.exe"
+        ));
+        assert!(mixer_icon_source(core_engine::media::SYSTEM_VOLUME_ID).is_none());
     }
 }

@@ -239,11 +239,7 @@ impl LauncherState {
         let result = self
             .spotify_service()
             .and_then(|service| service.play(request_id, &song));
-        let query = self
-            .view
-            .as_ref()
-            .map(|view| view.query())
-            .unwrap_or_default();
+        let query = self.acted_query();
         self.songs
             .playback_started(request_id, &query, &song, result);
         self.refresh_footer();

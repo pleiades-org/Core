@@ -1,6 +1,7 @@
 //! Pure launcher query interpretation, matching and calculation.
 //! Platform adapters own all filesystem, windowing and launch side effects.
 
+pub mod aliases;
 pub mod applications;
 pub mod calculator;
 pub mod conversions;

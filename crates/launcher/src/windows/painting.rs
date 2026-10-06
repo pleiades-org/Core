@@ -4,9 +4,21 @@ use super::{
     wide,
 };
 pub use core_engine::search::ResultKind;
-use core_engine::search::SearchResult;
+use core_engine::{
+    media::VolumeLevel,
+    search::{Action, SearchResult},
+};
 use std::sync::Arc;
 use windows::Win32::{Foundation::*, Graphics::Gdi::*};
+
+/// The speakers of the icon font: a row of the volume mixer that has no program's icon.
+const SPEAKERS_GLYPH: &str = "\u{e7f5}";
+/// The size the icon font draws a glyph at, to centre one in its area. In 96-DPI pixels.
+const GLYPH_SIZE: i32 = 20;
+/// Where a row's text starts, and how far before the row's end it stops: the room at the end
+/// is the Enter hint's. In 96-DPI pixels.
+pub const ROW_TEXT_LEFT: i32 = 56;
+const ROW_HINT_WIDTH: i32 = 40;
 
 pub struct DisplayRow {
     pub identifier: Arc<str>,
@@ -14,6 +26,8 @@ pub struct DisplayRow {
     pub title: Arc<str>,
     pub detail: String,
     pub kind: ResultKind,
+    /// A row of the volume mixer carries its level, drawn as a slider.
+    pub volume: Option<VolumeLevel>,
 }
 
 impl DisplayRow {
@@ -30,7 +44,8 @@ impl DisplayRow {
             | ResultKind::Power
             | ResultKind::System
             | ResultKind::Terminal
-            | ResultKind::Media => result.description.to_string(),
+            | ResultKind::Media
+            | ResultKind::Volume => result.description.to_string(),
         };
         Self {
             identifier: result.id.clone(),
@@ -38,6 +53,10 @@ impl DisplayRow {
             title: result.title.clone(),
             detail,
             kind: result.kind,
+            volume: match &result.action {
+                Action::Mixer { level, .. } => Some(*level),
+                _ => None,
+            },
         }
     }
 }
@@ -180,6 +199,20 @@ pub fn text(context: HDC, label: &str, mut area: RECT, font: HFONT, color: COLOR
     }
 }
 
+/// A glyph of the icon font, centred in `area`.
+pub fn centred_glyph(
+    context: HDC,
+    area: RECT,
+    glyph: &str,
+    dpi: u32,
+    font: HFONT,
+    color: COLORREF,
+) {
+    let mut glyph_area = area;
+    glyph_area.left += (area.right - area.left - scale(GLYPH_SIZE, dpi)) / 2;
+    text(context, glyph, glyph_area, font, color);
+}
+
 pub fn line(context: HDC, start: (i32, i32), end: (i32, i32), color: COLORREF) {
     unsafe {
         let state = SaveDC(context);
@@ -223,16 +256,49 @@ pub fn result_row(
     dpi: u32,
     palette: theme::Palette,
 ) {
-    fill(context, &area, palette.background);
+    row_surface(context, &area, selected, dpi, palette);
+    if is_answer(row.kind) {
+        answer_row(context, area, row, fonts, dpi, palette);
+        return;
+    }
+    let right = area.right - scale(ROW_HINT_WIDTH, dpi);
+    row_identity(context, area, right, row, fonts, dpi, palette);
+    if selected {
+        text(
+            context,
+            "↵",
+            rectangle(
+                right + scale(10, dpi),
+                area.top,
+                area.right - scale(10, dpi),
+                area.bottom,
+            ),
+            fonts.title,
+            palette.accent,
+        );
+    }
+}
+
+/// A row's background, and the rounded highlight when it is selected.
+pub fn row_surface(context: HDC, area: &RECT, selected: bool, dpi: u32, palette: theme::Palette) {
+    fill(context, area, palette.background);
     let inset = scale(2, dpi);
     let surface = rectangle(area.left, area.top + inset, area.right, area.bottom - inset);
     if selected {
         rounded(context, &surface, scale(9, dpi), palette.selected);
     }
-    if is_answer(row.kind) {
-        answer_row(context, area, row, fonts, dpi, palette);
-        return;
-    }
+}
+
+/// A row's icon, and beside it the title over the detail, as far as `right`.
+pub fn row_identity(
+    context: HDC,
+    area: RECT,
+    right: i32,
+    row: &DisplayRow,
+    fonts: theme::Fonts,
+    dpi: u32,
+    palette: theme::Palette,
+) {
     let icon_area = rectangle(
         area.left + scale(12, dpi),
         area.top + scale(11, dpi),
@@ -247,8 +313,7 @@ pub fn result_row(
     if !icon_drawn {
         result_icon(context, icon_area, row.kind, fonts, dpi, palette.accent);
     }
-    let left = area.left + scale(56, dpi);
-    let right = area.right - scale(40, dpi);
+    let left = area.left + scale(ROW_TEXT_LEFT, dpi);
     text(
         context,
         &row.title,
@@ -273,20 +338,6 @@ pub fn result_row(
         fonts.detail,
         palette.secondary,
     );
-    if selected {
-        text(
-            context,
-            "↵",
-            rectangle(
-                right + scale(10, dpi),
-                area.top,
-                area.right - scale(10, dpi),
-                area.bottom,
-            ),
-            fonts.title,
-            palette.accent,
-        );
-    }
 }
 
 /// One tile of the recently used grid: the icon centred at the top, the name below it on up to
@@ -414,6 +465,10 @@ fn result_icon(
     dpi: u32,
     color: COLORREF,
 ) {
+    if kind == ResultKind::Volume {
+        centred_glyph(context, area, SPEAKERS_GLYPH, dpi, fonts.icon, color);
+        return;
+    }
     let left = area.left + scale(9, dpi);
     let top = area.top + scale(9, dpi);
     if matches!(kind, ResultKind::Application | ResultKind::Recent) {

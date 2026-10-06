@@ -51,12 +51,7 @@ impl LauncherState {
     /// An update check ended: the footer and an open `@info` show the new status.
     pub fn update_status_changed(&mut self) {
         self.refresh_footer();
-        if self.visible
-            && self
-                .view
-                .as_ref()
-                .is_some_and(|view| wants_info(&view.query()))
-        {
+        if self.visible && self.view.is_some() && wants_info(&self.acted_query()) {
             self.queue_search();
         }
     }

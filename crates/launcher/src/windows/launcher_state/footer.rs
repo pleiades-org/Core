@@ -8,17 +8,18 @@ impl LauncherState {
     /// Keep the footer tied to the selected action while preserving errors and run status.
     pub fn refresh_footer(&self) {
         let Some(view) = &self.view else { return };
+        let query = self.acted_query();
         if let Some(result) = self.batch.results.get(view.selected()) {
-            if let Some(message) = self.songs.playback_notice(&view.query(), &result.id) {
+            if let Some(message) = self.songs.playback_notice(&query, &result.id) {
                 view.set_footer(message);
                 return;
             }
         }
-        if view.query().trim().eq_ignore_ascii_case("@update") {
+        if query.trim().eq_ignore_ascii_case("@update") {
             view.set_footer(&self.update_hint());
             return;
         }
-        if core_engine::search::wants_info(&view.query()) {
+        if core_engine::search::wants_info(&query) {
             match self
                 .batch
                 .results
@@ -86,6 +87,8 @@ fn action_hint(action: &Action) -> &'static str {
             MediaCommand::Next => "Enter for the next track",
             MediaCommand::Previous => "Enter for the previous track",
         },
+        Action::Mixer { level, .. } if level.muted => "← → volume · Enter to unmute",
+        Action::Mixer { .. } => "← → volume · Enter to mute",
     }
 }
 
@@ -121,5 +124,16 @@ mod tests {
                 "Enter to run as admin"
             ]
         );
+    }
+
+    #[test]
+    fn a_mixer_row_says_what_enter_does_to_it() {
+        use core_engine::media::VolumeLevel;
+        let row = |muted: bool| Action::Mixer {
+            app: "game".into(),
+            level: VolumeLevel::new(40, muted),
+        };
+        assert_eq!(action_hint(&row(false)), "← → volume · Enter to mute");
+        assert_eq!(action_hint(&row(true)), "← → volume · Enter to unmute");
     }
 }

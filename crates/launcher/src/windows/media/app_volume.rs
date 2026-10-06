@@ -36,24 +36,15 @@ impl AppVolume {
     /// Finds the player's sessions as they are now. None are found while it plays no sound
     /// through this PC: stopped long enough for Windows to close them, or playing elsewhere.
     fn find(app_id: &Arc<str>) -> Result<Self> {
-        let enumerator: IMMDeviceEnumerator =
-            unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)? };
-        let devices = unsafe { enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)? };
         let mut processes = PlayerProcesses::new(app_id);
-        let mut found: Vec<(bool, ISimpleAudioVolume)> = Vec::new();
-        for index in 0..unsafe { devices.GetCount()? } {
-            // A device that cannot be read, such as one unplugged just now, hides no other.
-            let sessions = unsafe { devices.Item(index) }
-                .and_then(|device| device_sessions(&device, &mut processes));
-            match sessions {
-                Ok(sessions) => found.extend(sessions),
-                Err(error) => eprintln!("Could not read an audio device's sessions: {error}"),
-            }
-        }
-        found.sort_by_key(|(active, _)| !active);
+        let mut found: Vec<AudioSession> = audio_sessions(&output_devices()?)?
+            .into_iter()
+            .filter(|session| processes.includes(session.process))
+            .collect();
+        found.sort_by_key(|session| !session.active);
         Ok(Self {
             app_id: app_id.clone(),
-            sessions: found.into_iter().map(|(_, session)| session).collect(),
+            sessions: found.into_iter().map(|session| session.volume).collect(),
         })
     }
 
@@ -146,11 +137,35 @@ fn apply(
         .ok_or_else(silent)
 }
 
-/// The player's sessions on one device, each with whether it is playing now.
-fn device_sessions(
-    device: &IMMDevice,
-    processes: &mut PlayerProcesses,
-) -> Result<Vec<(bool, ISimpleAudioVolume)>> {
+/// One program's sound on one output device, as Windows' mixer keeps it.
+pub(super) struct AudioSession {
+    pub process: u32,
+    /// Playing sound right now.
+    pub active: bool,
+    pub volume: ISimpleAudioVolume,
+}
+
+/// Windows' list of sound devices, from which sessions and the PC's own volume are reached.
+pub(super) fn output_devices() -> Result<IMMDeviceEnumerator> {
+    unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
+}
+
+/// Every program's sessions on every active output device. A device that cannot be read, such
+/// as one unplugged just now, hides no other.
+pub(super) fn audio_sessions(devices: &IMMDeviceEnumerator) -> Result<Vec<AudioSession>> {
+    let outputs = unsafe { devices.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)? };
+    let mut found = Vec::new();
+    for index in 0..unsafe { outputs.GetCount()? } {
+        match unsafe { outputs.Item(index) }.and_then(|device| device_sessions(&device)) {
+            Ok(sessions) => found.extend(sessions),
+            Err(error) => eprintln!("Could not read an audio device's sessions: {error}"),
+        }
+    }
+    Ok(found)
+}
+
+/// The sessions on one device that have not ended, without Windows' own sounds.
+fn device_sessions(device: &IMMDevice) -> Result<Vec<AudioSession>> {
     let manager: IAudioSessionManager2 = unsafe { device.Activate(CLSCTX_ALL, None)? };
     let sessions = unsafe { manager.GetSessionEnumerator()? };
     let mut found = Vec::new();
@@ -159,10 +174,14 @@ fn device_sessions(
         let state = unsafe { control.GetState()? };
         // Process 0 is Windows' own sounds.
         let process = unsafe { control.GetProcessId() }.unwrap_or(0);
-        if state == AudioSessionStateExpired || process == 0 || !processes.includes(process) {
+        if state == AudioSessionStateExpired || process == 0 {
             continue;
         }
-        found.push((state == AudioSessionStateActive, control.cast()?));
+        found.push(AudioSession {
+            process,
+            active: state == AudioSessionStateActive,
+            volume: control.cast()?,
+        });
     }
     Ok(found)
 }

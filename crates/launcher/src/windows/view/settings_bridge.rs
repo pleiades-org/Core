@@ -91,10 +91,10 @@ impl View {
             .command(identifier, notification)
     }
 
-    pub fn scroll_quicklinks(&self, command: u16, wheel: Option<i16>) {
+    pub fn scroll_table(&self, command: u16, wheel: Option<i16>) {
         if self.settings_open() {
             if let Some(page) = self.settings_page.get() {
-                page.scroll_quicklinks(command, wheel);
+                page.scroll_table(command, wheel);
             }
             unsafe {
                 let _ = InvalidateRect(Some(self.parent), None, false);
@@ -102,12 +102,12 @@ impl View {
         }
     }
 
-    pub fn advance_quicklink_tab(&self, identifier: usize, backwards: bool) -> bool {
+    pub fn advance_table_tab(&self, identifier: usize, backwards: bool) -> bool {
         self.settings_open()
             && self
                 .settings_page
                 .get()
-                .is_some_and(|page| page.advance_quicklink_tab(identifier, backwards))
+                .is_some_and(|page| page.advance_table_tab(identifier, backwards))
     }
 
     pub fn settings_draft(&self) -> Result<crate::windows::settings::SettingsDocument, String> {

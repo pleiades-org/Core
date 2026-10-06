@@ -1,6 +1,8 @@
+mod alias_table;
 mod auto_save;
 pub(crate) mod control_style;
 mod document;
+mod entry_table;
 pub mod quicklink_table;
 mod scrollbar;
 pub use document::SettingsDocument;

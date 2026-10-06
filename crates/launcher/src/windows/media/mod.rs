@@ -28,6 +28,7 @@ macro_rules! finish {
 mod album_art;
 mod app_volume;
 mod hotkeys;
+mod mixer;
 mod read_sessions;
 mod send_command;
 mod session_worker;
@@ -45,7 +46,9 @@ pub fn decode_artwork(
 }
 
 use super::application_icon::ApplicationIcon;
-use core_engine::media::{MediaCommand, MediaPolicy, MediaSession, PlaybackState, VolumeLevel};
+use core_engine::media::{
+    MediaCommand, MediaPolicy, MediaSession, MixerApp, PlaybackState, VolumeLevel,
+};
 use std::{
     collections::VecDeque,
     sync::{Arc, Condvar, Mutex},
@@ -116,6 +119,21 @@ pub struct VolumeReading {
     pub level: Result<VolumeLevel, String>,
 }
 
+/// A change the person made to one row of the volume mixer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MixerChange {
+    Volume(u8),
+    Muted(bool),
+}
+
+/// What `@volume` asks of Windows' mixer: changes to its rows, and then the mixer read again
+/// when that is wanted.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct MixerWork {
+    changes: Vec<(Arc<str>, MixerChange)>,
+    read: bool,
+}
+
 #[derive(Default)]
 struct Work {
     /// Core asked to read the sessions again.
@@ -133,6 +151,8 @@ struct Work {
     requests: VecDeque<MediaRequest>,
     /// The slider's newest wish; it acts at once, without waiting for players to settle.
     volume: Option<VolumeWork>,
+    /// The mixer's waiting changes and reading; they too act at once.
+    mixer: Option<MixerWork>,
     shutdown: bool,
 }
 
@@ -144,6 +164,7 @@ impl Work {
             || self.watch_changed
             || !self.requests.is_empty()
             || self.volume.is_some()
+            || self.mixer.is_some()
     }
 }
 
@@ -154,6 +175,7 @@ struct Shared {
     reading: Mutex<Option<MediaReading>>,
     outcomes: Mutex<Vec<MediaOutcome>>,
     volume: Mutex<Option<VolumeReading>>,
+    mixer: Mutex<Option<Vec<MixerApp>>>,
 }
 
 impl Shared {
@@ -264,6 +286,32 @@ impl MediaService {
     pub fn take_volume(&self) -> Option<VolumeReading> {
         self.shared.volume.lock().expect("media volume lock").take()
     }
+
+    /// Reads Windows' volume mixer for `@volume`; the list arrives as the sessions do.
+    pub fn read_mixer(&self) {
+        let mut work = self.shared.work.lock().expect("media work lock");
+        work.mixer.get_or_insert_with(MixerWork::default).read = true;
+        self.shared.wake.notify_one();
+    }
+
+    /// Changes one row of the mixer, and reads the mixer again afterwards when `then_read`.
+    /// A newer volume for a row replaces one still waiting, so a drag never falls behind.
+    pub fn change_mixer(&self, id: Arc<str>, change: MixerChange, then_read: bool) {
+        let mut work = self.shared.work.lock().expect("media work lock");
+        let mixer = work.mixer.get_or_insert_with(MixerWork::default);
+        if matches!(change, MixerChange::Volume(_)) {
+            mixer.changes.retain(|(waiting, earlier)| {
+                *waiting != id || !matches!(earlier, MixerChange::Volume(_))
+            });
+        }
+        mixer.changes.push((id, change));
+        mixer.read |= then_read;
+        self.shared.wake.notify_one();
+    }
+
+    pub fn take_mixer(&self) -> Option<Vec<MixerApp>> {
+        self.shared.mixer.lock().expect("media mixer lock").take()
+    }
 }
 
 impl Drop for MediaService {
@@ -300,6 +348,35 @@ mod tests {
             assert!(Instant::now() < deadline, "{what} did not arrive");
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn mixer_changes_keep_their_order_and_only_the_newest_volume_of_a_row() {
+        let service = MediaService {
+            shared: Arc::new(Shared::default()),
+        };
+        let (spotify, game): (Arc<str>, Arc<str>) = ("spotify".into(), "game".into());
+        service.read_mixer();
+        service.change_mixer(spotify.clone(), MixerChange::Volume(40), false);
+        service.change_mixer(game.clone(), MixerChange::Volume(10), false);
+        service.change_mixer(spotify.clone(), MixerChange::Muted(true), false);
+        service.change_mixer(spotify.clone(), MixerChange::Volume(55), false);
+        let work = service.shared.work.lock().unwrap();
+        assert!(work.pending());
+        assert_eq!(
+            work.mixer,
+            Some(MixerWork {
+                changes: vec![
+                    (game, MixerChange::Volume(10)),
+                    (spotify.clone(), MixerChange::Muted(true)),
+                    (spotify, MixerChange::Volume(55)),
+                ],
+                // The reading asked for first is still owed after the changes.
+                read: true,
+            })
+        );
+        drop(work);
+        assert!(service.take_mixer().is_none());
     }
 
     #[test]

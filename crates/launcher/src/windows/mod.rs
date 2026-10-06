@@ -38,6 +38,7 @@ mod updates;
 mod user_assist;
 mod view;
 mod window_placement;
+mod word_deletion;
 
 pub use shell::{run, show_fatal_error};
 

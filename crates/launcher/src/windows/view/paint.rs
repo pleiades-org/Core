@@ -6,7 +6,7 @@ impl View {
         let palette = self.palette.get();
         let identifier = unsafe { GetDlgCtrlID(control) } as usize;
         let color_input = crate::windows::settings::page::is_text_field(identifier)
-            || crate::windows::settings::quicklink_table::is_edit(identifier);
+            || crate::windows::settings::page::is_table_edit(identifier);
         unsafe {
             SetBkColor(
                 context,
@@ -80,11 +80,16 @@ impl View {
             return;
         }
         if let Some(row) = self.rows.borrow().get(item.itemID as usize) {
+            let selected = item.itemState.0 & ODS_SELECTED.0 != 0;
+            if let Some(level) = row.volume {
+                self.draw_mixer_row(item.hDC, item.rcItem, row, level, selected);
+                return;
+            }
             painting::result_row(
                 item.hDC,
                 item.rcItem,
                 row,
-                item.itemState.0 & ODS_SELECTED.0 != 0,
+                selected,
                 self.fonts.get(),
                 self.dpi.get(),
                 palette,
@@ -154,6 +159,7 @@ impl View {
             Some(ResultKind::Terminal) => "TERMINAL",
             Some(ResultKind::Recent) => "RECENT",
             Some(ResultKind::Media) => "MEDIA",
+            Some(ResultKind::Volume) => "VOLUME",
             None => "SEARCH",
         };
         let bar = self.media_bar_height();

@@ -1,6 +1,6 @@
 use super::{
     info::{self, AppInfo},
-    media,
+    media, mixer,
     power::power_results,
     recent_applications::recent_results,
     run_target, songs, taskbar, terminal, PowerAction, RunMode, ShellKind,
@@ -13,7 +13,7 @@ use crate::{
         format_number, Calculation, CalculatorEngine,
     },
     conversions::{self, Conversion, ConversionContext, ExchangeRates},
-    media::{MediaCommand, MediaState},
+    media::{MediaCommand, MediaState, MixerApp, VolumeLevel},
     time_conversion::{parse_time, recognizes_time, TimeConverter, TimeError, TimeRequest},
     VISIBLE_RESULT_LIMIT,
 };
@@ -48,6 +48,12 @@ pub enum Action {
         command: MediaCommand,
         target: Option<Arc<str>>,
     },
+    /// A row of the volume mixer, with the level it showed. Enter mutes or unmutes it; the
+    /// launcher's slider and the arrow keys change the level.
+    Mixer {
+        app: Arc<str>,
+        level: VolumeLevel,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -75,6 +81,8 @@ pub enum ResultKind {
     /// A recently used app, shown in the grid when nothing is typed.
     Recent,
     Media,
+    /// A program in the volume mixer, drawn with a slider.
+    Volume,
 }
 
 #[derive(Debug)]
@@ -93,6 +101,8 @@ pub struct SearchEngine {
     /// Media sessions and priorities; None until the launcher has read them.
     media: Option<Arc<MediaState>>,
     songs: Option<Arc<super::SongSearch>>,
+    /// Windows' volume mixer; None until the launcher has read it for `@volume`.
+    mixer: Option<Arc<[MixerApp]>>,
     /// Core's version and what the last update check saw, for `@info`.
     app_info: Option<Arc<AppInfo>>,
     /// Application identifiers, most recent first, shown when nothing is typed.
@@ -105,6 +115,11 @@ pub struct SearchEngine {
 impl SearchEngine {
     pub fn set_songs(&mut self, songs: Option<Arc<super::SongSearch>>) {
         self.songs = songs;
+    }
+
+    /// A snapshot of Windows' volume mixer, replaced each time the launcher reads it.
+    pub fn set_mixer(&mut self, mixer: Option<Arc<[MixerApp]>>) {
+        self.mixer = mixer;
     }
     pub fn with_calendar_clock(mut self, clock: impl CalendarClock + 'static) -> Self {
         self.calendar_clock = Some(Box::new(clock));
@@ -210,6 +225,10 @@ impl SearchEngine {
                 kind: CommandKind::Songs,
                 payload,
             } => songs::song_results(payload, self.songs.as_deref()),
+            ParsedQuery::Command {
+                kind: CommandKind::Mixer,
+                payload,
+            } => mixer::mixer_results(payload, self.mixer.as_deref()),
             ParsedQuery::Command {
                 kind: CommandKind::Shell(shell),
                 payload,
@@ -587,6 +606,7 @@ fn command_hints(prefix: &str) -> SearchBatch {
         ),
         ("update", "Check Core updates or restart to install"),
         ("media", "Play, pause or skip music · also @music"),
+        ("volume", "Change each program's volume · also @mix"),
         (
             "song",
             "Search Spotify songs · optional connection in Music settings",

@@ -96,7 +96,7 @@ impl LauncherState {
     }
 
     /// Starts the worker the first time; a new worker reads at once while Core is visible.
-    fn media_service(&mut self) -> Option<&MediaService> {
+    pub(super) fn media_service(&mut self) -> Option<&MediaService> {
         if self.media.service.is_none() && self.options.media {
             match MediaService::start(self.window) {
                 Ok(service) => {
@@ -182,6 +182,7 @@ impl LauncherState {
         let reading = service.take_reading();
         let outcomes = service.take_outcomes();
         let volume = service.take_volume();
+        let mixer = service.take_mixer();
         let mut results_changed = false;
         // The first full reading after showing corrects a bar drawn from the previous one,
         // removing it if the player closed meanwhile; until something is typed.
@@ -210,10 +211,11 @@ impl LauncherState {
         if let Some(volume) = volume {
             self.receive_mixer_volume(volume);
         }
-        let shows_media = self
-            .view
-            .as_ref()
-            .is_some_and(|view| core_engine::search::wants_media(&view.query()));
+        if let Some(mixer) = mixer {
+            self.receive_mixer(mixer);
+        }
+        let shows_media =
+            self.view.is_some() && core_engine::search::wants_media(&self.acted_query());
         if results_changed && self.visible && shows_media {
             self.queue_search();
         }

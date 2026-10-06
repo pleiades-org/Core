@@ -3,11 +3,12 @@
 use super::{
     album_art::ArtCache,
     app_volume::{self, AppVolume},
+    mixer::Mixer,
     post_ready,
     read_sessions::{read_sessions, read_timeline, ReadSession, SessionRead},
-    send_command, window_players, MediaOutcome, MediaReading, Shared, VolumeReading,
+    send_command, window_players, MediaOutcome, MediaReading, MixerWork, Shared, VolumeReading,
 };
-use core_engine::media::MediaSession;
+use core_engine::media::{MediaSession, MixerApp};
 use std::{sync::Arc, thread, time::Duration};
 use windows::{
     core::{Interface, Result, RuntimeType},
@@ -36,6 +37,7 @@ pub(super) fn run(address: usize, shared: Arc<Shared>) {
         sessions: Vec::new(),
         art: ArtCache::default(),
         volume: None,
+        mixer: Mixer::default(),
     }
     .serve();
     if initialized {
@@ -54,6 +56,8 @@ struct Worker {
     art: ArtCache,
     /// The mixer sessions of the player whose volume the bar's slider last moved.
     volume: Option<AppVolume>,
+    /// Windows' volume mixer as `@volume` last read it.
+    mixer: Mixer,
 }
 
 impl Worker {
@@ -67,6 +71,7 @@ impl Worker {
                 .volume
                 .as_ref()
                 .and_then(|volume| app_volume::perform(&mut self.volume, volume));
+            let mixer = work.mixer.as_ref().and_then(|asked| self.mix(asked));
             let manager = self.manager();
             let mut outcomes = Vec::new();
             for request in &work.requests {
@@ -86,7 +91,7 @@ impl Worker {
             } else {
                 None
             };
-            if !self.publish(reading, outcomes, volume) {
+            if !self.publish(reading, outcomes, volume, mixer) {
                 return;
             }
         }
@@ -98,7 +103,10 @@ impl Worker {
         while !work.pending() && !work.shutdown {
             work = self.shared.wake.wait(work).expect("media wake lock");
         }
-        let asked = work.requested || !work.requests.is_empty() || work.volume.is_some();
+        let asked = work.requested
+            || !work.requests.is_empty()
+            || work.volume.is_some()
+            || work.mixer.is_some();
         if !asked && !work.shutdown {
             drop(work);
             thread::sleep(EVENT_SETTLE);
@@ -116,6 +124,7 @@ impl Worker {
             art_edge: work.art_edge,
             requests: std::mem::take(&mut work.requests),
             volume: work.volume.take(),
+            mixer: work.mixer.take(),
             shutdown: false,
         };
         work.requested = false;
@@ -123,6 +132,29 @@ impl Worker {
         work.timelines = false;
         work.watch_changed = false;
         Some(taken)
+    }
+
+    /// Applies the mixer's changes in order, then reads it again when asked to, or when a
+    /// change found its row gone: the list on screen is then out of date.
+    fn mix(&mut self, asked: &MixerWork) -> Option<Vec<MixerApp>> {
+        let mut stale = false;
+        for (id, change) in &asked.changes {
+            match self.mixer.change(id, *change) {
+                Ok(true) => {}
+                Ok(false) => stale = true,
+                Err(error) => {
+                    eprintln!("Could not change a volume in Windows' mixer: {error}");
+                    stale = true;
+                }
+            }
+        }
+        if !asked.read && !stale {
+            return None;
+        }
+        Some(self.mixer.read().unwrap_or_else(|error| {
+            eprintln!("Could not read Windows' volume mixer: {error}");
+            Vec::new()
+        }))
     }
 
     fn manager(&mut self) -> Option<SessionManager> {
@@ -220,6 +252,7 @@ impl Worker {
         reading: Option<MediaReading>,
         outcomes: Vec<MediaOutcome>,
         volume: Option<VolumeReading>,
+        mixer: Option<Vec<MixerApp>>,
     ) -> bool {
         if self.shared.work.lock().expect("media work lock").shutdown {
             return false;
@@ -256,6 +289,11 @@ impl Worker {
             let mut slot = self.shared.volume.lock().expect("media volume lock");
             notify |= slot.is_none();
             *slot = Some(volume);
+        }
+        if let Some(mixer) = mixer {
+            let mut slot = self.shared.mixer.lock().expect("media mixer lock");
+            notify |= slot.is_none();
+            *slot = Some(mixer);
         }
         if notify {
             post_ready(self.address);

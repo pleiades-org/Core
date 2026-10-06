@@ -69,9 +69,9 @@ impl LauncherState {
                 self.auto_save.done_when_saved = false;
                 self.change_settings(window, true);
             }
-            SettingsAction::EditQuicklink(row) => {
+            SettingsAction::EditTable(row) => {
                 self.auto_save.done_when_saved = false;
-                self.edit_quicklink(window, row);
+                self.edit_table_row(window, row);
             }
             SettingsAction::Change | SettingsAction::Retry => {
                 self.auto_save.done_when_saved = false;
@@ -136,9 +136,10 @@ impl LauncherState {
         self.save_queued_settings(window);
     }
 
-    /// Quicklink typing reports the edited row's problem at once. Checking every row against
-    /// the saved list waits for the typing pause, whose timer flushes the whole draft.
-    fn edit_quicklink(&mut self, window: HWND, row: Result<(), String>) {
+    /// Typing in the quicklink or alias table reports the edited row's problem at once.
+    /// Checking every row against the saved list waits for the typing pause, whose timer
+    /// flushes the whole draft.
+    fn edit_table_row(&mut self, window: HWND, row: Result<(), String>) {
         self.auto_save.cancel_timer(window);
         self.auto_save.queued = None;
         if let Err(error) = row {

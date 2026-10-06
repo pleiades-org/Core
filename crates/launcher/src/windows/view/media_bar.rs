@@ -52,8 +52,6 @@ const PLAY_GLYPH: &str = "\u{e768}";
 const PAUSE_GLYPH: &str = "\u{e769}";
 /// Shown in place of album art when the player provides none.
 const MUSIC_GLYPH: &str = "\u{e8d6}";
-/// The size the icon font draws a glyph at, to centre one on the art. In 96-DPI pixels.
-const GLYPH_SIZE: i32 = 20;
 
 #[derive(Clone)]
 pub struct MediaBarContent {
@@ -548,13 +546,6 @@ fn title_row(client: RECT, dpi: u32) -> RECT {
     )
 }
 
-/// A glyph of the icon font, centred on the art.
-fn art_glyph(context: HDC, art: RECT, glyph: &str, dpi: u32, font: HFONT, color: COLORREF) {
-    let mut area = art;
-    area.left += (art.right - art.left - scale(GLYPH_SIZE, dpi)) / 2;
-    painting::text(context, glyph, area, font, color);
-}
-
 /// `slider`: the volume slider is showing, over the art and in place of the title.
 fn draw_info(
     context: HDC,
@@ -608,7 +599,7 @@ fn draw_info(
         }
         None => {
             if !art_drawn {
-                art_glyph(context, art, MUSIC_GLYPH, dpi, fonts.icon, palette.accent);
+                painting::centred_glyph(context, art, MUSIC_GLYPH, dpi, fonts.icon, palette.accent);
             }
             painting::text(
                 context,

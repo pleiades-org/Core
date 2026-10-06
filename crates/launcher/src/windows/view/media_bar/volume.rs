@@ -4,6 +4,7 @@
 //! whose volume the slider moves, and reads it.
 use super::*;
 use core_engine::media::VolumeLevel;
+use level_slider::{contains, pointer, Thumb, THUMB_DIAMETER};
 use windows::Win32::UI::{
     Controls::WM_MOUSELEAVE,
     Input::KeyboardAndMouse::{
@@ -21,22 +22,12 @@ pub const VOLUME_CHANGED: u32 = 0x0B11;
 
 // Geometry in 96-DPI pixels.
 const TRACK_WIDTH: i32 = 180;
-const TRACK_THICKNESS: i32 = 2;
-const FILLED_THICKNESS: i32 = 4;
-const THUMB_DIAMETER: i32 = 12;
-/// The ring around the thumb while it is dragged.
-const DRAG_RING: i32 = 2;
 const LABEL_GAP: i32 = 14;
 const LABEL_WIDTH: i32 = 40;
 /// The slider answers presses this far beyond either end of its track.
 const TRACK_REACH: i32 = 8;
 /// How far the art fades into the background under the glyph, of 255.
 const ART_VEIL: u8 = 178;
-
-const VOLUME_GLYPH: &str = "\u{e767}";
-const MUTED_GLYPH: &str = "\u{e74f}";
-/// Quiet, medium and loud.
-const LEVEL_GLYPHS: [&str; 3] = ["\u{e993}", "\u{e994}", "\u{e995}"];
 
 /// What the slider shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,7 +66,6 @@ impl SliderLayout {
             .min(row.right - label_width)
             .max(left + 1);
         let middle = (row.top + row.bottom) / 2;
-        let half = (scale(TRACK_THICKNESS, dpi) / 2).max(1);
         let reach = scale(TRACK_REACH, dpi);
         let label = painting::rectangle(
             right + scale(LABEL_GAP, dpi),
@@ -86,7 +76,7 @@ impl SliderLayout {
         Self {
             art,
             row,
-            track: painting::rectangle(left, middle - half, right, middle + half),
+            track: level_slider::track(left, right, middle, dpi),
             label,
             grip: painting::rectangle(left - reach, row.top, right + reach, row.bottom),
             slider: painting::rectangle(left - reach, row.top, label.right, row.bottom),
@@ -100,20 +90,13 @@ impl SliderLayout {
         }
     }
 
-    fn span(&self) -> i32 {
-        (self.track.right - self.track.left).max(1)
-    }
-
-    /// The level under a pointer at `x`; beyond either end it is silence or full volume.
     fn percent_at(&self, x: i32) -> u8 {
-        let span = self.span();
-        let offset = (x - self.track.left).clamp(0, span);
-        ((offset * i32::from(VolumeLevel::MAX_PERCENT) + span / 2) / span) as u8
+        level_slider::percent_at(&self.track, x)
     }
 
+    #[cfg(test)]
     fn thumb_center(&self, percent: u8) -> i32 {
-        let full = i32::from(VolumeLevel::MAX_PERCENT);
-        self.track.left + (self.span() * i32::from(percent).min(full) + full / 2) / full
+        level_slider::thumb_center(&self.track, percent)
     }
 
     /// Everything that looks different while the slider shows, or as it moves.
@@ -371,19 +354,6 @@ impl VolumeSlider {
     }
 }
 
-fn contains(area: &RECT, point: POINT) -> bool {
-    unsafe { PtInRect(area, point) }.as_bool()
-}
-
-/// The pointer in a mouse message. Signed: a dragging pointer moves left of and above the
-/// control.
-fn pointer(data: LPARAM) -> POINT {
-    POINT {
-        x: i32::from(data.0 as u16 as i16),
-        y: i32::from((data.0 >> 16) as u16 as i16),
-    }
-}
-
 /// Tells Core's window, as the control's own click does.
 fn notify(control: HWND, notification: u32) {
     let Ok(parent) = (unsafe { GetParent(control) }) else {
@@ -458,18 +428,14 @@ pub(super) fn draw_art_overlay(
     if art_drawn {
         painting::veil(context, &art, palette.background, ART_VEIL);
     }
-    art_glyph(context, art, glyph(volume), dpi, fonts.icon, palette.text);
+    painting::centred_glyph(context, art, glyph(volume), dpi, fonts.icon, palette.text);
 }
 
 fn glyph(volume: BarVolume) -> &'static str {
-    let BarVolume::Level(level) = volume else {
-        return VOLUME_GLYPH;
-    };
-    if level.is_silent() {
-        return MUTED_GLYPH;
-    }
-    let step = usize::from(VolumeLevel::MAX_PERCENT).div_ceil(LEVEL_GLYPHS.len());
-    LEVEL_GLYPHS[(usize::from(level.percent - 1) / step).min(LEVEL_GLYPHS.len() - 1)]
+    level_slider::level_glyph(match volume {
+        BarVolume::Level(level) => Some(level),
+        BarVolume::Reading | BarVolume::Unavailable => None,
+    })
 }
 
 /// The slider in the title's row, drawn like the sliders in Settings: a thin track, filled up
@@ -496,42 +462,15 @@ pub(super) fn draw_slider(
         BarVolume::Reading => None,
         BarVolume::Level(level) => Some(level),
     };
-    let track = layout.track;
-    painting::rounded(
-        context,
-        &track,
-        (track.bottom - track.top) / 2,
-        palette.secondary,
-    );
+    let thumb = level.map(|level| Thumb {
+        percent: level.percent,
+        dragging: view.dragging,
+        color: palette.text,
+    });
+    level_slider::draw(context, &layout.track, thumb, dpi, palette);
     let Some(level) = level else {
         return;
     };
-    let center = layout.thumb_center(level.percent);
-    let middle = (track.top + track.bottom) / 2;
-    let filled = (scale(FILLED_THICKNESS, dpi) / 2).max(1);
-    if center > track.left {
-        painting::rounded(
-            context,
-            &painting::rectangle(track.left, middle - filled, center, middle + filled),
-            filled,
-            palette.text,
-        );
-    }
-    let circle = |diameter: i32| {
-        let half = diameter / 2;
-        painting::rectangle(
-            center - half,
-            middle - half,
-            center - half + diameter,
-            middle - half + diameter,
-        )
-    };
-    let diameter = scale(THUMB_DIAMETER, dpi);
-    if view.dragging {
-        let ring = diameter + scale(DRAG_RING, dpi) * 2;
-        painting::rounded(context, &circle(ring), ring / 2, palette.accent);
-    }
-    painting::rounded(context, &circle(diameter), diameter / 2, palette.text);
     painting::text(
         context,
         &format!("{}%", level.percent),
@@ -618,24 +557,6 @@ mod tests {
     }
 
     #[test]
-    fn positions_and_levels_convert_both_ways_and_stop_at_the_ends() {
-        for dpi in [96, 144, 192] {
-            let layout = SliderLayout::new(client(dpi), dpi);
-            assert_eq!(layout.percent_at(layout.track.left), 0);
-            assert_eq!(layout.percent_at(layout.track.right), 100);
-            assert_eq!(layout.percent_at(layout.track.left - 500), 0);
-            assert_eq!(layout.percent_at(layout.track.right + 500), 100);
-            for percent in 0..=VolumeLevel::MAX_PERCENT {
-                assert_eq!(
-                    layout.percent_at(layout.thumb_center(percent)),
-                    percent,
-                    "{dpi}"
-                );
-            }
-        }
-    }
-
-    #[test]
     fn a_bar_too_narrow_for_the_slider_keeps_a_track_that_fits() {
         let narrow = painting::rectangle(0, 0, 300, theme::MEDIA_BAR_HEIGHT);
         let layout = SliderLayout::new(narrow, 96);
@@ -666,7 +587,8 @@ mod tests {
     }
 
     #[test]
-    fn the_glyph_follows_the_level_and_shows_silence() {
+    fn the_glyph_is_a_plain_speaker_until_the_level_is_known() {
+        use level_slider::{LEVEL_GLYPHS, MUTED_GLYPH, VOLUME_GLYPH};
         assert_eq!(glyph(BarVolume::Reading), VOLUME_GLYPH);
         assert_eq!(glyph(BarVolume::Unavailable), VOLUME_GLYPH);
         assert_eq!(glyph(level(0)), MUTED_GLYPH);
@@ -674,16 +596,7 @@ mod tests {
             glyph(BarVolume::Level(VolumeLevel::new(80, true))),
             MUTED_GLYPH
         );
-        for (percent, expected) in [
-            (1, LEVEL_GLYPHS[0]),
-            (34, LEVEL_GLYPHS[0]),
-            (35, LEVEL_GLYPHS[1]),
-            (68, LEVEL_GLYPHS[1]),
-            (69, LEVEL_GLYPHS[2]),
-            (100, LEVEL_GLYPHS[2]),
-        ] {
-            assert_eq!(glyph(level(percent)), expected, "{percent}");
-        }
+        assert_eq!(glyph(level(80)), LEVEL_GLYPHS[2]);
     }
 
     thread_local! {
@@ -883,12 +796,5 @@ mod tests {
 
         unsafe { DestroyWindow(parent) }.unwrap();
         unsafe { UnregisterClassW(class.lpszClassName, Some(instance)) }.unwrap();
-    }
-
-    #[test]
-    fn mouse_coordinates_are_signed() {
-        let packed = |x: i16, y: i16| LPARAM(((y as u16 as isize) << 16) | (x as u16 as isize));
-        assert_eq!(pointer(packed(12, 30)), POINT { x: 12, y: 30 });
-        assert_eq!(pointer(packed(-8, -3)), POINT { x: -8, y: -3 });
     }
 }

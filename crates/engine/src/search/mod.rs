@@ -1,6 +1,7 @@
 mod execute_search;
 mod info;
 mod media;
+mod mixer;
 mod normalize;
 mod parse_query;
 mod power;
@@ -15,6 +16,7 @@ pub use terminal::{RunMode, ShellKind};
 pub use execute_search::{Action, ResultKind, SearchBatch, SearchEngine, SearchResult};
 pub use info::{wants_info, AppInfo, LatestRelease};
 pub use media::wants_media;
+pub use mixer::{wants_mixer, ID_PREFIX as MIXER_ID_PREFIX};
 pub use normalize::{normalize, normalize_into};
 pub use parse_query::{parse_query, CommandKind, ParsedQuery, QueryError, MAX_QUERY_BYTES};
 pub use songs::{song_query, Song, SongSearch, SongStatus};

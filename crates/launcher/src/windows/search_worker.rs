@@ -2,7 +2,7 @@ use super::discover_applications::{discover_applications, Discovery};
 use core_engine::{
     applications::ApplicationCatalog,
     conversions::ExchangeRates,
-    media::MediaState,
+    media::{MediaState, MixerApp},
     quicklinks::Quicklink,
     search::{AppInfo, SearchBatch, SearchEngine},
 };
@@ -25,6 +25,8 @@ pub struct SearchContext {
     pub exchange_rates: Option<Arc<ExchangeRates>>,
     pub recent_applications: Arc<[Arc<str>]>,
     pub media: Option<Arc<MediaState>>,
+    /// Windows' volume mixer for `@volume`; None until it has been read.
+    pub mixer: Option<Arc<[MixerApp]>>,
     pub app_info: Option<Arc<AppInfo>>,
     pub songs: Option<Arc<core_engine::search::SongSearch>>,
 }
@@ -185,6 +187,7 @@ fn run_search(
         engine.set_exchange_rates(request.context.exchange_rates.clone());
         engine.set_recent_applications(request.context.recent_applications.clone());
         engine.set_media(request.context.media.clone());
+        engine.set_mixer(request.context.mixer.clone());
         engine.set_app_info(request.context.app_info.clone());
         engine.set_songs(request.context.songs.clone());
         let batch = engine.search_catalogs(
@@ -242,6 +245,7 @@ mod tests {
             exchange_rates: None,
             recent_applications: Arc::from([]),
             media: None,
+            mixer: None,
             songs: None,
             app_info: None,
         }

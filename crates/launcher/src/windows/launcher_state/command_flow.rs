@@ -259,7 +259,8 @@ impl LauncherState {
         let Some(view) = &self.view else {
             return;
         };
-        let terminal = shell_query(&view.query()).is_some();
+        // An alias may stand for a shell command; its output then shows like any other.
+        let terminal = shell_query(&self.acted_query()).is_some();
         view.set_terminal(terminal, self.command.is_some() && !view.settings_open());
     }
 

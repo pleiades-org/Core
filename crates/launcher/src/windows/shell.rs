@@ -1,7 +1,7 @@
 use super::{
     foreground_observer::FOREGROUND_CHANGED,
     icon_worker::ICONS_READY,
-    launcher_state::{run_mode, LauncherState, Options, COMMAND_OUTPUT_TIMER},
+    launcher_state::{run_mode, LauncherState, Options, COMMAND_OUTPUT_TIMER, MIXER_TIMER},
     media::{MEDIA_READY, MEDIA_TITLE_CHANGED},
     search_worker::WORKER_READY,
     settings::{page::DONE_ID, shortcut_recorder, SETTINGS_SAVED},
@@ -10,7 +10,8 @@ use super::{
 use super::{
     view::{
         View, INPUT_ID, MEDIA_INFO_ID, MEDIA_NEXT_ID, MEDIA_PLAY_ID, MEDIA_PREVIOUS_ID,
-        MEDIA_PROGRESS_TIMER, MEDIA_VOLUME_CHANGED, MEDIA_VOLUME_WANTED, RESULTS_ID, SETTINGS_ID,
+        MEDIA_PROGRESS_TIMER, MEDIA_VOLUME_CHANGED, MEDIA_VOLUME_WANTED, MIXER_CHANGED, MIXER_MUTE,
+        MIXER_RELEASED, RESULTS_ID, SETTINGS_ID,
     },
     wide,
 };
@@ -225,7 +226,7 @@ unsafe fn message_loop(window: HWND, shell: &RefCell<LauncherState>) -> windows:
             }
             if message.wParam.0 == VK_TAB.0 as usize {
                 if shell.borrow().view.as_ref().is_some_and(|view| {
-                    view.advance_quicklink_tab(
+                    view.advance_table_tab(
                         GetDlgCtrlID(message.hwnd) as usize,
                         GetKeyState(VK_SHIFT.0 as i32) < 0,
                     )
@@ -280,7 +281,7 @@ unsafe fn message_loop(window: HWND, shell: &RefCell<LauncherState>) -> windows:
                         shell.borrow_mut().settings_command(
                             window,
                             if super::settings::page::is_text_field(identifier)
-                                || super::settings::quicklink_table::is_edit(identifier)
+                                || super::settings::page::is_table_edit(identifier)
                             {
                                 DONE_ID
                             } else {
@@ -291,6 +292,17 @@ unsafe fn message_loop(window: HWND, shell: &RefCell<LauncherState>) -> windows:
                     }
                     VK_A if GetKeyState(VK_CONTROL.0 as i32) < 0 => {
                         SendMessageW(message.hwnd, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
+                    }
+                    // Ctrl+Backspace in a box that takes typed text. Shortcut boxes record
+                    // the keys instead, and never get this far with them.
+                    VK_BACK
+                        if GetKeyState(VK_CONTROL.0 as i32) < 0 && {
+                            let identifier = GetDlgCtrlID(message.hwnd) as usize;
+                            super::settings::page::is_text_field(identifier)
+                                || super::settings::page::is_table_edit(identifier)
+                        } =>
+                    {
+                        super::word_deletion::delete_previous_word(message.hwnd);
                     }
                     _ => {
                         let _ = TranslateMessage(&message);
@@ -364,6 +376,18 @@ unsafe fn message_loop(window: HWND, shell: &RefCell<LauncherState>) -> windows:
                 }
                 // Backspace in an empty command prompt removes the hidden `/`.
                 VK_BACK if shell.borrow_mut().leave_command_mode(message.hwnd) => continue,
+                // Ctrl+Backspace deletes the word before the caret; the edit control itself
+                // would type a control character. Core's state is not borrowed meanwhile, so
+                // the search follows the change as it follows typing.
+                VK_BACK
+                    if GetKeyState(VK_CONTROL.0 as i32) < 0
+                        && view
+                            .as_ref()
+                            .is_some_and(|view| view.is_input(message.hwnd)) =>
+                {
+                    super::word_deletion::delete_previous_word(message.hwnd);
+                    continue;
+                }
                 VK_UP | VK_DOWN => {
                     let up = message.wParam.0 == VK_UP.0 as usize;
                     let Some(view) = shell.borrow().view.clone() else {
@@ -405,6 +429,22 @@ unsafe fn message_loop(window: HWND, shell: &RefCell<LauncherState>) -> windows:
                             0,
                         );
                     }
+                    continue;
+                }
+                // In the volume mixer they change the selected row's level instead. With Ctrl
+                // or Shift they still move through what is typed.
+                VK_LEFT | VK_RIGHT
+                    if GetKeyState(VK_CONTROL.0 as i32) >= 0
+                        && GetKeyState(VK_SHIFT.0 as i32) >= 0
+                        && shell
+                            .borrow()
+                            .view
+                            .as_ref()
+                            .is_some_and(|view| view.mixer_takes_keys(message.hwnd)) =>
+                {
+                    shell
+                        .borrow_mut()
+                        .mixer_step(message.wParam.0 == VK_RIGHT.0 as usize);
                     continue;
                 }
                 _ => {}
@@ -643,11 +683,12 @@ unsafe extern "system" fn window_proc(
         }
         WM_VSCROLL
             if long.0 != 0
-                && GetDlgCtrlID(HWND(long.0 as *mut _)) as usize
-                    == super::settings::quicklink_table::SCROLL_ID =>
+                && super::settings::page::is_table_scrollbar(
+                    GetDlgCtrlID(HWND(long.0 as *mut _)) as usize,
+                ) =>
         {
             if let Some(view) = &shell.view {
-                view.scroll_quicklinks((word.0 & 0xffff) as u16, None);
+                view.scroll_table((word.0 & 0xffff) as u16, None);
             }
             LRESULT(0)
         }
@@ -660,7 +701,7 @@ unsafe extern "system" fn window_proc(
         }
         WM_MOUSEWHEEL if shell.view.as_ref().is_some_and(|view| view.settings_open()) => {
             if let Some(view) = &shell.view {
-                view.scroll_quicklinks(0, Some((word.0 >> 16) as i16));
+                view.scroll_table(0, Some((word.0 >> 16) as i16));
             }
             LRESULT(0)
         }
@@ -686,6 +727,19 @@ unsafe extern "system" fn window_proc(
             shell.refresh_footer();
             LRESULT(0)
         }
+        // The volume mixer's rows: a slider moved or let go of, and a mute button pressed.
+        WM_COMMAND if word.0 & 0xffff == RESULTS_ID && (word.0 >> 16) as u32 == MIXER_CHANGED => {
+            shell.mixer_slider_moved();
+            LRESULT(0)
+        }
+        WM_COMMAND if word.0 & 0xffff == RESULTS_ID && (word.0 >> 16) as u32 == MIXER_RELEASED => {
+            shell.mixer_slider_released();
+            LRESULT(0)
+        }
+        WM_COMMAND if word.0 & 0xffff == RESULTS_ID && (word.0 >> 16) as u32 == MIXER_MUTE => {
+            shell.toggle_mixer_mute();
+            LRESULT(0)
+        }
         WM_TIMER if word.0 == super::view::CLOCK_TIMER => {
             if let Some(view) = &shell.view {
                 view.refresh_clock();
@@ -709,6 +763,10 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if word.0 == COMMAND_OUTPUT_TIMER => {
             shell.command_output_timer();
+            LRESULT(0)
+        }
+        WM_TIMER if word.0 == MIXER_TIMER => {
+            shell.mixer_timer();
             LRESULT(0)
         }
         WM_TIMER if word.0 == MEDIA_PROGRESS_TIMER => {

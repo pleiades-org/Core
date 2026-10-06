@@ -196,21 +196,30 @@ pub fn is_app_process(app_id: &str, executable: &str, process_app_id: Option<&st
     if app_id.eq_ignore_ascii_case(file) {
         return true;
     }
-    let mut folders = parts.take(INSTALL_FOLDERS);
     match known_app(app_id) {
-        // The folder is asked before the executable: browsers built on Chromium keep the name
-        // `chrome.exe`, and only their folder tells them apart.
-        Some(player) => folders
-            .find_map(|folder| recognise(folder, WordMatch::Whole))
-            .or_else(|| recognise(stem, WordMatch::Whole))
-            .is_some_and(|process| process.key == player.key),
+        Some(player) => known_program(executable).is_some_and(|process| process.key == player.key),
         None => {
             let name = known_app_name(app_id);
             std::iter::once(stem)
-                .chain(folders)
+                .chain(parts.take(INSTALL_FOLDERS))
                 .any(|part| part.eq_ignore_ascii_case(&name) || part.eq_ignore_ascii_case(app_id))
         }
     }
+}
+
+/// The known app a program belongs to, from its executable's path. The install folder is
+/// asked before the executable's name: browsers built on Chromium keep the name `chrome.exe`,
+/// and only their folder tells them apart.
+pub fn known_program(executable: &str) -> Option<&'static KnownApp> {
+    let mut parts = executable.rsplit(['\\', '/']);
+    let stem = executable_stem(parts.next().unwrap_or_default());
+    if stem.is_empty() {
+        return None;
+    }
+    parts
+        .take(INSTALL_FOLDERS)
+        .find_map(|folder| recognise(folder, WordMatch::Whole))
+        .or_else(|| recognise(stem, WordMatch::Whole))
 }
 
 /// An executable's file name without `.exe`, in any case.

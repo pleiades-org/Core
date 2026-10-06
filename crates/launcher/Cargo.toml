@@ -24,7 +24,7 @@ windows = { version = "=0.61.3", features = [
     # Windows' media sessions (what is playing, and its controls) and album art decoding.
     "Win32_System_WinRT", "Foundation_Collections", "Media_Control", "Storage_Streams", "Graphics_Imaging", "Data_Json",
     # A player's volume in Windows' mixer, and which app a process playing sound belongs to.
-    "Win32_Media_Audio", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_Storage_Packaging_Appx"
+    "Win32_Media_Audio", "Win32_Media_Audio_Endpoints", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_Storage_Packaging_Appx"
 ] }
 
 [[bin]]

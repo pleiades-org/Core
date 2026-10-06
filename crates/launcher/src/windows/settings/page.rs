@@ -1,8 +1,10 @@
 use super::{
+    alias_table::AliasTable,
     control_style::{self, Look},
+    entry_table::{TableEdit, TableEntry},
     layout::{self, *},
     music_section::{self, MusicSection},
-    quicklink_table::{QuicklinkTable, TableEdit},
+    quicklink_table::QuicklinkTable,
     shortcut_recorder::{self, SHORTCUT_RECORDED},
     slider::{self, SlideStage},
     BackgroundColor, CornerRadius, DisplayChoice, EdgeSpacing, MusicApp, Preferences,
@@ -15,7 +17,7 @@ use crate::windows::{
     view::{child, control_text},
     wide,
 };
-use core_engine::search::ShellKind;
+use core_engine::{aliases::Alias, quicklinks::Quicklink, search::ShellKind};
 use std::cell::{Cell, RefCell};
 use windows::{
     core::{w, PCWSTR},
@@ -46,6 +48,7 @@ const APPEARANCE_CATEGORY_ID: usize = 230;
 const BEHAVIOUR_CATEGORY_ID: usize = 231;
 const QUICKLINKS_CATEGORY_ID: usize = 232;
 const MUSIC_CATEGORY_ID: usize = 233;
+const ALIASES_CATEGORY_ID: usize = 234;
 pub const SHORTCUT_ID: usize = 240;
 const WINDOWS_KEY_ID: usize = 241;
 const DISPLAY_ID: usize = 242;
@@ -63,6 +66,16 @@ const UPDATES_LABEL_ID: usize = 257;
 pub fn is_dropdown(identifier: usize) -> bool {
     matches!(identifier, DISPLAY_ID | SHELL_ID | UPDATES_ID)
         || music_section::is_dropdown(identifier)
+}
+
+/// A text field of the Quicklinks or Aliases table.
+pub fn is_table_edit(identifier: usize) -> bool {
+    Quicklink::SPEC.is_edit(identifier) || Alias::SPEC.is_edit(identifier)
+}
+
+/// The scroll bar of the Quicklinks or Aliases table.
+pub fn is_table_scrollbar(identifier: usize) -> bool {
+    Quicklink::SPEC.is_scrollbar(identifier) || Alias::SPEC.is_scrollbar(identifier)
 }
 
 /// Text boxes: drawn on the field colour, and Enter in one means Done.
@@ -110,12 +123,13 @@ enum Section {
     Quicklinks,
     Music,
     Spotify,
+    Aliases,
 }
 
 pub enum SettingsAction {
     Edit,
-    /// Typing in the quicklink table, with the check of the edited row alone.
-    EditQuicklink(Result<(), String>),
+    /// Typing in the quicklink or alias table, with the check of the edited row alone.
+    EditTable(Result<(), String>),
     Change,
     Retry,
     Done,
@@ -129,6 +143,7 @@ pub enum SettingsAction {
 pub struct SettingsPage {
     pub color: HWND,
     quicklinks: QuicklinkTable,
+    aliases: AliasTable,
     music: MusicSection,
     spotify: super::spotify_section::SpotifySection,
     controls: Vec<(usize, HWND)>,
@@ -150,21 +165,29 @@ impl SettingsPage {
     pub fn spotify_status(&self, text: &str) {
         self.spotify.status(text);
     }
-    pub fn scroll_quicklinks(&self, command: u16, wheel: Option<i16>) {
-        if self.section.get() == Section::Quicklinks {
-            self.quicklinks.scroll(command, wheel);
+    /// Scrolls the table of the page that is showing, if it has one.
+    pub fn scroll_table(&self, command: u16, wheel: Option<i16>) {
+        match self.section.get() {
+            Section::Quicklinks => self.quicklinks.scroll(command, wheel),
+            Section::Aliases => self.aliases.scroll(command, wheel),
+            Section::Appearance | Section::Behaviour | Section::Music | Section::Spotify => {}
         }
     }
 
-    pub fn advance_quicklink_tab(&self, identifier: usize, backwards: bool) -> bool {
-        self.section.get() == Section::Quicklinks
-            && self.quicklinks.advance_tab(identifier, backwards)
+    /// Tab past the last visible row, or back past the first, scrolls the showing table.
+    pub fn advance_table_tab(&self, identifier: usize, backwards: bool) -> bool {
+        match self.section.get() {
+            Section::Quicklinks => self.quicklinks.advance_tab(identifier, backwards),
+            Section::Aliases => self.aliases.advance_tab(identifier, backwards),
+            Section::Appearance | Section::Behaviour | Section::Music | Section::Spotify => false,
+        }
     }
 
     pub fn create(parent: HWND, instance: HINSTANCE) -> windows::core::Result<Self> {
         let mut page = Self {
             color: HWND::default(),
             quicklinks: QuicklinkTable::create(parent, instance)?,
+            aliases: AliasTable::create(parent, instance)?,
             music: MusicSection::create(parent, instance)?,
             spotify: super::spotify_section::SpotifySection::create(parent, instance)?,
             controls: Vec::new(),
@@ -222,6 +245,7 @@ impl SettingsPage {
         page.add_button(parent, instance, "Behaviour", BEHAVIOUR_CATEGORY_ID)?;
         page.add_button(parent, instance, "Quicklinks", QUICKLINKS_CATEGORY_ID)?;
         page.add_button(parent, instance, "Music", MUSIC_CATEGORY_ID)?;
+        page.add_button(parent, instance, "Aliases", ALIASES_CATEGORY_ID)?;
         // Switch text carries the state ("…: On") for screen readers; only the name is drawn.
         page.add_button(parent, instance, "Use Windows key: Off", WINDOWS_KEY_ID)?;
         page.add_dropdown(parent, instance, "Display", DISPLAY_ID)?;
@@ -410,6 +434,7 @@ impl SettingsPage {
     /// `music_apps`: music apps found on this PC and players seen this session.
     pub fn reset(&self, document: SettingsDocument, music_apps: &[MusicApp]) {
         self.quicklinks.reset(&document.quicklinks);
+        self.aliases.reset(&document.aliases);
         self.music.reset(&document.music, music_apps);
         self.spotify.reset(&document.music.spotify);
         let settings = document.preferences;
@@ -459,6 +484,7 @@ impl SettingsPage {
         Ok(SettingsDocument {
             preferences,
             quicklinks: self.quicklinks.draft()?,
+            aliases: self.aliases.draft()?,
             music,
         })
     }
@@ -468,6 +494,7 @@ impl SettingsPage {
             Section::Appearance => self.color,
             Section::Behaviour => self.control(SHORTCUT_ID),
             Section::Quicklinks => self.quicklinks.focus_target(),
+            Section::Aliases => self.aliases.focus_target(),
             Section::Music => self.music.focus_target(),
             Section::Spotify => self.spotify.focus_target(),
         }
@@ -501,9 +528,13 @@ impl SettingsPage {
         if matches!(identifier, RADIUS_ID | SPACING_ID) {
             return self.slide(identifier, SlideStage::from_code(notification));
         }
-        if let Some(edit) = self.quicklinks.edit(identifier, notification) {
+        let edit = self
+            .quicklinks
+            .edit(identifier, notification)
+            .or_else(|| self.aliases.edit(identifier, notification));
+        if let Some(edit) = edit {
             return match edit {
-                TableEdit::Typed(row) => SettingsAction::EditQuicklink(row),
+                TableEdit::Typed(row) => SettingsAction::EditTable(row),
                 TableEdit::Removed => SettingsAction::Change,
             };
         }
@@ -544,11 +575,13 @@ impl SettingsPage {
             APPEARANCE_CATEGORY_ID
             | BEHAVIOUR_CATEGORY_ID
             | QUICKLINKS_CATEGORY_ID
-            | MUSIC_CATEGORY_ID => {
+            | MUSIC_CATEGORY_ID
+            | ALIASES_CATEGORY_ID => {
                 self.section.set(match identifier {
                     APPEARANCE_CATEGORY_ID => Section::Appearance,
                     BEHAVIOUR_CATEGORY_ID => Section::Behaviour,
                     QUICKLINKS_CATEGORY_ID => Section::Quicklinks,
+                    ALIASES_CATEGORY_ID => Section::Aliases,
                     _ => Section::Music,
                 });
                 self.show(true);
@@ -659,6 +692,8 @@ impl SettingsPage {
             .show(visible && self.section.get() == Section::Spotify);
         self.quicklinks
             .show(visible && self.section.get() == Section::Quicklinks);
+        self.aliases
+            .show(visible && self.section.get() == Section::Aliases);
         self.music
             .show(visible && self.section.get() == Section::Music);
         for (identifier, control) in &self.controls {
@@ -667,6 +702,7 @@ impl SettingsPage {
                 | BEHAVIOUR_CATEGORY_ID
                 | QUICKLINKS_CATEGORY_ID
                 | MUSIC_CATEGORY_ID
+                | ALIASES_CATEGORY_ID
                 | DONE_ID
                 | STATUS_ID => true,
                 RETRY_ID => self.save_failed.get(),
@@ -893,7 +929,8 @@ impl SettingsPage {
                 APPEARANCE_CATEGORY_ID
                 | BEHAVIOUR_CATEGORY_ID
                 | QUICKLINKS_CATEGORY_ID
-                | MUSIC_CATEGORY_ID => (
+                | MUSIC_CATEGORY_ID
+                | ALIASES_CATEGORY_ID => (
                     SIDEBAR_INSET,
                     SIDEBAR_FIRST_TOP
                         + (*identifier - APPEARANCE_CATEGORY_ID) as i32 * SIDEBAR_PITCH,
@@ -1001,6 +1038,7 @@ impl SettingsPage {
             }
         }
         self.quicklinks.layout(dpi, fonts, new_fonts)?;
+        self.aliases.layout(dpi, fonts, new_fonts)?;
         self.music.layout(dpi, fonts, new_fonts)?;
         self.spotify.layout(dpi, fonts, new_fonts)?;
         Ok(())
@@ -1013,6 +1051,10 @@ impl SettingsPage {
             Section::Quicklinks => (
                 "Quicklinks",
                 "Add a link and name. A blank row follows each completed row.",
+            ),
+            Section::Aliases => (
+                "Aliases",
+                "Short names for what you type: d for Discord, @s for @song.",
             ),
             Section::Appearance => (
                 "Appearance",
@@ -1090,6 +1132,10 @@ impl SettingsPage {
             self.quicklinks.paint(context, dpi, fonts, palette);
             return;
         }
+        if self.section.get() == Section::Aliases {
+            self.aliases.paint(context, dpi, fonts, palette);
+            return;
+        }
         if self.section.get() == Section::Music {
             self.music.paint(context, dpi, palette);
             return;
@@ -1120,6 +1166,9 @@ impl SettingsPage {
         if self
             .quicklinks
             .draw_button(item, self.dpi.get(), self.fonts.get(), palette)
+            || self
+                .aliases
+                .draw_button(item, self.dpi.get(), self.fonts.get(), palette)
         {
             return true;
         }
@@ -1193,6 +1242,7 @@ impl SettingsPage {
             || (identifier == QUICKLINKS_CATEGORY_ID && self.section.get() == Section::Quicklinks)
             || (identifier == MUSIC_CATEGORY_ID
                 && matches!(self.section.get(), Section::Music | Section::Spotify))
+            || (identifier == ALIASES_CATEGORY_ID && self.section.get() == Section::Aliases)
             || active;
         painting::fill(item.hDC, &item.rcItem, palette.background);
         if emphasized {

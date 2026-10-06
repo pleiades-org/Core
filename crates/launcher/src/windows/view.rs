@@ -41,7 +41,9 @@ mod command_prompt;
 mod console;
 mod footer;
 mod icon_cache;
+mod level_slider;
 mod media_bar;
+mod mixer_rows;
 mod output;
 mod paint;
 mod power;
@@ -57,6 +59,7 @@ pub use media_bar::{
     MEDIA_INFO_ID, MEDIA_NEXT_ID, MEDIA_PLAY_ID, MEDIA_PREVIOUS_ID, MEDIA_PROGRESS_TIMER,
     VOLUME_CHANGED as MEDIA_VOLUME_CHANGED, VOLUME_WANTED as MEDIA_VOLUME_WANTED,
 };
+pub use mixer_rows::{MIXER_CHANGED, MIXER_MUTE, MIXER_RELEASED};
 pub use output::OUTPUT_ID;
 
 pub use super::theme::scale;
@@ -146,6 +149,9 @@ pub struct View {
     corner_fringe: CornerFringe,
     layout_key: Cell<LayoutKey>,
     rows: RefCell<Vec<DisplayRow>>,
+    /// The volume mixer's sliders in the rows. Boxed: the results list's window procedure
+    /// keeps its address.
+    mixer_rows: Box<mixer_rows::MixerRows>,
     /// Icons shown recently, for results that come back.
     icon_cache: RefCell<IconCache>,
     /// Created the first time something plays.
@@ -204,6 +210,7 @@ impl View {
             corner_fringe: CornerFringe::create(parent, instance)?,
             layout_key: Cell::new(LayoutKey::STALE),
             rows: RefCell::new(Vec::new()),
+            mixer_rows: mixer_rows::MixerRows::new(),
             icon_cache: RefCell::new(IconCache::default()),
             media_bar: OnceCell::new(),
             media_bar_shown: Cell::new(false),
@@ -231,6 +238,7 @@ impl View {
                     ),
                 RESULTS_ID,
             )?;
+            view.mixer_rows.install(view.results)?;
             view.footer = child(
                 parent,
                 instance,
@@ -305,6 +313,7 @@ impl View {
         let fonts = Fonts::create(dpi)?;
         let previous = self.fonts.replace(fonts);
         self.dpi.set(dpi);
+        self.mixer_rows.set_dpi(dpi);
         unsafe {
             for (control, font) in [
                 (self.input, fonts.input),
@@ -694,13 +703,16 @@ impl View {
             .take(ROW_LIMIT)
             .map(DisplayRow::new)
             .collect();
+        self.mixer_rows.set_rows(&rows);
+        let laid_out = self.layout_key.get() == self.current_layout_key();
         // The same results again (an exchange-rate refresh, a repeated search): the list,
         // its selection and the window already show them.
-        if same_rows(&self.rows.borrow(), &rows)
-            && self.layout_key.get() == self.current_layout_key()
-        {
+        if laid_out && same_rows(&self.rows.borrow(), &rows) {
             // As a reset would, clear the hover; the pointer's next move restores it.
             self.leave_grid();
+            return;
+        }
+        if laid_out && self.update_rows(&rows) {
             return;
         }
         self.grid_hover.set(None);
@@ -736,6 +748,27 @@ impl View {
         if let Err(error) = self.layout() {
             self.set_footer(&format!("Could not lay out Core: {error}"));
         }
+    }
+
+    /// The same results in the same places saying something new, as a volume in the mixer
+    /// does while it changes: they take what `next` says and only they repaint, so the list
+    /// and its selection stay. False when the results themselves differ.
+    fn update_rows(&self, next: &[DisplayRow]) -> bool {
+        if !same_places(&self.rows.borrow(), next) {
+            return false;
+        }
+        let mut changed = Vec::new();
+        for (index, (row, next)) in self.rows.borrow_mut().iter_mut().zip(next).enumerate() {
+            if row.detail != next.detail || row.volume != next.volume {
+                row.detail.clone_from(&next.detail);
+                row.volume = next.volume;
+                changed.push(index);
+            }
+        }
+        for index in changed {
+            self.invalidate_row(index);
+        }
+        true
     }
 
     pub fn set_footer(&self, text: &str) {
@@ -842,13 +875,22 @@ impl Drop for View {
     }
 }
 
-/// Rows that draw the same: same results, titles, details and kinds. Icons are carried over.
+/// Rows that draw the same: same results, titles, details, kinds and levels. Icons are
+/// carried over.
 fn same_rows(current: &[DisplayRow], next: &[DisplayRow]) -> bool {
+    same_places(current, next)
+        && current
+            .iter()
+            .zip(next)
+            .all(|(current, next)| current.detail == next.detail && current.volume == next.volume)
+}
+
+/// The same results in the same order, whatever their details and levels now are.
+fn same_places(current: &[DisplayRow], next: &[DisplayRow]) -> bool {
     current.len() == next.len()
         && current.iter().zip(next).all(|(current, next)| {
             current.identifier == next.identifier
                 && current.title == next.title
-                && current.detail == next.detail
                 && current.kind == next.kind
         })
 }
@@ -1099,5 +1141,118 @@ mod tests {
         assert!(!same_rows(&current, &refreshed));
         assert!(!same_rows(&current, &current[..1]));
         assert!(!same_rows(&[], &current));
+    }
+
+    fn volume_row(id: &str, percent: u8, muted: bool) -> DisplayRow {
+        DisplayRow::new(&SearchResult {
+            kind: ResultKind::Volume,
+            id: format!("mixer:{id}").into(),
+            title: id.into(),
+            description: if muted { "Muted" } else { "Playing" }.into(),
+            action: Action::Mixer {
+                app: id.into(),
+                level: core_engine::media::VolumeLevel::new(percent, muted),
+            },
+        })
+    }
+
+    #[test]
+    fn a_new_detail_or_level_keeps_a_result_in_its_place() {
+        let current = rows();
+        let mut refreshed = rows();
+        refreshed[1] = row(
+            ResultKind::Conversion,
+            "convert",
+            "5 USD",
+            "€4.61 · rates of today",
+        );
+        assert!(same_places(&current, &refreshed));
+        let mixer = [
+            volume_row("system", 80, false),
+            volume_row("game", 40, false),
+        ];
+        for changed in [volume_row("game", 45, false), volume_row("game", 40, true)] {
+            let next = [volume_row("system", 80, false), changed];
+            assert!(same_places(&mixer, &next));
+            assert!(!same_rows(&mixer, &next));
+        }
+        // Another result, another order or another count is not the same places.
+        let reordered = [
+            volume_row("game", 40, false),
+            volume_row("system", 80, false),
+        ];
+        assert!(!same_places(&mixer, &reordered));
+        assert!(!same_places(&mixer, &mixer[..1]));
+        let mut renamed = rows();
+        renamed[0] = row(
+            ResultKind::Application,
+            "app:1",
+            "Code - Insiders",
+            r"C:\Programs\Code",
+        );
+        assert!(!same_places(&current, &renamed));
+    }
+
+    #[test]
+    fn rows_in_the_same_places_update_without_resetting_the_list() {
+        let _serial = crate::windows::GUI_RESOURCE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let instance = unsafe { windows::Win32::System::LibraryLoader::GetModuleHandleW(None) }
+            .unwrap()
+            .into();
+        let parent = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!(""),
+                WS_POPUP,
+                0,
+                0,
+                100,
+                100,
+                None,
+                None,
+                Some(instance),
+                None,
+            )
+        }
+        .unwrap();
+        let view = View::create(parent, instance, Preferences::default()).unwrap();
+        let mixer = |game: u8, muted: bool| -> Vec<SearchResult> {
+            [("system", 80, false), ("game", game, muted)]
+                .into_iter()
+                .map(|(id, percent, muted)| SearchResult {
+                    kind: ResultKind::Volume,
+                    id: format!("mixer:{id}").into(),
+                    title: id.into(),
+                    description: if muted { "Muted" } else { "Playing" }.into(),
+                    action: Action::Mixer {
+                        app: id.into(),
+                        level: core_engine::media::VolumeLevel::new(percent, muted),
+                    },
+                })
+                .collect()
+        };
+        let level = |index: usize| view.rows.borrow()[index].volume.map(|level| level.percent);
+        view.set_rows(&mixer(40, false));
+        assert!(view.mixer_takes_keys(view.input) && view.mixer_takes_keys(view.results));
+        assert!(!view.mixer_takes_keys(view.footer));
+        view.move_selection(1);
+        assert_eq!(view.selected(), 1);
+        // A level changed: the row follows and the selection stays where the person put it.
+        view.set_rows(&mixer(45, false));
+        assert_eq!(level(1), Some(45));
+        assert_eq!(view.selected(), 1);
+        view.set_rows(&mixer(45, true));
+        assert_eq!(view.rows.borrow()[1].detail, "Muted");
+        assert_eq!(view.selected(), 1);
+        // Other results reset the list, and are no mixer.
+        view.set_rows(&mixer(45, true)[..1]);
+        assert_eq!(view.selected(), 0);
+        view.set_rows(&[]);
+        assert!(!view.mixer_takes_keys(view.input));
+        drop(view);
+        unsafe { DestroyWindow(parent) }.unwrap();
     }
 }

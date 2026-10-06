@@ -39,6 +39,12 @@ impl VolumeLevel {
     pub fn is_silent(self) -> bool {
         self.muted || self.percent == 0
     }
+
+    /// This level after its slider is moved to `percent`: raising a volume above silence ends
+    /// a mute, as in Windows' own mixer.
+    pub fn moved_to(self, percent: u8) -> Self {
+        Self::new(percent, self.muted && percent == 0)
+    }
 }
 
 #[cfg(test)]
@@ -70,5 +76,16 @@ mod tests {
         assert!(VolumeLevel::new(60, true).is_silent());
         assert!(VolumeLevel::new(0, false).is_silent());
         assert!(!VolumeLevel::new(1, false).is_silent());
+    }
+
+    #[test]
+    fn moving_a_muted_volume_above_silence_ends_the_mute() {
+        let muted = VolumeLevel::new(60, true);
+        assert_eq!(muted.moved_to(35), VolumeLevel::new(35, false));
+        assert_eq!(muted.moved_to(0), VolumeLevel::new(0, true));
+        assert_eq!(muted.moved_to(250), VolumeLevel::new(100, false));
+        let heard = VolumeLevel::new(60, false);
+        assert_eq!(heard.moved_to(0), VolumeLevel::new(0, false));
+        assert_eq!(heard.moved_to(80), VolumeLevel::new(80, false));
     }
 }
