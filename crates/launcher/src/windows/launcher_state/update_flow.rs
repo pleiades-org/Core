@@ -7,7 +7,49 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE},
 };
 
+/// What Enter on `@update` does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UpdateStep {
+    /// A verified download is waiting: restart into it.
+    Restart,
+    /// The release can only be announced here: open its page.
+    OpenReleasePage,
+    /// Ask GitHub now, and download a newer release that is waiting to be fetched.
+    Check,
+}
+
+/// `installs`: a newer release can be downloaded and installed from here, which it cannot
+/// under Notify or in a read-only folder. A release Core only knows of, as from the manifest
+/// kept between daily checks, is then fetched rather than shown on its page.
+fn update_step(state: &UpdateState, installs: bool) -> UpdateStep {
+    match state {
+        UpdateState::Staged(_) => UpdateStep::Restart,
+        UpdateState::Available(_) if !installs => UpdateStep::OpenReleasePage,
+        UpdateState::Available(_) | UpdateState::Failed(_) | UpdateState::UpToDate => {
+            UpdateStep::Check
+        }
+    }
+}
+
+/// What Enter does about a newer release that is not downloaded, as the footer words it.
+fn available_step(installs: bool) -> &'static str {
+    if installs {
+        "Enter to download"
+    } else {
+        "Enter to open release page"
+    }
+}
+
 impl LauncherState {
+    /// A newer release that is not downloaded, for `@info`.
+    fn newer_release(&self, version: Arc<str>) -> LatestRelease {
+        if self.update_service.installs_updates() {
+            LatestRelease::Downloadable(version)
+        } else {
+            LatestRelease::Available(version)
+        }
+    }
+
     /// Core's version and what the update check last saw, for `@info`.
     pub(super) fn app_info(&self) -> Arc<AppInfo> {
         let current = env!("CARGO_PKG_VERSION");
@@ -19,7 +61,7 @@ impl LauncherState {
         } else {
             match self.update_service.state() {
                 UpdateState::Staged(version) => LatestRelease::Ready(text(version)),
-                UpdateState::Available(version) => LatestRelease::Available(text(version)),
+                UpdateState::Available(version) => self.newer_release(text(version)),
                 UpdateState::Failed(error) => LatestRelease::Failed(error.to_string().into()),
                 UpdateState::UpToDate => match self.update_service.latest() {
                     Some(latest)
@@ -27,7 +69,7 @@ impl LauncherState {
                             .parse()
                             .is_ok_and(|current: Version| latest > current) =>
                     {
-                        LatestRelease::Available(text(latest))
+                        self.newer_release(text(latest))
                     }
                     Some(latest) => LatestRelease::UpToDate(text(latest)),
                     None => LatestRelease::Unknown,
@@ -67,9 +109,10 @@ impl LauncherState {
             UpdateState::Staged(version) => {
                 format!("Core {version} is ready · Enter to restart and install")
             }
-            UpdateState::Available(version) => {
-                format!("Core {version} is available · Enter to open release page")
-            }
+            UpdateState::Available(version) => format!(
+                "Core {version} is available · {}",
+                available_step(self.update_service.installs_updates())
+            ),
             UpdateState::Failed(error) => {
                 format!("{error} · Enter to retry (once a minute)")
             }
@@ -88,6 +131,9 @@ impl LauncherState {
             UpdateState::Staged(version) => Some(format!(
                 "Core {version} ready · installs on exit · @update to restart"
             )),
+            UpdateState::Available(version) if self.update_service.installs_updates() => {
+                Some(format!("Core {version} available · @update to download"))
+            }
             UpdateState::Available(version) => Some(format!(
                 "Core {version} available · @update for the release page"
             )),
@@ -100,8 +146,9 @@ impl LauncherState {
             self.refresh_footer();
             return;
         }
-        match self.update_service.state() {
-            UpdateState::Staged(_) => {
+        let installs = self.update_service.installs_updates();
+        match update_step(&self.update_service.state(), installs) {
+            UpdateStep::Restart => {
                 self.restart_for_update = true;
                 if let Err(error) =
                     unsafe { PostMessageW(Some(self.window), WM_CLOSE, WPARAM(0), LPARAM(0)) }
@@ -112,11 +159,11 @@ impl LauncherState {
                     }
                 }
             }
-            UpdateState::Available(_) => {
+            UpdateStep::OpenReleasePage => {
                 self.pending_action = Some(super::NativeAction::OpenUrl(RELEASE_PAGE.into()))
             }
             // Pressing Enter is asking now: GitHub is checked at once, not at the daily check.
-            _ => {
+            UpdateStep::Check => {
                 self.update_service.check_now(self.window);
                 self.refresh_footer();
             }
@@ -150,5 +197,43 @@ impl LauncherState {
             }
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::windows::updates::UpdateError;
+
+    #[test]
+    fn enter_downloads_a_known_release_where_core_installs_updates_itself() {
+        let version: Version = "9.8.7".parse().unwrap();
+        // The manifest kept between daily checks names a newer release: under Automatic,
+        // Enter fetches it instead of sending the person to the release page.
+        assert_eq!(
+            update_step(&UpdateState::Available(version), true),
+            UpdateStep::Check
+        );
+        assert_eq!(available_step(true), "Enter to download");
+        // Under Notify, or in a folder Core cannot write, the page is the way to it.
+        assert_eq!(
+            update_step(&UpdateState::Available(version), false),
+            UpdateStep::OpenReleasePage
+        );
+        assert_eq!(available_step(false), "Enter to open release page");
+        for installs in [true, false] {
+            assert_eq!(
+                update_step(&UpdateState::Staged(version), installs),
+                UpdateStep::Restart
+            );
+            assert_eq!(
+                update_step(&UpdateState::UpToDate, installs),
+                UpdateStep::Check
+            );
+            assert_eq!(
+                update_step(&UpdateState::Failed(UpdateError::HashMismatch), installs),
+                UpdateStep::Check
+            );
+        }
     }
 }

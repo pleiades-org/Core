@@ -123,6 +123,8 @@ struct Shared {
     working: bool,
     shutdown: bool,
     loaded_stage: bool,
+    /// The last download found Core's folder read-only: a release can only be announced.
+    read_only: bool,
     next_check: SystemTime,
     /// When Enter on `@update` last started a check.
     last_manual_check: Option<Instant>,
@@ -162,6 +164,8 @@ impl Shared {
         self.loaded_stage = true;
         if download_due {
             self.next_check = wall_clock_now + RETRY_AFTER;
+            // The folder is tried again; it may have been made writable since.
+            self.read_only = false;
         }
         Some(download_due)
     }
@@ -199,6 +203,7 @@ impl UpdateService {
                 working: false,
                 shutdown: false,
                 loaded_stage: false,
+                read_only: false,
                 next_check,
                 last_manual_check: None,
             })),
@@ -226,6 +231,13 @@ impl UpdateService {
     /// The latest release the last check saw, for `@info`.
     pub fn latest(&self) -> Option<Version> {
         self.shared.lock().expect("update lock").latest
+    }
+    /// Whether a release that is so far only known of can be downloaded and installed from
+    /// here: the setting is Automatic and Core's folder was not found read-only. Otherwise the
+    /// release page is the way to it.
+    pub fn installs_updates(&self) -> bool {
+        let shared = self.shared.lock().expect("update lock");
+        shared.mode == UpdateMode::Automatic && !shared.read_only
     }
 
     /// The automatic check when Core is shown: GitHub is contacted at most once a day, or an
@@ -386,7 +398,7 @@ fn check_release(
                 }
                 drop(state);
                 if !installation.writable()? {
-                    return Ok(UpdateState::Available(manifest.version));
+                    return Ok(announced_only(shared, manifest.version));
                 }
                 validate_startup(installation)?;
                 return Ok(UpdateState::Staged(manifest.version));
@@ -420,10 +432,10 @@ fn check_release(
         }
     }
     if !installation.writable()? {
-        return Ok(UpdateState::Available(manifest.version));
+        return Ok(announced_only(shared, manifest.version));
     }
     let bytes = download::get(&manifest.path, MAX_EXECUTABLE_BYTES)?;
-    let state = shared.lock().expect("update lock");
+    let mut state = shared.lock().expect("update lock");
     if state.shutdown || state.mode != UpdateMode::Automatic {
         return Ok(UpdateState::Available(manifest.version));
     }
@@ -433,9 +445,18 @@ fn check_release(
             validate_startup(installation)?;
             Ok(UpdateState::Staged(manifest.version))
         }
-        Err(UpdateError::FolderNotWritable) => Ok(UpdateState::Available(manifest.version)),
+        Err(UpdateError::FolderNotWritable) => {
+            state.read_only = true;
+            Ok(UpdateState::Available(manifest.version))
+        }
         Err(error) => Err(error),
     }
+}
+
+/// Core's folder cannot be written, so the release is announced whatever the setting says.
+fn announced_only(shared: &Mutex<Shared>, version: Version) -> UpdateState {
+    shared.lock().expect("update lock").read_only = true;
+    UpdateState::Available(version)
 }
 
 fn manual_check_allowed(last_manual_check: Option<Instant>, current_time: Instant) -> bool {

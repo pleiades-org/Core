@@ -1047,50 +1047,21 @@ impl SettingsPage {
     pub fn paint(&self, context: HDC, palette: Palette) {
         let dpi = self.dpi.get();
         let fonts = self.fonts.get();
-        let (heading, description) = match self.section.get() {
-            Section::Quicklinks => (
-                "Quicklinks",
-                "Add a link and name. A blank row follows each completed row.",
-            ),
-            Section::Aliases => (
-                "Aliases",
-                "Short names for what you type: d for Discord, @s for @song.",
-            ),
-            Section::Appearance => (
-                "Appearance",
-                "Colors, shape and where Core appears on your screen.",
-            ),
-            Section::Behaviour => (
-                "Behaviour",
-                "How Core opens, starts with Windows and runs / commands.",
-            ),
-            Section::Music => (
-                "Music",
-                "Which player Core controls, the now-playing bar and media shortcuts.",
-            ),
-            Section::Spotify => (
-                "Spotify song search",
-                "Optional catalog search and playback through your Spotify account.",
-            ),
+        // The sidebar names the section that is open; the content column only describes it.
+        let description = match self.section.get() {
+            Section::Quicklinks => "Add a link and name. A blank row follows each completed row.",
+            Section::Aliases => "Short names for what you type: d for Discord, @s for @song.",
+            Section::Appearance => "Colors, shape and where Core appears on your screen.",
+            Section::Behaviour => "How Core opens, starts with Windows and runs / commands.",
+            Section::Music => {
+                "Which player Core controls, the now-playing bar and media shortcuts."
+            }
+            Section::Spotify => {
+                "Optional catalog search and playback through your Spotify account."
+            }
         };
         for (label, left, top, bottom, font, color) in [
             ("Settings", 28, HEADING_TOP, 58, fonts.input, palette.text),
-            (
-                "CORE",
-                28,
-                DESCRIPTION_TOP,
-                82,
-                fonts.detail,
-                palette.secondary,
-            ),
-            (
-                heading,
-                layout::CONTENT_LEFT,
-                HEADING_TOP,
-                60,
-                fonts.input,
-                palette.text,
-            ),
             (
                 description,
                 layout::CONTENT_LEFT,

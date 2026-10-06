@@ -32,8 +32,11 @@ pub enum LatestRelease {
     Checking,
     /// The latest release is this version, which is not newer than Core.
     UpToDate(Arc<str>),
-    /// A newer release exists; it is not downloaded (Notify mode, or a read-only folder).
+    /// A newer release exists and can only be announced here (Notify mode, or a read-only
+    /// folder): Enter opens its page.
     Available(Arc<str>),
+    /// A newer release exists and is not downloaded yet: Enter downloads it.
+    Downloadable(Arc<str>),
     /// A newer release is downloaded and verified; Core installs it on restart.
     Ready(Arc<str>),
     /// Updates are turned off in Settings.
@@ -71,6 +74,10 @@ pub(super) fn info_results(payload: &str, info: Option<&AppInfo>) -> SearchBatch
         LatestRelease::Available(latest) => (
             format!("Latest: {latest}"),
             "Newer than this version · Enter to open the release page".to_owned(),
+        ),
+        LatestRelease::Downloadable(latest) => (
+            format!("Latest: {latest}"),
+            "Newer than this version · Enter to download".to_owned(),
         ),
         LatestRelease::Ready(latest) => (
             format!("Latest: {latest}"),
@@ -158,6 +165,11 @@ mod tests {
                 LatestRelease::Available("2.3.0".into()),
                 "Latest: 2.3.0",
                 "release page",
+            ),
+            (
+                LatestRelease::Downloadable("2.3.0".into()),
+                "Latest: 2.3.0",
+                "Enter to download",
             ),
             (
                 LatestRelease::Ready("2.3.0".into()),

@@ -237,6 +237,49 @@ fn checking_now_still_respects_off_disabled_and_ready_updates() {
 }
 
 #[test]
+fn a_known_release_can_be_downloaded_only_under_automatic_in_a_writable_folder() {
+    for (mode, installs) in [
+        (UpdateMode::Automatic, true),
+        (UpdateMode::NotifyOnly, false),
+        (UpdateMode::Off, false),
+    ] {
+        assert_eq!(
+            UpdateService::new(false, mode).installs_updates(),
+            installs,
+            "{mode:?}"
+        );
+    }
+    let service = UpdateService::new(false, UpdateMode::Automatic);
+    let version: Version = "9.8.7".parse().unwrap();
+    // A folder found read-only leaves only the release page, until a download is tried again.
+    assert!(matches!(
+        announced_only(&service.shared, version),
+        UpdateState::Available(announced) if announced == version
+    ));
+    assert!(!service.installs_updates());
+    let mut shared = service.shared.lock().unwrap();
+    let (wall_clock_now, monotonic_now) = (SystemTime::now(), Instant::now());
+    // Reading the cached manifest again is no new try.
+    shared.next_check = wall_clock_now + CHECK_AFTER;
+    assert_eq!(
+        shared.begin_check(CheckTrigger::Automatic, wall_clock_now, monotonic_now),
+        Some(false)
+    );
+    assert!(shared.read_only);
+    shared.working = false;
+    assert_eq!(
+        shared.begin_check(CheckTrigger::Manual, wall_clock_now, monotonic_now),
+        Some(true)
+    );
+    assert!(!shared.read_only);
+    drop(shared);
+    assert!(service.installs_updates());
+    // Choosing Notify afterwards announces again.
+    service.set_mode(UpdateMode::NotifyOnly);
+    assert!(!service.installs_updates());
+}
+
+#[test]
 fn off_and_retry_deadlines_suppress_network_and_mode_changes_preserve_backoff() {
     let mut service = UpdateService::new(false, UpdateMode::Off);
     service.enabled = true;
