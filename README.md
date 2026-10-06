@@ -1,102 +1,235 @@
-# Core v2
+# Core
 
-A small Windows launcher written in Rust. Version **2.6.0** adds aliases, a volume mixer with `@volume` and Ctrl+Backspace, and makes `@update` download a release it already knows of; see the [2.6.0 release notes](docs/RELEASE_2.6.0.md). Version 2.5.0 added a volume slider to the now-playing bar and optional Spotify song search with `@song`; see [media controls](docs/MEDIA.md), [Spotify setup](docs/SPOTIFY.md) and the [2.5.0 release notes](docs/RELEASE_2.5.0.md). Version 2.3.0 added a current-user Windows installer styled with Core's native controls; see the [installation guide](docs/INSTALLER.md) and [2.3.0 release notes](docs/RELEASE_2.3.0.md). The [2.2.2 release](docs/RELEASE_2.2.2.md) added immediate manual update checks. Version 2.1.0 brought the native v2 implementation to this repository; the previous implementation remains in Git history and earlier release tags.
+**A small, fast launcher for Windows.** Press a shortcut, type a few letters, press Enter.
 
-The [second 22 September release notes](docs/RELEASE_2026_09_22_B.md) add [smart conversions](docs/SMART_CONVERSIONS.md) (currency, units, download time, percentages, tips, bases, colours, Unix time, screens, loans and BMI) and website quicklink icons. The [first 22 September release notes](docs/RELEASE_2026_09_22.md) describe the app and tray icons, taskbar command, corner rounding and edge spacing sliders, logging and reliability fixes. The [21 September release notes](docs/RELEASE_2026_09_21.md) describe the expanded calculator, power menu, configurable shortcuts, monitor/startup settings and packaged-app discovery. Earlier benchmarks remain available in the [feature/performance comparison](docs/FEATURE_AND_PERFORMANCE_DIFF.md); each measurement identifies its tested executable.
+![Core showing the now-playing bar and the volume mixer](.github/preview.png)
 
-Run `Core-Setup-<version>.exe` from the [latest release](https://github.com/pleiades-org/Core/releases/latest) to install for your Windows account, then open **Core** from the Start Menu. Development and portable builds run directly as `target\release\core-v2.exe`. Press **Ctrl+Alt+Space** to show or hide Core. Use the arrow keys and Enter to choose a result; Escape or clicking outside hides the window. **Ctrl+Backspace** deletes the word before the caret, in the search box and in the text boxes of Settings; punctuation counts as a word of its own, so `@song` and a path go a part at a time, and Ctrl+Z brings the word back. The tray menu opens or exits Core. Starting Core again activates the existing instance.
+Core opens your apps, does sums and conversions, runs commands, controls your music and sets each program's volume, all from one small window that gets out of the way when you are done. It is a single program of about 2 MB, written in Rust. It needs no account, and while it is hidden it sits idle: no timers and no polling.
 
-The footer shows one hint for the selected action, such as **Enter to copy** or **Enter to open**, with the local time centred in `HH:MM` format. The clock updates each minute while the search window is visible and stops while Core is hidden or Settings is open. Errors and command completion status appear in place of the action hint.
+**New in 2.6.0:** aliases, a volume mixer (`@volume`) and Ctrl+Backspace. See the [release notes](https://github.com/pleiades-org/Core/releases/latest).
 
-| Input | Action |
+## Install
+
+1. Download **`Core-Setup-<version>.exe`** from the [latest release](https://github.com/pleiades-org/Core/releases/latest).
+2. Run it and choose **Install**. Core installs for your Windows account only, so there is no administrator prompt.
+3. Press **Ctrl+Alt+Space** to open Core.
+
+Good to know:
+
+- **"Windows protected your PC"** may appear the first time, because the setup file is not signed with a publisher certificate. Choose **More info**, then **Run anyway**.
+- **Portable use:** download the ZIP from the same page instead and run `core-v2.exe` from any folder.
+- **Requirements:** 64-bit Windows and the Microsoft Visual C++ runtime (x64), which most PCs already have.
+- **Uninstall** from **Settings → Apps → Installed apps** in Windows. Your Core settings are kept.
+- If Core is already running, exit it from its tray icon before installing or uninstalling.
+
+## The basics
+
+| Press | To |
 | --- | --- |
-| `@update` | Signed-update status. Enter checks GitHub now (at most once a minute) and downloads a newer release, restarts to install a ready update, or under Notify opens the release page |
-| `@info` (or `@about`, `@version`) | Core's installed version (Enter copies it), the latest release from the last update check, and this version's release notes |
-| Nothing typed | Recently used apps as a grid, like Start: up to 18, six across. Apps opened from Core come first, then apps Windows has seen you start (read locally from Windows' own usage record). Arrow keys move, Enter or a click opens |
-| `code`, `vsc`, `studio code`, `xbox` | Search Start Menu and registered packaged apps by name, word prefix, initials and substring |
-| `cmd`, `wt`, `taskmgr`, `regedit` | Windows aliases: the program a Start Menu shortcut starts (`cmd` finds Command Prompt) and Store apps' command names (`wt` finds Windows Terminal) |
-| `@app calculator` | Search applications explicitly |
-| `> docs` or `@quicklink docs` | Search saved quicklinks; names also appear in normal search |
-| `2 + 3 * 4` or `@calc 25% of 80` | Calculate locally; Enter copies the result |
-| `sqrt(81)`, `round(2.6)`, `pi*2` | Math functions and constants |
-| `time` or `@calc time` | Current local time, like `now`, in the calculator answer display; Enter copies `YYYY-MM-DD HH:MM` |
-| `date` or `@calc date` | Today's date, like `today`, in the calculator answer display; Enter copies `YYYY-MM-DD` |
-| `2 days from now`, `next Friday`, `3 hours ago` | Local calendar dates and elapsed time |
-| `2028-01-31 + 1 month`, `2026-12-25 - 2026-09-21` | Date arithmetic and signed differences in days |
-| `10 kg to lb`, `4.7GB to MiB`, `30 mpg to l/100km` | Unit conversions across 15 kinds, including data sizes and rates; Enter copies the numeric answer |
-| `100 usd to eur`, `Â£50 in dollars`, `100 usd` | Currency conversion with European Central Bank reference rates (bare amounts convert to your regional currency) |
-| `10 GB at 100 Mbps`, `5 km in 25 min` | Download time, speed needed, data used, running pace |
-| `20% off 80`, `tip 15% on 80 split 4`, `255 to hex`, `#ff8800`, `unix now` | Percentages, tips, number bases, colours, Unix time and more; see [smart conversions](docs/SMART_CONVERSIONS.md) |
-| `9pm et to uk` or `@time 21:00 ET to UK` | Convert time zones using today's date in the source zone; Enter copies the dated result |
-| `9pm et to uk on 2026-03-10` | Convert for a particular date, including daylight-saving differences |
-| `@web Rust & Windows` | Open an encoded Google query in the default browser |
-| `@` or `@cal` | Complete a supported command |
-| `@power`, `power off`, `restart`, `sleep` | Choose a power action, then explicitly confirm |
-| `/ipconfig /all`, `@pwsh Get-Process` | Run a command in your shell, in Core's own terminal: colours, prompts, REPLs and full-screen programs work, and keys typed into it reach the command. Ctrl+Enter opens a terminal window, Ctrl+Shift+Enter runs as administrator, and â†‘ recalls recent commands. See [running commands](docs/COMMANDS.md) |
-| `@run notepad`, `shell:startup`, `ms-settings:display`, `%appdata%` | Open anything Windows Run (Win+R) accepts, optionally as administrator |
-| `taskbar`, `tb`, `@taskbar` | Show the Windows taskbar on Core's display (useful with the Windows-key-only shortcut and an auto-hidden taskbar) |
-| `@media`, `@music`, `@media spotify next` | Control the music app (Spotify and others) or any open player, preferring music over a paused browser tab. See [media controls](docs/MEDIA.md) |
-| `@song basorexia` | Search Spotify's catalog and play the chosen song, once you have connected your account. Off by default; see [Spotify setup](docs/SPOTIFY.md) |
-| `@volume` or `@mix` | Windows' volume mixer in Core: the whole PC, then every program with sound, each with a slider and a mute button. ← → change the selected row and Enter mutes it. See [the volume mixer](docs/MEDIA.md#the-volume-mixer) |
-| `d`, `@s basorexia`, or any alias you define | What the alias stands for, with the rest of what you typed kept: see **Settings → Aliases** below |
-| `play`, `pause`, `next`, `previous`, `now playing` | That media control above the usual app results; Core stays open for another press |
+| **Ctrl+Alt+Space** | Open or hide Core |
+| **↑** **↓** | Move through the results |
+| **Enter** | Open, copy or run the selected result |
+| **Esc**, or a click elsewhere | Hide Core |
+| **Ctrl+,** | Open Settings |
+| **Ctrl+Backspace** | Delete the word before the caret |
 
-In **Settings â†’ Quicklinks**, enter a **Link** and **Name**. Completing a row appends another blank row. Scroll to add more; the Ã— button removes a row. Completed valid changes save automatically, including renames and removals. Websites support HTTP/HTTPS (a bare domain gets `https://`); files and folders use absolute Windows paths; app links such as `steam://rungameid/2379780`, `spotify:` or `ms-settings:display` open the app registered for that scheme, and Core reports when no app is registered. Script, embedded-content and other abused schemes (`javascript:`, `data:`, `file:`, `search-ms:`, `ms-msdt:`, Office `ms-word:`-style handlers and similar) are refused. Names must be unique. Up to 1,000 entries are supported, with only four rows of native controls kept on screen. Partial or invalid rows show an explanation and are not saved. `>` lists quicklinks; Enter opens the selected target through Windows. File and folder quicklinks show their Windows icons. App links keep the â†— symbol and never contact the network. Website quicklinks show the site's icon. The first time a link is displayed, Core asks Google's favicon service (`www.google.com/s2/favicons`, 64 px), which also finds icons declared only in a page's HTML, and falls back to the site's own `/favicon.ico`. Google therefore sees the domain names of your website quicklinks; `localhost`, IP addresses and intranet names (no dot, or ending `.local`, `.lan`, `.internal`, `.home.arpa`) are only ever requested directly. No cookies or credentials are sent. Icons are cached in `%LOCALAPPDATA%\Pleiades\Core\v2\favicons` for 30 days (earlier versions used `%APPDATA%`; Core moves those files across once); links with no icon anywhere keep the â†— symbol and are asked again after a day, and unreachable sites are retried while shown after 30 seconds, then 5 minutes, then hourly. While Google is unreachable, sites are asked directly for a few minutes. Each icon appears as soon as it downloads. `--dry-run` never contacts websites.
+- The line at the bottom of the window always says what Enter will do, such as **Enter to open** or **Enter to copy**.
+- Open Core without typing and it shows the apps you used most recently, like the Start menu.
+- Core lives in the system tray. Its icon's menu opens Core, opens Settings or exits.
+- The shortcut can be changed in Settings, or set to the Windows key on its own.
 
-In **Settings → Aliases**, give a short name to something longer that you type. Enter the **Alias** (`d`, `@s`, `ip`) and what it **Stands for** (`Discord`, `@song`, `/ipconfig /all`); rows are added, removed and saved as in Quicklinks. An alias stands for the first word of what you type, and the rest is kept: `d` finds Discord, `@s basorexia` searches as `@song basorexia`, and `ip` becomes that command. The search box keeps showing what you typed. Only a whole first word is an alias, so `do` and `discord` search as usual, and aliases match in any case. What an alias stands for is not looked up again, so one alias cannot lead to another. An alias is one word of up to 32 characters that does not start with `/` (which starts a command), and stands for up to 256 characters; names must be unique, and up to 200 are kept. They are stored with the other preferences as `alias=` lines, which older Core builds ignore.
+## What you can type
 
-Arithmetic supports parentheses, unary signs, `+ - * / ^`, scientific notation and postfix `%`. `%` divides by 100: `20 + 10%` means `20.1`. `25% of 80` means `20`. Calculations use floating-point arithmetic. Invalid or unfinished input cannot execute an old result.
+Just type. Core works out whether you mean an app, a sum, a conversion or a time. Everything else is a command that starts with `@`; type `@` on its own to see them all.
 
-BODMAS is already applied: `2+3*4` gives `14`, and `(2+3)*4` gives `20`. Division/multiplication and addition/subtraction each share a precedence level and evaluate left to right; powers evaluate right to left. The [calculator evaluation comparison](docs/CALCULATOR_EVALUATION.md) explains the rules and measures postfix alternatives against the current parser.
+### Apps, files and websites
 
-Time conversion supports regional ET, CT, MT, PT, UK/London, Berlin, Sydney, Tokyo and India, plus UTC/GMT and explicit seasonal abbreviations. Regional names follow Windows daylight-saving rules; `EST` is a fixed offset while `ET` changes with the date. Skipped or repeated local times produce an explanation instead of an arbitrary conversion. Dates use `on YYYY-MM-DD` (1900â€“2100); see the [alias list and date semantics](docs/TIME_AND_ICONS.md).
+| Type | What happens |
+| --- | --- |
+| `code`, `vsc`, `studio code` | Finds apps by name, by the start of any word, or by initials |
+| `cmd`, `wt`, `taskmgr` | Finds apps by the short names Windows gives them |
+| `> docs` | Opens one of your [quicklinks](#quicklinks) |
+| `@web rust windows` | Searches Google in your browser |
+| `@run notepad`, `shell:startup`, `%appdata%` | Opens anything the Windows Run box (Win+R) accepts |
 
-Open **Settings** using the top-right gear, **Ctrl+,**, or the tray menu. Choose a category in the left sidebar to see its controls on the right. Appearance includes any `#RRGGBB` background and **Center, Top, Bottom, Left, Right, Bottom left or Bottom right**. **Corner rounding** (0â€“32 px; 0 is square) and **Screen edge spacing** (0â€“200 px) sliders shape and inset the window. Spacing is measured from the physical screen edge, so a value larger than the taskbar keeps Core clear of it, while smaller values may overlap it; at 0 Core uses the automatic taskbar-aware placement. Spaced windows round every corner. Behaviour includes a configurable shortcut with a **Use Windows key** switch, **Display** and **Commands run in** dropdowns, a **Start with Windows** switch and **Clear command history**. Shortcut boxes record keys: click one and press the shortcut. Music chooses which player Core controls (**Music apps first** or **Playing media first**, with preferred and ignored apps), turns the **Now playing bar** above the search box on or off, and sets media shortcuts that work while Core is open or in every app; see [media controls](docs/MEDIA.md). On/off settings are switches, choices are dropdowns, and actions are filled buttons. Valid changes save automatically and survive restarting Core. Color and shortcut typing use a 400 ms delay; buttons save immediately. **Done**, Escape, dismissal and normal exit flush valid pending edits. Invalid text is explained and never saved; write failures show **Retry save**. Appearance previews immediately. Edge positions respect the taskbar and square every corner touching an edge.
+### Sums, conversions and time
 
-The bottom-right power icon opens a recessed inline menu. All four power icons highlight on hover. Sleep, Restart and Power off also appear through `@power`. Each opens a confirmation with **Cancel** selected; select the second row to proceed. Escape closes the popup before hiding Core. Position choices use small screen boxes showing Core's anchor. On constrained displays, the result viewport shrinks to keep the footer and power controls visible; arrow keys still reach all results. See [current behavior and validation](docs/RELEASE_2026_09_21.md).
+| Type | What you get |
+| --- | --- |
+| `2 + 3 * 4`, `sqrt(81)`, `25% of 80` | The answer. Enter copies it |
+| `10 kg to lb`, `4.7GB to MiB`, `30 mpg to l/100km` | Unit conversions |
+| `100 usd to eur`, `£50 in dollars` | Currency, at the European Central Bank's reference rates |
+| `20% off 80`, `tip 15% on 80 split 4` | Discounts, tips and split bills |
+| `255 to hex`, `#ff8800`, `unix now` | Number bases, colours and Unix time |
+| `10 GB at 100 Mbps`, `5 km in 25 min` | Download times and running pace |
+| `2 days from now`, `next Friday`, `2026-12-25 - 2026-09-21` | Dates, and the days between them |
+| `9pm et to uk` | Time zones, with daylight saving handled |
 
-## Build and verify
+There are more in [the full list](#the-full-list) below.
 
-**Updates:** Settings > Behaviour > **Updates (GitHub)** offers **Automatic** (default),
-**Notify**, and **Off**. Core checks GitHub when shown, at most once per day, with a one-hour
-retry after errors; Enter on `@update` checks at once and, under Automatic, downloads a release Core already knows of. Automatic downloads a newer signed executable and installs it on exit;
-`@update` restarts now. Notify downloads only the manifest; Off disables update checks and
-installation. A read-only folder falls back to notification. Local search and calculations
-work without a network connection. See [signed updates, release signing and rollback](docs/UPDATES.md).
+### Music and volume
 
-Requires Windows, the Rust MSVC toolchain and Visual Studio C++ build tools. `rust-toolchain.toml` pins Rust 1.95.0. Cargo downloads dependencies on the first build. The normal launcher uses the existing `windows` bindings; the engine has no external dependencies. GPUI is an optional measurement feature and is absent from the normal binary.
+| Type | What happens |
+| --- | --- |
+| `play`, `pause`, `next`, `previous` | Controls your music: Spotify, Apple Music, a browser tab and others |
+| `@media` | Shows what is playing, and every open player |
+| `@volume` or `@mix` | A volume mixer: the whole PC and each program, with a slider and a mute button |
+| `@song basorexia` | Searches Spotify and plays the song you choose. Optional: see [Spotify song search](#spotify-song-search) |
+
+While something plays, a bar above the search box shows the album art, the track's progress and previous, play and next buttons. Rest the pointer on the album art to get a volume slider for that player.
+
+In the mixer, **↑ ↓** choose a row, **← →** change its volume and **Enter** mutes it. You can also drag a slider or click a speaker.
+
+### Commands and your PC
+
+| Type | What happens |
+| --- | --- |
+| `/ipconfig /all` | Runs a command in Core's own terminal. **Ctrl+Enter** opens a terminal window instead, and **Ctrl+Shift+Enter** runs as administrator |
+| `@power`, `sleep`, `restart`, `power off` | Power actions. Each asks you to confirm |
+| `taskbar` | Shows the Windows taskbar when it is hidden |
+| `@update` | Update status. Enter checks now and downloads a new version |
+| `@info` | Core's version and what is new in it |
+
+## Make it yours
+
+Open Settings with **Ctrl+,**, the gear in Core's window, or the tray menu. Changes save by themselves.
+
+### Aliases
+
+Short names for things you type often. In **Settings → Aliases**, enter the alias and what it stands for:
+
+| Alias | Stands for | So that |
+| --- | --- | --- |
+| `d` | `Discord` | `d` finds Discord |
+| `@s` | `@song` | `@s basorexia` searches Spotify |
+| `ip` | `/ipconfig /all` | `ip` becomes that command |
+
+An alias replaces the first word you type and keeps the rest. Only a whole word counts, so `do` and `discord` still search as usual.
+
+### Quicklinks
+
+Save websites, files, folders and app links under a name in **Settings → Quicklinks**. Open one by typing its name, or type `>` to list them all.
+
+| Link | Name |
+| --- | --- |
+| `https://github.com` | `GitHub` |
+| `C:\Projects` | `Projects` |
+| `steam://rungameid/2379780` | `My game` |
+
+Website quicklinks show the site's icon, and files and folders show their Windows icon.
+
+### Look and behaviour
+
+- **Appearance:** any background colour, seven positions on the screen, corner rounding and distance from the screen edge.
+- **Behaviour:** the shortcut that opens Core (or the Windows key on its own), which display it opens on, starting with Windows, and the shell that `/` commands run in.
+- **Music:** which player Core prefers, the now-playing bar on or off, and media shortcuts that work in every app.
+
+### Spotify song search
+
+`@song` is optional and off by default. It plays through your own Spotify Premium account, after a one-time setup:
+
+1. Open [Spotify's developer dashboard](https://developer.spotify.com/dashboard) with your Premium account, create an app and select **Web API**.
+2. In the app's settings, add this exact Redirect URI: `http://127.0.0.1:43821/callback`. Copy the **Client ID**. No client secret is needed.
+3. In Core, open **Settings → Music → Spotify song search**, turn it on and paste the Client ID.
+4. Click **Connect Spotify** and approve it in your browser.
+
+Then type `@song` and a song or artist, choose a result and press Enter. The song plays on the Spotify device you are using, so keep Spotify open on this PC for it to appear as a device.
+
+The media controls, the now-playing bar and the volume mixer work without any of this.
+
+## Updates
+
+Core keeps itself up to date. When you open it, at most once a day, it checks GitHub for a new version, downloads it in the background and installs it the next time Core closes. To update straight away, type `@update` and press Enter.
+
+Every update is signed, and Core installs nothing that is not signed with its own key. If a new version fails to start, Core puts the previous one back. You can change this to notify-only or off in **Settings → Behaviour → Updates**.
+
+## Privacy
+
+- Finding apps, sums, conversions and time zones never use the network.
+- Core connects to the internet only for the things below, and only when you open it:
+  - **Updates:** GitHub, at most once a day.
+  - **Currency rates:** the European Central Bank's public rates file.
+  - **Website quicklink icons:** Google's favicon service, which therefore sees the domain names of your website quicklinks. Addresses on your own network are never sent to it.
+  - **Spotify**, only if you connect it, and only for `@song` searches, playback and album covers.
+- There is no telemetry and no account. Your settings, history and log stay in `%APPDATA%\Pleiades\Core\v2` on your PC.
+
+## Something not working?
+
+- **Nothing happens when I press the shortcut.** Another program may already use Ctrl+Alt+Space. Open Core from its tray icon and choose another shortcut in **Settings → Behaviour**.
+- **A newly installed app is not found.** Core reads the list of apps when it starts. Exit Core from the tray and open it again.
+- **`@song` finds nothing or does not play.** It needs Spotify Premium, the one-time setup above, and Spotify open on a device.
+- **Anything else.** Core writes problems to `%APPDATA%\Pleiades\Core\v2\core.log`. Please [open an issue](https://github.com/pleiades-org/Core/issues) saying what you typed and what happened.
+
+## The full list
+
+<details>
+<summary>Everything Core understands</summary>
+
+| Type | What happens |
+| --- | --- |
+| Nothing | Your recently used apps as a grid, up to 18. Arrow keys move, Enter or a click opens |
+| `code`, `vsc`, `studio code`, `xbox` | Apps from the Start menu and the Microsoft Store, by name, word start, initials or any part of the name |
+| `cmd`, `wt`, `taskmgr`, `regedit` | Apps by Windows' own short names: `cmd` finds Command Prompt and `wt` finds Windows Terminal |
+| `@app calculator` | Apps only |
+| `> docs`, `@quicklink docs` | Your quicklinks. Their names also appear in normal search |
+| `2 + 3 * 4`, `@calc 25% of 80` | A sum. Enter copies the answer |
+| `sqrt(81)`, `round(2.6)`, `pi*2` | Maths functions and constants |
+| `time`, `date` | The time or date now. Enter copies it |
+| `2 days from now`, `next Friday`, `3 hours ago` | Dates and times from today |
+| `2028-01-31 + 1 month`, `2026-12-25 - 2026-09-21` | Date sums, and the days between two dates |
+| `10 kg to lb`, `4.7GB to MiB`, `30 mpg to l/100km` | Units of 15 kinds, including data sizes and speeds |
+| `100 usd to eur`, `£50 in dollars`, `100 usd` | Currency. An amount on its own converts to your own currency |
+| `10 GB at 100 Mbps`, `10 GB in 10 min`, `100 Mbps for 2 hours` | Download time, the speed you need, and data used |
+| `5 km in 25 min`, `26.2 mi in 3:30:00` | Running pace and speed |
+| `20% off 80`, `20 is what % of 80`, `% change from 50 to 75` | Percentages |
+| `tip 15% on 80 split 4`, `split 120 3 ways` | Tips and split bills |
+| `255 to hex`, `0xff`, `2024 to roman` | Number bases and Roman numerals |
+| `#ff8800`, `rgb(255, 136, 0) to hex`, `hsl 210 50 40 to rgb` | Colours as HEX, RGB and HSL |
+| `unix now`, `unix 1700000000` | Unix time |
+| `1920x1080`, `ppi 2560x1440 27in` | Screen aspect ratio and pixel density |
+| `mortgage 250k at 4.5% for 25 years`, `compound 1000 at 5% for 10 years` | Loan payments and savings growth |
+| `bmi 70kg 175cm` | Body mass index |
+| `9pm et to uk`, `@time 21:00 ET to UK` | Time zones: ET, CT, MT, PT, UK, Berlin, Sydney, Tokyo, India and UTC |
+| `9pm et to uk on 2026-03-10` | Time zones on a particular date |
+| `@web Rust & Windows` | A Google search in your browser |
+| `@`, `@cal` | Lists or completes a command |
+| `@power`, `power off`, `restart`, `sleep` | Power actions, each confirmed first |
+| `/ipconfig /all` | A command in your shell. **↑** recalls earlier commands |
+| `@cmd dir`, `@ps Get-Process`, `@pwsh …`, `@wsl ls`, `@bash ls` | A command in a particular shell |
+| `@run notepad`, `shell:startup`, `ms-settings:display`, `%appdata%` | Anything Windows Run accepts, optionally as administrator |
+| `taskbar`, `tb`, `@taskbar` | Shows the Windows taskbar on Core's display |
+| `@media`, `@music`, `@media spotify next` | Media controls, for the chosen player or one you name |
+| `play`, `pause`, `next`, `previous`, `now playing` | That media control straight away. Core stays open for another press |
+| `@volume`, `@mix`, `@mix spot` | The volume mixer, or only the programs whose name matches |
+| `@song basorexia` | Spotify song search, once connected |
+| `@update` | Checks for and installs updates |
+| `@info`, `@about`, `@version` | Core's version, the latest release and this version's release notes |
+
+Sums follow the usual order: `2+3*4` is 14 and `(2+3)*4` is 20. `%` divides by 100, so `25% of 80` is 20 and `20 + 10%` is 20.1.
+
+</details>
+
+## Build it yourself
+
+Core is two Rust crates: `crates/engine` (search, the calculator and conversions, with no dependencies) and `crates/launcher` (the native Windows window).
+
+You need Windows, the Rust MSVC toolchain (its version is pinned in `rust-toolchain.toml`) and the Visual Studio C++ build tools.
 
 ```powershell
 cargo build --release --locked -p core-launcher-v2 --bin core-v2
 cargo test --locked --workspace
 cargo clippy --locked --workspace --all-targets -- -D warnings
-.\scripts\run-release-checks.ps1              # background: you can keep working
-.\scripts\run-release-checks.ps1 -Interactive # adds click-away dismissal and pointer hover
 ```
 
-The native integration scripts need PowerShell 7 (`pwsh`) and an ordinary Windows session with Explorer running. By default they run in **background mode** with `--dry-run --test-background`, but they still open native windows and can interrupt focus. Run these UI checks only when explicitly authorized and when the computer can be left alone. Checks that need the real foreground, mouse pointer or keyboard run only with `-Interactive`: click-away dismissal (`test-dismissal.ps1`), pointer hover and visible-surface captures (`test-controls.ps1`), single-instance activation, and, with `-PhysicalKeyboard`, injected keystrokes for shortcuts and quicklinks. Start those when you can leave the computer alone. `package-release.ps1` requires the interactive records unless `-SkipInteractive` is given, which is noted in `release-package.json`. `--dry-run` renders and validates results but suppresses clipboard writes, app launches, browser opens, power actions, startup writes and global shortcuts. `--test-shortcut` enables only shortcut registration/interception in a dry-run instance. The registry integration test requires HKCU write access and an explicit `cargo test --workspace --locked -- --include-ignored`; it uses a temporary key outside autorun locations.
+The result is `target\release\core-v2.exe`. Start it with `--dry-run` to try it without it opening apps, writing to the clipboard or registering shortcuts.
 
-The discovery integration case requires at least one supported Start Menu entry. `scripts/test-single-instance.ps1 -Interactive` checks second-launch activation and visible Escape behavior; close a running Core v2 before that test.
+The scripts in `scripts\` run the release checks and build the release package. The checks open Core's windows on screen, and they keep their records in a `docs\measurements` folder that is not part of this repository: create it before running them.
 
-Diagnostics from release builds go to `%APPDATA%\Pleiades\Core\v2\core.log` (rotated to `core.log.old` above 1 MiB) unless stderr is already redirected. The tray icon switches between white and black glyphs to match the taskbar theme and reappears if Explorer restarts. Icons live in `crates/launcher/assets`; regenerate them from `assets/source` with `python scripts/generate-icons.py` (requires Pillow). `build.rs` embeds them without a resource compiler.
+## Status
 
-Start hidden with `core-v2.exe --start-hidden`, or enable **Start with Windows** to register this executable for the current user's sign-in. Keep the executable in a stable location before enabling it.
+Core is young and still changing. Known gaps:
 
-By default, Core uses a rounded, borderless OLED palette: pure-black background and a subtle `#121212` selected-result surface. Short 130 ms entrance and 100 ms exit fades are enabled for Core independently of Windows' animation setting. Use `--reduced-motion` for immediate show/hide, or `--system-motion` to follow Windows. The animation timer stops after each transition. Escape hides the palette, and double-clicking a result accepts it. Calculated answers have larger typography and a contextual subtitle.
-
-## Implementation
-
-- `crates/engine`: borrowed command parsing into an enum, arithmetic evaluation, time-expression parsing, prepared application catalog and deterministic ranking.
-- `crates/launcher`: native Win32 controls, Start Menu discovery, hotkey/tray, Windows actions and a blocking message loop.
-- One search worker retains its scratch storage. One pending request replaces older pending work. Generation checks reject stale results and stale Enter actions; canceled scans stop at bounded checkpoints.
-- App names and initials are prepared once. Catalogs of at least 128 entries use bounded bigram/trigram postings with a separate initials lookup. The retained index stays within 512 KiB; common grams can fall back to prefix ranges or a complete scan. Only eight selected rows reach the UI.
-- Discovery runs once in the background, with depth and entry limits. Application matching does no disk access. Time conversions read Windows time-zone rules on the search worker; they never make network requests. Searching never uses the network. Background features may contact the network when Core is shown: signed GitHub updates, website-quicklink icons and the ECB exchange-rate file (cached in `%LOCALAPPDATA%\Pleiades\Core\v2\exchange-rates.xml`, refreshed when older than 12 hours).
-- Separate sleeping workers load actual icons only for visible results: one extracts Shell icons, the other downloads website icons, so a slow site never delays app icons. Each keeps a 64-entry LRU cache of icons and failed lookups, and the window keeps the 128 icons it showed most recently so results that come back while typing keep their icon; evictions release native handles. Missing icons use the small generic symbol. No icon extraction runs in input handling, painting or application matching. Hidden idle has no application timer or periodic polling.
-
-## Current limits
-
-This is a usable alpha release, not the entire original plan. Favorites/recent persistence, catalog refresh notifications and typo correction remain pending. Quicklinks now support saved websites, files and folders. Discovery covers supported Start Menu files and registered packaged apps; restart Core after installing applications.
-
-Rows have application icons and folder descriptions; fuller duplicate-name disambiguation remains pending. Windows-key-only mode preserves tested combinations on the normal desktop; shortcut replay into elevated applications can be restricted by Windows. Secure-desktop, physical mixed-DPI, IME-candidate and screen-reader acceptance testing remains manual. Explorer-restart tray recovery remains hardening work. The build has signed update manifests and a current-user installer, but no Authenticode signing or old-data migration. Line search is excluded.
-
-See the [current feature/performance comparison](docs/FEATURE_AND_PERFORMANCE_DIFF.md), [initial implementation measurements](docs/IMPLEMENTATION_STATUS.md) and the [full plan](CORE_V2_PLAN.md). The comparison distinguishes implemented features, experiments and uncompleted release gates, including current click-away measurements.
+- Newly installed apps are found after Core restarts.
+- Typing mistakes are not corrected yet.
+- The setup file has no publisher certificate, so Windows warns about it the first time.
+- Screen readers, mixed display scaling and some input methods are not covered by the automated checks.

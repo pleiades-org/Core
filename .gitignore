@@ -1,5 +1,10 @@
 .firecrawl/
 /target/
 /dist/
+# Working notes, release notes, validation records and benchmarks stay on the maintainer's PC.
+/docs/
+/benchmarks/
+/*.md
+!/README.md
 # Release signing keys belong outside this repository.
 *.p8

@@ -93,8 +93,8 @@ Enter to open, with the local time centred in HH:MM format. The clock updates
 each minute while search is visible; it stops while Core is hidden or Settings
 is open. Errors and command completion status appear in place of the hint.
 
-Type conversions and calculations directly; docs/SMART_CONVERSIONS.md in the
-source repository lists every form. Currency uses European Central Bank reference
+Type conversions and calculations directly; the README at
+github.com/pleiades-org/Core lists the forms. Currency uses European Central Bank reference
 rates, downloaded in the background while Core is shown and cached for offline use.
 
 Try these queries:
@@ -132,8 +132,8 @@ or in every app. Shortcut boxes record keys: click one and press the keys.
 Optional: Settings > Music > Spotify song search connects your own Spotify
 Premium account. Type @song and a song or artist, then press Enter to play
 the chosen song. The Spotify volume switch beside it makes the bar's slider
-set Spotify's own volume. Off by default; docs/SPOTIFY.md in the source
-repository has the one-time setup.
+set Spotify's own volume. Off by default; the README at
+github.com/pleiades-org/Core has the one-time setup.
 
 Keep the executable in a stable folder before enabling Start with Windows.
 Startup runs at your Windows sign-in. Core's tray menu can exit the application.
