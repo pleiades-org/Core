@@ -121,6 +121,10 @@ pub(super) fn send(window: isize, command: MediaCommand) -> Result<(), String> {
         }
         MediaCommand::Next => APPCOMMAND_MEDIA_NEXTTRACK,
         MediaCommand::Previous => APPCOMMAND_MEDIA_PREVIOUSTRACK,
+        // A window takes no such command, and these players are never offered it.
+        MediaCommand::Shuffle | MediaCommand::Repeat => {
+            return Err("This player's shuffle and repeat cannot be reached from Core".into())
+        }
     };
     let handle = HWND(window as *mut _);
     unsafe {
@@ -152,6 +156,7 @@ fn session(player: &KnownPlayer, title: &str) -> MediaSession {
             next: true,
             previous: true,
             seek: false,
+            ..MediaControls::default()
         },
         timeline: None,
     }

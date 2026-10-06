@@ -1,4 +1,5 @@
-//! Optional Spotify worker. Nothing starts until an explicit song search or settings action.
+//! Optional Spotify worker. Nothing starts until an explicit search for a song, album, artist
+//! or playlist, or a settings action.
 mod api;
 mod authorization;
 mod encoding;
@@ -8,7 +9,9 @@ mod volume;
 use crate::windows::settings::SpotifySettings;
 use api::Client;
 pub use authorization::REDIRECT_URI;
-use core_engine::search::{Song, SongSearch, SongStatus};
+use core_engine::search::{
+    CatalogKind, Collection, PlayMode, PlaylistLibrary, Song, SongSearch, SongStatus,
+};
 use std::{
     path::PathBuf,
     sync::{Arc, Condvar, Mutex},
@@ -24,11 +27,11 @@ use windows::Win32::{
 pub const SPOTIFY_READY: u32 = WM_APP + 19;
 
 pub fn load_artwork(url: &str) -> Option<crate::windows::application_icon::ApplicationIcon> {
-    let path = api::artwork_path(url)?;
+    let (host, path) = api::artwork_location(url)?;
     let response = crate::windows::http::get(
         crate::windows::http::Request {
             secure: true,
-            host: "i.scdn.co",
+            host,
             port: 443,
             path,
             max_bytes: 2 * 1024 * 1024,
@@ -52,10 +55,16 @@ const SEARCH_SETTLE: Duration = Duration::from_millis(350);
 const DISABLED: &str = "Enable Spotify song search in Music settings first.";
 const BUSY: &str = "Spotify is busy. Finish the current action and try again.";
 
+/// What the person chose to play.
+enum Chosen {
+    Song(Song),
+    Collection(Collection, PlayMode),
+}
+
 enum Command {
     Connect,
     Disconnect,
-    Play { request_id: u64, song: Song },
+    Play { request_id: u64, chosen: Chosen },
 }
 /// What the bar's volume slider asks of Spotify's volume: a change, a reading, or a change
 /// and then a reading.
@@ -66,6 +75,8 @@ struct VolumeWork {
 }
 pub enum Event {
     Search(SongSearch),
+    /// The person's playlists, or why they could not be read.
+    Playlists(PlaylistLibrary),
     Account(Result<(), String>),
     Playback {
         request_id: u64,
@@ -81,10 +92,14 @@ struct Pending {
     revision: u64,
     search: Option<String>,
     current_query: Option<String>,
+    /// What `search` and `current_query` look for: songs, albums or artists.
+    searched: CatalogKind,
     command: Option<Command>,
     /// The slider's newest wish. Changes made faster than Spotify answers collapse into it,
     /// so a drag sends one request at a time.
     volume: Option<VolumeWork>,
+    /// The person's playlists are wanted; asking twice reads them once.
+    playlists: bool,
     busy: bool,
     /// The command in flight starts a song, which a newer choice may take the place of.
     starting_song: bool,
@@ -102,7 +117,10 @@ struct Work {
     settings: SpotifySettings,
     command: Option<Command>,
     volume: Option<VolumeWork>,
+    playlists: bool,
     query: Option<String>,
+    /// What `query` looks for.
+    searched: CatalogKind,
 }
 
 pub struct SpotifyService {
@@ -131,8 +149,10 @@ impl SpotifyService {
         self.shared.wake.notify_one();
     }
 
-    pub fn search(&self, query: String) {
+    /// Searches Spotify's catalog for `query` once typing pauses: songs, albums or artists.
+    pub fn search(&self, kind: CatalogKind, query: String) {
         let mut pending = self.shared.pending.lock().expect("Spotify work lock");
+        pending.searched = kind;
         pending.current_query = Some(query.clone());
         pending.search = Some(query);
         self.shared.wake.notify_one();
@@ -154,6 +174,21 @@ impl SpotifyService {
     /// started, so choosing again never finds Spotify busy: the earlier song's checks stop at
     /// their next step and its result is dropped. Only a sign-in is not interrupted.
     pub fn play(&self, request_id: u64, song: &Song) -> Result<(), String> {
+        self.start(request_id, Chosen::Song(song.clone()))
+    }
+
+    /// Starts a playlist, album or artist as it is, shuffled or on repeat, with the same
+    /// rules as a song.
+    pub fn play_collection(
+        &self,
+        request_id: u64,
+        collection: &Collection,
+        mode: PlayMode,
+    ) -> Result<(), String> {
+        self.start(request_id, Chosen::Collection(collection.clone(), mode))
+    }
+
+    fn start(&self, request_id: u64, chosen: Chosen) -> Result<(), String> {
         let mut pending = self.shared.pending.lock().expect("Spotify work lock");
         if !pending.settings.enabled {
             return Err(DISABLED.into());
@@ -168,10 +203,18 @@ impl SpotifyService {
             // Work compares this number to learn that it was given up on.
             pending.revision += 1;
         }
-        pending.command = Some(Command::Play {
-            request_id,
-            song: song.clone(),
-        });
+        pending.command = Some(Command::Play { request_id, chosen });
+        self.shared.wake.notify_one();
+        Ok(())
+    }
+
+    /// Reads the person's playlists; they arrive as `Event::Playlists`.
+    pub fn load_playlists(&self) -> Result<(), String> {
+        let mut pending = self.shared.pending.lock().expect("Spotify work lock");
+        if !pending.settings.enabled {
+            return Err(DISABLED.into());
+        }
+        pending.playlists = true;
         self.shared.wake.notify_one();
         Ok(())
     }
@@ -237,6 +280,7 @@ fn invalidate(pending: &mut Pending) {
     pending.current_query = None;
     pending.command = None;
     pending.volume = None;
+    pending.playlists = false;
     pending.events.clear();
 }
 
@@ -276,7 +320,13 @@ fn serve(address: usize, path: PathBuf, shared: &Arc<Shared>) {
         client.settings = work.settings;
         let event = match work.volume {
             Some(volume) => change_volume(client, volume, &cancelled),
-            None => perform(client, work.command, work.query, &cancelled),
+            None if work.playlists => read_playlists(client, &cancelled),
+            None => perform(
+                client,
+                work.command,
+                work.query.map(|query| (work.searched, query)),
+                &cancelled,
+            ),
         };
         publish(address, shared, work.revision, event);
     }
@@ -287,6 +337,7 @@ fn next_work(shared: &Shared) -> Option<Work> {
     loop {
         while pending.command.is_none()
             && pending.volume.is_none()
+            && !pending.playlists
             && pending.search.is_none()
             && !pending.shutdown
         {
@@ -295,8 +346,8 @@ fn next_work(shared: &Shared) -> Option<Work> {
         if pending.shutdown {
             return None;
         }
-        // Only a search waits for a pause in typing; commands and the volume act at once.
-        if pending.command.is_none() && pending.volume.is_none() {
+        // Only a search waits for a pause in typing; everything else acts at once.
+        if pending.command.is_none() && pending.volume.is_none() && !pending.playlists {
             let (settled, timeout) = shared
                 .wake
                 .wait_timeout(pending, SEARCH_SETTLE)
@@ -309,15 +360,17 @@ fn next_work(shared: &Shared) -> Option<Work> {
         if pending.shutdown {
             return None;
         }
-        // One thing at a time: a command, else the volume, else the search, which stays
-        // queued behind the other two.
+        // One thing at a time: a command, else the volume, else the playlists, else the
+        // search, each staying queued behind those before it.
         let command = pending.command.take();
         let volume = if command.is_none() {
             pending.volume.take()
         } else {
             None
         };
-        let query = if command.is_none() && volume.is_none() {
+        let playlists =
+            command.is_none() && volume.is_none() && std::mem::take(&mut pending.playlists);
+        let query = if command.is_none() && volume.is_none() && !playlists {
             pending.search.take()
         } else {
             None
@@ -329,7 +382,9 @@ fn next_work(shared: &Shared) -> Option<Work> {
             settings: pending.settings.clone(),
             command,
             volume,
+            playlists,
             query,
+            searched: pending.searched,
         });
     }
 }
@@ -345,7 +400,9 @@ fn publish(address: usize, shared: &Shared, revision: u64, event: Option<Event>)
         return;
     };
     if let Event::Search(reading) = &event {
-        if pending.current_query.as_deref() != Some(&reading.query) {
+        if pending.searched != reading.kind
+            || pending.current_query.as_deref() != Some(&reading.query)
+        {
             return;
         }
         pending
@@ -357,6 +414,12 @@ fn publish(address: usize, shared: &Shared, revision: u64, event: Option<Event>)
         pending
             .events
             .retain(|waiting| !matches!(waiting, Event::Volume(_)));
+    }
+    if matches!(event, Event::Playlists(_)) {
+        // And only the newest reading of the library.
+        pending
+            .events
+            .retain(|waiting| !matches!(waiting, Event::Playlists(_)));
     }
     pending.events.push(event);
     // The shutdown lock prevents notifications from outliving Core's window.
@@ -372,10 +435,11 @@ fn publish(address: usize, shared: &Shared, revision: u64, event: Option<Event>)
     }
 }
 
+/// `query`: what to search Spotify's catalog for, when nothing else is asked.
 fn perform(
     client: &mut Client,
     command: Option<Command>,
-    query: Option<String>,
+    query: Option<(CatalogKind, String)>,
     cancelled: &impl Fn() -> bool,
 ) -> Option<Event> {
     if cancelled() {
@@ -396,29 +460,61 @@ fn perform(
             );
             Some(Event::Account(result))
         }
-        Some(Command::Play { request_id, song }) => {
-            let result = client
-                .play(&song.uri, song.album_uri.as_deref(), cancelled)
-                .map(|device| format!("Playing in Spotify · {}", device.name))
+        Some(Command::Play { request_id, chosen }) => {
+            let (started, manner) = match &chosen {
+                Chosen::Song(song) => (
+                    client.play(&song.uri, song.album_uri.as_deref(), cancelled),
+                    PlayMode::AsItIs.manner(),
+                ),
+                Chosen::Collection(collection, mode) => (
+                    client.play_collection(&collection.uri, *mode, cancelled),
+                    mode.manner(),
+                ),
+            };
+            let result = started
+                .map(|device| format!("Playing{manner} in Spotify · {}", device.name))
                 .map_err(|error| error.message.to_owned());
             Some(Event::Playback { request_id, result })
         }
         None => {
-            let query = query?;
+            let (kind, query) = query?;
             if !client.settings.enabled || cancelled() {
                 return None;
             }
-            let (status, songs) = match client.search(&query) {
-                Ok(songs) => (SongStatus::Ready, songs.into()),
-                Err(error) => (error.status, Arc::from([])),
+            let mut reading = SongSearch {
+                kind,
+                query: query.as_str().into(),
+                status: SongStatus::Ready,
+                ..SongSearch::default()
             };
-            Some(Event::Search(SongSearch {
-                query: query.into(),
-                status,
-                songs,
-            }))
+            let failed = match kind {
+                CatalogKind::Songs => client
+                    .search(&query)
+                    .map(|songs| reading.songs = songs.into()),
+                CatalogKind::Albums | CatalogKind::Artists => client
+                    .search_collections(kind, &query)
+                    .map(|collections| reading.collections = collections.into()),
+            }
+            .err();
+            if let Some(error) = failed {
+                reading.status = error.status;
+            }
+            Some(Event::Search(reading))
         }
     }
+}
+
+/// The person's library, or the reason it could not be read, which the results then show.
+fn read_playlists(client: &mut Client, cancelled: &impl Fn() -> bool) -> Option<Event> {
+    if !client.settings.enabled || cancelled() {
+        return None;
+    }
+    let (status, playlists) = match client.playlists(cancelled) {
+        Ok(playlists) => (SongStatus::Ready, playlists.into()),
+        Err(error) => (error.status, Arc::from([])),
+    };
+    // Given up on while Spotify answered: the answer is for settings that are gone.
+    (!cancelled()).then_some(Event::Playlists(PlaylistLibrary { status, playlists }))
 }
 
 /// A change, then a reading. A change that worked says nothing, because the slider already
@@ -454,7 +550,7 @@ pub fn connection_status(folder: Option<PathBuf>, settings: &SpotifySettings) ->
     };
     match token_store::load(&folder.join("spotify-token.bin"), &settings.client_id) {
         Ok(Some(_)) => "Connected. Enter plays on your active Spotify device.".into(),
-        Ok(None) => "Connect Spotify once, then search with @song.".into(),
+        Ok(None) => "Connect Spotify once, then use @song, @album, @artist and @playlist.".into(),
         Err(error) => error,
     }
 }
@@ -474,6 +570,83 @@ mod tests {
         }
     }
 
+    fn playlist() -> Collection {
+        Collection {
+            kind: core_engine::search::CollectionKind::Playlist,
+            uri: "spotify:playlist:0123456789abcdefghijkl".into(),
+            name: "Playlist".into(),
+            by: "Owner".into(),
+            year: None,
+            songs: Some(12),
+            artwork: None,
+        }
+    }
+
+    #[test]
+    fn the_library_is_read_at_once_ahead_of_a_search_and_only_its_newest_reading_is_kept() {
+        let service = SpotifyService {
+            shared: Arc::new(Shared::default()),
+        };
+        service.configure(SpotifySettings {
+            enabled: true,
+            client_id: "a".repeat(32),
+            volume: false,
+        });
+        service.search(CatalogKind::Songs, "song".into());
+        service.load_playlists().unwrap();
+        service.load_playlists().unwrap();
+        let started = std::time::Instant::now();
+        let work = next_work(&service.shared).unwrap();
+        assert!(started.elapsed() < SEARCH_SETTLE);
+        assert!(work.playlists && work.command.is_none() && work.query.is_none());
+        // Asked twice, read once: the search is next.
+        let work = next_work(&service.shared).unwrap();
+        assert!(!work.playlists);
+        assert_eq!(work.query.as_deref(), Some("song"));
+        // A choice to play goes ahead of reading the library.
+        service.load_playlists().unwrap();
+        service
+            .play_collection(7, &playlist(), PlayMode::Shuffled)
+            .unwrap();
+        let work = next_work(&service.shared).unwrap();
+        assert!(matches!(
+            work.command,
+            Some(Command::Play {
+                request_id: 7,
+                chosen: Chosen::Collection(_, PlayMode::Shuffled)
+            })
+        ));
+        assert!(!work.playlists);
+        publish(0, &service.shared, work.revision, None);
+        assert!(next_work(&service.shared).unwrap().playlists);
+
+        let library = |status| {
+            Some(Event::Playlists(PlaylistLibrary {
+                status,
+                playlists: Arc::from([playlist()]),
+            }))
+        };
+        publish(
+            0,
+            &service.shared,
+            work.revision,
+            library(SongStatus::Loading),
+        );
+        publish(
+            0,
+            &service.shared,
+            work.revision,
+            library(SongStatus::Ready),
+        );
+        assert!(matches!(
+            service.take_events().as_slice(),
+            [Event::Playlists(PlaylistLibrary {
+                status: SongStatus::Ready,
+                ..
+            })]
+        ));
+    }
+
     #[test]
     fn configuration_changes_discard_stale_work_and_results() {
         let service = SpotifyService {
@@ -484,8 +657,9 @@ mod tests {
             client_id: "a".repeat(32),
             volume: true,
         });
-        service.search("old song".into());
+        service.search(CatalogKind::Songs, "old song".into());
         service.set_volume(40).unwrap();
+        service.load_playlists().unwrap();
         service
             .shared
             .pending
@@ -499,10 +673,17 @@ mod tests {
             pending.search.is_none()
                 && pending.current_query.is_none()
                 && pending.volume.is_none()
+                && !pending.playlists
                 && pending.events.is_empty()
         );
         drop(pending);
         assert!(service.play(1, &song()).is_err());
+        assert!(service
+            .play_collection(2, &playlist(), PlayMode::AsItIs)
+            .is_err());
+        // Switched off, Spotify is not asked for the library either.
+        assert!(service.load_playlists().is_err());
+        assert!(!service.shared.pending.lock().unwrap().playlists);
         // Switched off, Spotify is not asked about the volume either.
         assert!(service.read_volume().is_err());
         assert!(service.set_volume(40).is_err());
@@ -519,7 +700,7 @@ mod tests {
             client_id: "a".repeat(32),
             volume: true,
         });
-        service.search("song".into());
+        service.search(CatalogKind::Songs, "song".into());
         service.read_volume().unwrap();
         service.set_volume(30).unwrap();
         service.set_volume(45).unwrap();
@@ -627,12 +808,15 @@ mod tests {
             &mut client,
             Some(Command::Play {
                 request_id: 1,
-                song: song()
+                chosen: Chosen::Song(song())
             }),
             None,
             &|| true
         )
         .is_none());
+        assert!(read_playlists(&mut client, &|| true).is_none());
+        // Not cancelled, but song search is off: the library is not asked for.
+        assert!(read_playlists(&mut client, &|| false).is_none());
         let volume = VolumeWork {
             set: Some(40),
             read: true,

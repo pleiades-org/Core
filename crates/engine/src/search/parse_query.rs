@@ -29,6 +29,12 @@ const COMMAND_NAMES: &[&str] = &[
     "media",
     "music",
     "song",
+    "album",
+    "albums",
+    "artist",
+    "artists",
+    "playlist",
+    "playlists",
     "volume",
     "mix",
     "mixer",
@@ -53,6 +59,12 @@ pub enum CommandKind {
     Media,
     /// Spotify catalog search, separate from controls for existing players.
     Songs,
+    /// Albums in Spotify's catalog: `@album`, `@albums`.
+    Albums,
+    /// Artists in Spotify's catalog: `@artist`, `@artists`.
+    Artists,
+    /// The person's own Spotify playlists: `@playlist`, `@playlists`.
+    Playlists,
     /// Every program's volume: `@volume`, `@mix`, `@mixer`.
     Mixer,
     /// Core's version and the latest release: `@info`, `@about`, `@version`.
@@ -136,6 +148,9 @@ fn parse_command<'query>(command: &'query str, payload: &'query str) -> ParsedQu
         "update" => CommandKind::Update,
         "media" | "music" => CommandKind::Media,
         "song" => CommandKind::Songs,
+        "album" | "albums" => CommandKind::Albums,
+        "artist" | "artists" => CommandKind::Artists,
+        "playlist" | "playlists" => CommandKind::Playlists,
         "volume" | "mix" | "mixer" => CommandKind::Mixer,
         "info" | "about" | "version" => CommandKind::Info,
         "shell" | "terminal" => CommandKind::Shell(ShellKind::Default),

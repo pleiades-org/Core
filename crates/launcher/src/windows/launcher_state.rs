@@ -326,6 +326,7 @@ impl LauncherState {
         self.mixer_for_query(&query);
         self.info_requested(&query);
         self.songs_for_query(&query);
+        self.playlists_for_query(&query);
         let media = self.media_state();
         let app_info = Some(self.app_info());
         if let Some(worker) = &self.worker {
@@ -341,6 +342,7 @@ impl LauncherState {
                     mixer: self.mixer_snapshot(),
                     app_info,
                     songs: self.songs.snapshot.clone(),
+                    playlists: self.songs.playlists.clone(),
                 },
             );
         }
@@ -453,6 +455,9 @@ impl LauncherState {
                     }
                     Action::OpenQuicklink(link) => quicklink_icon_source(link)?,
                     Action::PlaySong(song) => IconSource::SpotifyArtwork(song.artwork.clone()?),
+                    Action::PlayCollection(collection) => {
+                        IconSource::SpotifyArtwork(collection.artwork.clone()?)
+                    }
                     Action::Mixer { app, .. } => mixer_icon_source(app)?,
                     _ => return None,
                 };
@@ -628,6 +633,10 @@ impl LauncherState {
         self.pending_action = Some(match action {
             Action::PlaySong(song) => {
                 self.play_song(song);
+                return;
+            }
+            Action::PlayCollection(collection) => {
+                self.play_collection(collection, view.play_mode());
                 return;
             }
             Action::Update => {

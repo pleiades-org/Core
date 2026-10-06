@@ -175,6 +175,23 @@ impl PowerMenu {
 }
 
 pub fn icon_button(item: &DRAWITEMSTRUCT, glyph: &str, dpi: u32, fonts: Fonts, palette: Palette) {
+    let color = if button_hover::is_hovered(item.hwndItem) {
+        palette.accent
+    } else {
+        palette.text
+    };
+    tinted_icon_button(item, glyph, color, dpi, fonts, palette);
+}
+
+/// An icon button whose glyph has the colour its owner chose, for a button that shows a state.
+pub fn tinted_icon_button(
+    item: &DRAWITEMSTRUCT,
+    glyph: &str,
+    color: COLORREF,
+    dpi: u32,
+    fonts: Fonts,
+    palette: Palette,
+) {
     painting::fill(item.hDC, &item.rcItem, palette.background);
     let hovered = button_hover::is_hovered(item.hwndItem);
     if hovered || item.itemState.0 & (ODS_SELECTED.0 | ODS_FOCUS.0) != 0 {
@@ -182,11 +199,6 @@ pub fn icon_button(item: &DRAWITEMSTRUCT, glyph: &str, dpi: u32, fonts: Fonts, p
     }
     let mut area = item.rcItem;
     area.left += ((area.right - area.left) - scale(20, dpi)) / 2;
-    let color = if hovered {
-        palette.accent
-    } else {
-        palette.text
-    };
     painting::text(item.hDC, glyph, area, fonts.icon, color);
 }
 

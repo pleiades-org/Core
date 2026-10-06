@@ -1,3 +1,4 @@
+use super::window_placement::{Corner, CornerMask};
 use super::{
     application_icon::ApplicationIcon,
     theme::{self, scale},
@@ -8,8 +9,33 @@ use core_engine::{
     media::VolumeLevel,
     search::{Action, SearchResult},
 };
-use std::sync::Arc;
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 use windows::Win32::{Foundation::*, Graphics::Gdi::*};
+
+/// Corner curves drawn recently, by radius: a row repaints the same few every time.
+const KEPT_CORNER_MASKS: usize = 12;
+
+thread_local! {
+    static CORNER_MASKS: RefCell<Vec<Rc<CornerMask>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The coverage of a corner of `radius` pixels, worked out once and kept for the next shape.
+fn corner_mask(radius: i32) -> Rc<CornerMask> {
+    CORNER_MASKS.with(|masks| {
+        let mut masks = masks.borrow_mut();
+        if let Some(place) = masks.iter().position(|mask| mask.radius() == radius) {
+            let mask = masks.remove(place);
+            masks.push(mask.clone());
+            return mask;
+        }
+        if masks.len() == KEPT_CORNER_MASKS {
+            masks.remove(0);
+        }
+        let mask = Rc::new(CornerMask::new(radius));
+        masks.push(mask.clone());
+        mask
+    })
+}
 
 /// The speakers of the icon font: a row of the volume mixer that has no program's icon.
 const SPEAKERS_GLYPH: &str = "\u{e7f5}";
@@ -18,6 +44,8 @@ const GLYPH_SIZE: i32 = 20;
 /// Where a row's text starts, and how far before the row's end it stops: the room at the end
 /// is the Enter hint's. In 96-DPI pixels.
 pub const ROW_TEXT_LEFT: i32 = 56;
+/// How round the selected row's highlight is, and what is drawn to go with it.
+pub const ROW_RADIUS: i32 = 9;
 const ROW_HINT_WIDTH: i32 = 40;
 
 pub struct DisplayRow {
@@ -28,6 +56,9 @@ pub struct DisplayRow {
     pub kind: ResultKind,
     /// A row of the volume mixer carries its level, drawn as a slider.
     pub volume: Option<VolumeLevel>,
+    /// A playlist, album or artist: selected, its row ends in buttons that play it shuffled
+    /// or on repeat.
+    pub options: bool,
 }
 
 impl DisplayRow {
@@ -57,6 +88,7 @@ impl DisplayRow {
                 Action::Mixer { level, .. } => Some(*level),
                 _ => None,
             },
+            options: matches!(result.action, Action::PlayCollection(_)),
         }
     }
 }
@@ -162,12 +194,67 @@ pub fn buffered(context: HDC, area: &RECT, draw: impl FnOnce(HDC)) {
     }
 }
 
-pub fn rounded(context: HDC, area: &RECT, radius: i32, fill: COLORREF) {
+/// A filled shape with rounded corners, the curves smooth. GDI's own `RoundRect` keeps or
+/// drops whole pixels, which shows as steps; here the straight parts are plain fills, and
+/// each corner is blended over what is already drawn by how much of every pixel the curve
+/// covers. As `RoundRect` without a pen does, the shape stops one pixel short of `area`'s
+/// right and bottom, so everything keeps the size it had.
+pub fn rounded(context: HDC, area: &RECT, radius: i32, color: COLORREF) {
+    let shape = rectangle(area.left, area.top, area.right - 1, area.bottom - 1);
+    let (width, height) = (shape.right - shape.left, shape.bottom - shape.top);
+    if width <= 0 || height <= 0 {
+        return;
+    }
+    // A curve cannot take more than half the shape.
+    let radius = radius.min(width / 2).min(height / 2);
+    if radius <= 0 {
+        fill(context, &shape, color);
+        return;
+    }
+    if !blend_corners(context, &shape, radius, color) {
+        // Without the surface to blend from, the stepped curve is better than none.
+        stepped(context, area, radius, color);
+        return;
+    }
+    for band in [
+        rectangle(
+            shape.left + radius,
+            shape.top,
+            shape.right - radius,
+            shape.bottom,
+        ),
+        rectangle(
+            shape.left,
+            shape.top + radius,
+            shape.left + radius,
+            shape.bottom - radius,
+        ),
+        rectangle(
+            shape.right - radius,
+            shape.top + radius,
+            shape.right,
+            shape.bottom - radius,
+        ),
+    ] {
+        fill(context, &band, color);
+    }
+}
+
+/// A rounded shape of `fill` inside a one-pixel border of `edge`, both as smooth as `rounded`
+/// makes them: the border is what shows of the larger shape around the smaller one.
+pub fn bordered(context: HDC, area: &RECT, radius: i32, fill: COLORREF, edge: COLORREF) {
+    rounded(context, area, radius, edge);
+    let inside = rectangle(area.left + 1, area.top + 1, area.right - 1, area.bottom - 1);
+    rounded(context, &inside, radius - 1, fill);
+}
+
+/// GDI's own rounded shape, with stepped curves.
+fn stepped(context: HDC, area: &RECT, radius: i32, color: COLORREF) {
     unsafe {
         let state = SaveDC(context);
         SelectObject(context, GetStockObject(DC_BRUSH));
         SelectObject(context, GetStockObject(NULL_PEN));
-        SetDCBrushColor(context, fill);
+        SetDCBrushColor(context, color);
         let _ = RoundRect(
             context,
             area.left,
@@ -178,6 +265,89 @@ pub fn rounded(context: HDC, area: &RECT, radius: i32, fill: COLORREF) {
             radius * 2,
         );
         let _ = RestoreDC(context, state);
+    }
+}
+
+/// The four corner squares of `shape` in `color`, each pixel as see-through as the curve
+/// leaves it. They are made side by side in one small picture and blended into place. False
+/// when Windows could not make that picture; nothing is drawn then.
+fn blend_corners(context: HDC, shape: &RECT, radius: i32, color: COLORREF) -> bool {
+    let mask = corner_mask(radius);
+    let (size, edge) = (radius * 2, radius as usize);
+    let channels = [
+        (color.0 >> 16) & 0xff,
+        (color.0 >> 8) & 0xff,
+        color.0 & 0xff,
+    ];
+    let info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: size,
+            // Negative: rows run top to bottom.
+            biHeight: -size,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    unsafe {
+        let mut bits = std::ptr::null_mut();
+        let Ok(picture) = CreateDIBSection(None, &info, DIB_RGB_COLORS, &mut bits, None, 0) else {
+            return false;
+        };
+        let source = CreateCompatibleDC(Some(context));
+        if source.0.is_null() || bits.is_null() {
+            let _ = DeleteObject(picture.into());
+            let _ = DeleteDC(source);
+            return false;
+        }
+        // The picture belongs to this function until it is deleted below.
+        let pixels = std::slice::from_raw_parts_mut(bits.cast::<u8>(), edge * edge * 16);
+        for corner in Corner::ALL {
+            let column = if corner.is_left() { 0 } else { edge };
+            let row = if corner.is_top() { 0 } else { edge };
+            for y in 0..edge {
+                for x in 0..edge {
+                    let coverage = u32::from(mask.coverage(corner, x as i32, y as i32));
+                    let pixel = ((row + y) * edge * 2 + column + x) * 4;
+                    // Blue, green, red, each already scaled by the coverage that follows.
+                    for (offset, channel) in channels.iter().enumerate() {
+                        pixels[pixel + offset] = ((channel * coverage + 127) / 255) as u8;
+                    }
+                    pixels[pixel + 3] = coverage as u8;
+                }
+            }
+        }
+        let previous = SelectObject(source, picture.into());
+        let blend = BLENDFUNCTION {
+            BlendOp: AC_SRC_OVER as u8,
+            BlendFlags: 0,
+            SourceConstantAlpha: u8::MAX,
+            AlphaFormat: AC_SRC_ALPHA as u8,
+        };
+        let mut drawn = true;
+        for corner in Corner::ALL {
+            let (from_x, to_x) = if corner.is_left() {
+                (0, shape.left)
+            } else {
+                (radius, shape.right - radius)
+            };
+            let (from_y, to_y) = if corner.is_top() {
+                (0, shape.top)
+            } else {
+                (radius, shape.bottom - radius)
+            };
+            drawn &= AlphaBlend(
+                context, to_x, to_y, radius, radius, source, from_x, from_y, radius, radius, blend,
+            )
+            .as_bool();
+        }
+        SelectObject(source, previous);
+        let _ = DeleteObject(picture.into());
+        let _ = DeleteDC(source);
+        drawn
     }
 }
 
@@ -285,7 +455,7 @@ pub fn row_surface(context: HDC, area: &RECT, selected: bool, dpi: u32, palette:
     let inset = scale(2, dpi);
     let surface = rectangle(area.left, area.top + inset, area.right, area.bottom - inset);
     if selected {
-        rounded(context, &surface, scale(9, dpi), palette.selected);
+        rounded(context, &surface, scale(ROW_RADIUS, dpi), palette.selected);
     }
 }
 
@@ -514,13 +684,18 @@ mod tests {
         const SIZE: i32 = 4;
 
         fn filled(color: COLORREF) -> Self {
+            Self::sized(color, Self::SIZE)
+        }
+
+        /// A square surface `size` pixels each way.
+        fn sized(color: COLORREF, size: i32) -> Self {
             unsafe {
                 let screen = GetDC(None);
                 let context = CreateCompatibleDC(Some(screen));
-                let bitmap = CreateCompatibleBitmap(screen, Self::SIZE, Self::SIZE);
+                let bitmap = CreateCompatibleBitmap(screen, size, size);
                 ReleaseDC(None, screen);
                 let previous = SelectObject(context, bitmap.into());
-                fill(context, &rectangle(0, 0, Self::SIZE, Self::SIZE), color);
+                fill(context, &rectangle(0, 0, size, size), color);
                 Self {
                     context,
                     bitmap,
@@ -597,6 +772,120 @@ mod tests {
         // Outside the area nothing changed.
         assert_eq!(surface.pixel(0, 1), white);
         assert_eq!(surface.pixel(1, 3), white);
+    }
+
+    #[test]
+    fn rounded_shapes_have_smooth_curves_keep_their_size_and_release_what_they_made() {
+        let _serial = crate::windows::GUI_RESOURCE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (black, white) = (COLORREF(0), COLORREF(0x00FF_FFFF));
+        let grey = |pixel: COLORREF| pixel.0 & 0xff;
+        let surface = Surface::sized(black, 40);
+        // Once before counting, so the kept corner curve is not taken for a leak.
+        rounded(surface.context, &rectangle(0, 0, 30, 30), 10, white);
+        fill(surface.context, &rectangle(0, 0, 40, 40), black);
+        let before = gdi_objects();
+        rounded(surface.context, &rectangle(4, 4, 35, 27), 10, white);
+        assert_eq!(gdi_objects(), before);
+        // As without a pen, the shape stops one pixel short of the right and bottom.
+        let (left, top, right, bottom) = (4, 4, 34, 26);
+        assert_eq!(surface.pixel(left + 15, top), white);
+        assert_eq!(surface.pixel(left, top + 11), white);
+        assert_eq!(surface.pixel(right - 1, bottom - 11), white);
+        assert_eq!(surface.pixel(left + 15, bottom - 1), white);
+        assert_eq!(surface.pixel(left + 15, top + 11), white);
+        for outside in [
+            (left + 15, top - 1),
+            (left - 1, top + 11),
+            (right, top + 11),
+            (left + 15, bottom),
+        ] {
+            assert_eq!(surface.pixel(outside.0, outside.1), black, "{outside:?}");
+        }
+        // The very corners are left as they were, and along each curve some pixels are
+        // partly covered: that is what makes the curve smooth.
+        let corners = [
+            (left, top, 1, 1),
+            (right - 1, top, -1, 1),
+            (left, bottom - 1, 1, -1),
+            (right - 1, bottom - 1, -1, -1),
+        ];
+        for (x, y, across, down) in corners {
+            assert_eq!(surface.pixel(x, y), black, "({x}, {y})");
+            let partly = (0..10)
+                .flat_map(|row| (0..10).map(move |column| (column, row)))
+                .filter(|(column, row)| {
+                    let shade = grey(surface.pixel(x + column * across, y + row * down));
+                    (1..255).contains(&shade)
+                })
+                .count();
+            assert!(partly >= 8, "({x}, {y}): {partly} partly covered pixels");
+        }
+        // The four corners mirror one another.
+        for (column, row) in [(2, 5), (5, 2), (3, 3), (7, 1)] {
+            let shades: Vec<u32> = corners
+                .iter()
+                .map(|(x, y, across, down)| {
+                    grey(surface.pixel(x + column * across, y + row * down))
+                })
+                .collect();
+            assert!(shades.iter().all(|shade| *shade == shades[0]), "{shades:?}");
+        }
+
+        // A curve never takes more than half the shape: a wide radius makes a disc or a pill.
+        fill(surface.context, &rectangle(0, 0, 40, 40), black);
+        rounded(surface.context, &rectangle(10, 10, 23, 23), 99, white);
+        assert_eq!(surface.pixel(16, 16), white);
+        assert_eq!(surface.pixel(10, 10), black);
+        // The top of a disc is curve all the way: nearly, not wholly, covered.
+        assert!(grey(surface.pixel(16, 10)) > 200);
+        // Nothing to draw, nothing drawn.
+        rounded(surface.context, &rectangle(30, 30, 31, 31), 4, white);
+        rounded(surface.context, &rectangle(30, 30, 20, 20), 4, white);
+        assert_eq!(surface.pixel(30, 30), black);
+        // Without a curve it is a plain fill of the same size.
+        rounded(surface.context, &rectangle(30, 30, 35, 35), 0, white);
+        assert_eq!(surface.pixel(33, 33), white);
+        assert_eq!(surface.pixel(34, 34), black);
+    }
+
+    #[test]
+    fn a_bordered_shape_is_one_pixel_of_edge_around_its_fill() {
+        let _serial = crate::windows::GUI_RESOURCE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (black, white, red) = (COLORREF(0), COLORREF(0x00FF_FFFF), COLORREF(0x0000_00FF));
+        let surface = Surface::sized(black, 40);
+        bordered(surface.context, &rectangle(4, 4, 35, 27), 8, white, red);
+        // As a rounded shape, it stops one pixel short of the right and bottom.
+        let (left, top, right, bottom) = (4, 4, 34, 26);
+        let middle = (top + bottom) / 2;
+        for edge in [
+            (left, middle),
+            (right - 1, middle),
+            (left + 15, top),
+            (left + 15, bottom - 1),
+        ] {
+            assert_eq!(surface.pixel(edge.0, edge.1), red, "{edge:?}");
+        }
+        for fill in [
+            (left + 1, middle),
+            (right - 2, middle),
+            (left + 15, top + 1),
+            (left + 15, bottom - 2),
+        ] {
+            assert_eq!(surface.pixel(fill.0, fill.1), white, "{fill:?}");
+        }
+        for outside in [(left - 1, middle), (right, middle), (left, top)] {
+            assert_eq!(surface.pixel(outside.0, outside.1), black, "{outside:?}");
+        }
+        // Along the curve the border keeps going: no pixel of the fill touches the outside.
+        for y in top..bottom {
+            let first = (left..right).find(|x| surface.pixel(*x, y) != black);
+            let first = first.expect("every row of the shape is drawn");
+            assert_ne!(surface.pixel(first, y), white, "row {y}");
+        }
     }
 
     #[test]

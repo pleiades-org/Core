@@ -29,6 +29,8 @@ pub struct SearchContext {
     pub mixer: Option<Arc<[MixerApp]>>,
     pub app_info: Option<Arc<AppInfo>>,
     pub songs: Option<Arc<core_engine::search::SongSearch>>,
+    /// The person's Spotify playlists for `@playlist`; None until they were asked for.
+    pub playlists: Option<Arc<core_engine::search::PlaylistLibrary>>,
 }
 
 struct Request {
@@ -190,6 +192,7 @@ fn run_search(
         engine.set_mixer(request.context.mixer.clone());
         engine.set_app_info(request.context.app_info.clone());
         engine.set_songs(request.context.songs.clone());
+        engine.set_playlists(request.context.playlists.clone());
         let batch = engine.search_catalogs(
             &request.query,
             &request.context.catalog,
@@ -247,6 +250,7 @@ mod tests {
             media: None,
             mixer: None,
             songs: None,
+            playlists: None,
             app_info: None,
         }
     }

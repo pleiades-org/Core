@@ -2,17 +2,22 @@
 //! and previous, play / pause and next buttons. The buttons are native, for the keyboard and
 //! screen readers; art, text and progress are drawn in one owner-drawn static control, whose
 //! text is what a screen reader announces. While the pointer is on the art, a volume slider
-//! takes the title's place.
+//! takes the title's place; while it is over the buttons or the timecode, shuffle and repeat
+//! take the timecode's.
 use super::*;
 
+mod modes;
 mod volume;
 
+pub use modes::{mode_command, MEDIA_REPEAT_ID, MEDIA_SHUFFLE_ID};
+pub(super) use modes::{REPEAT_GLYPH, SHUFFLE_GLYPH};
 pub use volume::{BarVolume, VOLUME_CHANGED, VOLUME_WANTED};
 
 use crate::windows::power_menu::icon_button;
 use core_engine::media::{
     format_clock, playback_position, MediaControls, PlaybackProgress, Timeline,
 };
+use modes::ModeButtons;
 use volume::{SliderLayout, SliderView, VolumeSlider};
 use windows::Win32::{
     System::SystemInformation::GetSystemTimePreciseAsFileTime,
@@ -36,6 +41,8 @@ const BUTTON_SIZE: i32 = 36;
 const BUTTON_TOP: i32 = 14;
 const BUTTON_PITCH: i32 = 40;
 const SIDE_MARGIN: i32 = 24;
+/// Between the bar's text and the first button to its right.
+const TEXT_GAP: i32 = 12;
 const TIME_WIDTH: i32 = 96;
 const PROGRESS_TOP: i32 = 57;
 const PROGRESS_HEIGHT: i32 = 3;
@@ -101,12 +108,23 @@ pub enum MediaBarClick {
     Nothing,
 }
 
+/// What the pointer has revealed on the bar, which its text makes room for.
+#[derive(Clone, Copy)]
+struct Revealed {
+    /// The volume slider is showing, over the art and in place of the title.
+    slider: Option<SliderView>,
+    /// Shuffle and repeat are showing in place of the timecode: text ends before this.
+    modes_left: Option<i32>,
+}
+
 pub(super) struct MediaBar {
     info: HWND,
     buttons: [(usize, HWND); 3],
     content: RefCell<Option<MediaBarContent>>,
     /// Boxed: the info control's window procedure keeps its address.
     slider: Box<VolumeSlider>,
+    /// Shuffle and repeat. Boxed: every control of the bar keeps its address.
+    modes: Box<ModeButtons>,
 }
 
 impl MediaBar {
@@ -120,6 +138,7 @@ impl MediaBar {
             ],
             content: RefCell::new(None),
             slider: VolumeSlider::new(),
+            modes: ModeButtons::create(parent, instance)?,
         };
         for (identifier, button) in &mut bar.buttons {
             let label = match *identifier {
@@ -154,6 +173,8 @@ impl MediaBar {
             )?
         };
         bar.slider.install(bar.info)?;
+        bar.modes
+            .watch(bar.info, &bar.buttons.map(|(_, button)| button))?;
         Ok(bar)
     }
 
@@ -185,6 +206,7 @@ impl MediaBar {
                 let _ = ShowWindow(button, if shown { SW_SHOWNA } else { SW_HIDE });
             }
         }
+        self.modes.show(visible);
     }
 
     fn set_content(&self, content: Option<MediaBarContent>) {
@@ -204,6 +226,12 @@ impl MediaBar {
         if !same_player {
             self.slider.reset(self.info, content.is_some());
         }
+        self.modes.set_controls(
+            content
+                .as_ref()
+                .map(|content| content.controls)
+                .unwrap_or_default(),
+        );
         *self.content.borrow_mut() = content;
         for (control, label) in [(self.info, text.as_str()), (self.buttons[1].1, play_label)] {
             if control_text(control) != label {
@@ -314,13 +342,17 @@ impl View {
             return Ok(());
         };
         bar.slider.set_dpi(self.dpi.get());
+        bar.modes.set_dpi(self.dpi.get());
         let visible = self.media_bar_height() > 0;
         if visible {
+            let modes = bar.modes.buttons();
             for (control, area) in [
                 (bar.info, search.media_info),
                 (bar.buttons[0].1, search.media_buttons[0]),
                 (bar.buttons[1].1, search.media_buttons[1]),
                 (bar.buttons[2].1, search.media_buttons[2]),
+                (modes[0], search.media_modes[0]),
+                (modes[1], search.media_modes[1]),
             ] {
                 unsafe {
                     SetWindowPos(
@@ -350,9 +382,10 @@ impl View {
     pub fn set_media_progress_active(&self, active: bool) {
         self.media_progress_active.set(active);
         self.schedule_media_progress();
-        // Core is hiding: the pointer no longer holds the volume slider open.
+        // Core is hiding: the pointer no longer holds the volume slider open, nor the buttons.
         if let Some(bar) = self.media_bar.get().filter(|_| !active) {
             bar.slider.hide(bar.info);
+            bar.modes.hide();
         }
     }
 
@@ -471,12 +504,16 @@ impl View {
             MEDIA_INFO_ID => {
                 let content = bar.content.borrow();
                 // Off screen first: the slider repaints the bar as fast as the pointer moves.
+                let revealed = Revealed {
+                    slider: bar.slider.view(),
+                    modes_left: bar.modes.left_edge(item.rcItem.right - item.rcItem.left),
+                };
                 painting::buffered(item.hDC, &item.rcItem, |context| {
                     draw_info(
                         context,
                         item.rcItem,
                         content.as_ref(),
-                        bar.slider.view(),
+                        revealed,
                         dpi,
                         fonts,
                         palette,
@@ -484,6 +521,7 @@ impl View {
                 });
                 true
             }
+            MEDIA_SHUFFLE_ID | MEDIA_REPEAT_ID => bar.modes.draw(item, dpi, fonts, palette),
             identifier @ (MEDIA_PREVIOUS_ID | MEDIA_PLAY_ID | MEDIA_NEXT_ID) => {
                 let playing = bar
                     .content
@@ -513,18 +551,34 @@ fn progress_track(client: RECT, dpi: u32) -> RECT {
     )
 }
 
+/// Whether a control is one of the bar's buttons, which a click or Enter presses.
+pub fn is_media_button(identifier: usize) -> bool {
+    matches!(
+        identifier,
+        MEDIA_PREVIOUS_ID | MEDIA_PLAY_ID | MEDIA_NEXT_ID | MEDIA_SHUFFLE_ID | MEDIA_REPEAT_ID
+    )
+}
+
+/// One button's place in a window `width` pixels wide, counting leftwards from next at 0.
+fn button_area(width: i32, top: i32, dpi: u32, place: i32) -> RECT {
+    let right = width - scale(SIDE_MARGIN, dpi);
+    let left = right - scale(BUTTON_SIZE + place * BUTTON_PITCH, dpi);
+    painting::rectangle(
+        left,
+        top + scale(BUTTON_TOP, dpi),
+        left + scale(BUTTON_SIZE, dpi),
+        top + scale(BUTTON_TOP + BUTTON_SIZE, dpi),
+    )
+}
+
 /// Where the bar's buttons sit in a window `width` pixels wide, left to right.
 pub fn button_areas(width: i32, top: i32, dpi: u32) -> [RECT; 3] {
-    let right = width - scale(SIDE_MARGIN, dpi);
-    std::array::from_fn(|index| {
-        let left = right - scale(BUTTON_SIZE + (2 - index as i32) * BUTTON_PITCH, dpi);
-        painting::rectangle(
-            left,
-            top + scale(BUTTON_TOP, dpi),
-            left + scale(BUTTON_SIZE, dpi),
-            top + scale(BUTTON_TOP + BUTTON_SIZE, dpi),
-        )
-    })
+    std::array::from_fn(|index| button_area(width, top, dpi, 2 - index as i32))
+}
+
+/// Where shuffle and repeat sit, left of previous and spaced as the other buttons are.
+pub fn mode_button_areas(width: i32, top: i32, dpi: u32) -> [RECT; 2] {
+    std::array::from_fn(|index| button_area(width, top, dpi, 4 - index as i32))
 }
 
 /// Where the album art is drawn, in the info control's client pixels.
@@ -541,17 +595,16 @@ fn title_row(client: RECT, dpi: u32) -> RECT {
     painting::rectangle(
         client.left + scale(TEXT_LEFT, dpi),
         client.top + scale(TITLE_TOP, dpi),
-        client.left + buttons[0].left - scale(12, dpi),
+        client.left + buttons[0].left - scale(TEXT_GAP, dpi),
         client.top + scale(DETAIL_TOP, dpi),
     )
 }
 
-/// `slider`: the volume slider is showing, over the art and in place of the title.
 fn draw_info(
     context: HDC,
     area: RECT,
     content: Option<&MediaBarContent>,
-    slider: Option<SliderView>,
+    revealed: Revealed,
     dpi: u32,
     fonts: Fonts,
     palette: Palette,
@@ -565,8 +618,12 @@ fn draw_info(
             area.top + scale(bottom, dpi),
         )
     };
-    // Text stops before the buttons, which sit over the bar's right side.
-    let text_right = button_areas(area.right - area.left, 0, dpi)[0].left - scale(12, dpi);
+    // Text stops before the buttons, which sit over the bar's right side. The timecode ends
+    // before previous; while shuffle and repeat show in its place, the rest ends before them.
+    let time_right = button_areas(area.right - area.left, 0, dpi)[0].left - scale(TEXT_GAP, dpi);
+    let text_right = revealed
+        .modes_left
+        .map_or(time_right, |left| left - scale(TEXT_GAP, dpi));
     let track = progress_track(area, dpi);
     let Some(content) = content else {
         painting::text(
@@ -591,7 +648,7 @@ fn draw_info(
     if !art_drawn {
         painting::rounded(context, &art, scale(7, dpi), palette.selected);
     }
-    match slider {
+    match revealed.slider {
         Some(slider) => {
             volume::draw_art_overlay(context, art, art_drawn, slider.volume, dpi, fonts, palette);
             let layout = SliderLayout::new(area, dpi);
@@ -604,15 +661,17 @@ fn draw_info(
             painting::text(
                 context,
                 &content.title,
-                title_row(area, dpi),
+                at(TEXT_LEFT, TITLE_TOP, text_right, DETAIL_TOP),
                 fonts.title,
                 palette.text,
             );
         }
     }
     let progress = content.progress();
+    // The detail keeps the width it has beside the timecode, so it does not move as shuffle
+    // and repeat come and go.
     let time_left = if progress.is_some() {
-        text_right - scale(TIME_WIDTH, dpi)
+        time_right - scale(TIME_WIDTH, dpi)
     } else {
         text_right
     };
@@ -637,17 +696,19 @@ fn draw_info(
         );
         return;
     };
-    right_text(
-        context,
-        &format!(
-            "{} / {}",
-            format_clock(progress.elapsed),
-            format_clock(progress.duration)
-        ),
-        at(0, DETAIL_TOP, text_right, DETAIL_BOTTOM),
-        fonts.detail,
-        palette.secondary,
-    );
+    if revealed.modes_left.is_none() {
+        right_text(
+            context,
+            &format!(
+                "{} / {}",
+                format_clock(progress.elapsed),
+                format_clock(progress.duration)
+            ),
+            at(0, DETAIL_TOP, time_right, DETAIL_BOTTOM),
+            fonts.detail,
+            palette.secondary,
+        );
+    }
     painting::fill(context, &track, palette.selected);
     let filled = track.left + ((track.right - track.left) as f64 * progress.fraction()) as i32;
     if filled > track.left {

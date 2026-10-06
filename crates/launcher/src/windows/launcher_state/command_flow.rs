@@ -316,6 +316,7 @@ impl LauncherState {
     pub fn query_edited(&mut self) {
         self.typed_since_show = true;
         if let Some(view) = &self.view {
+            view.query_changed();
             if let Err(error) = view.absorb_command_prefix() {
                 view.set_footer(&format!("Could not start a command: {error}"));
             }

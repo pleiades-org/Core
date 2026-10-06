@@ -32,19 +32,19 @@ pub fn draw_toggle(context: HDC, area: RECT, label: &str, on: bool, highlighted:
         palette,
     } = look;
     painting::fill(context, &area, palette.background);
-    painting::rounded(
+    // Highlighted, the control is filled; otherwise only its border shows.
+    let surface = if highlighted {
+        palette.selected
+    } else {
+        palette.background
+    };
+    painting::bordered(
         context,
         &area,
         scale(RADIUS, dpi),
-        if highlighted {
-            palette.selected
-        } else {
-            palette.background
-        },
+        surface,
+        palette.selected,
     );
-    if !highlighted {
-        outline(context, area, scale(RADIUS, dpi), palette.selected);
-    }
     let track_right = area.right - scale(SWITCH_MARGIN, dpi);
     let track_left = track_right - scale(SWITCH_WIDTH, dpi);
     let track_top = area.top + (area.bottom - area.top - scale(SWITCH_HEIGHT, dpi)) / 2;
@@ -58,7 +58,7 @@ pub fn draw_toggle(context: HDC, area: RECT, label: &str, on: bool, highlighted:
     if on {
         painting::rounded(context, &track, track_radius, palette.accent);
     } else {
-        outline(context, track, track_radius, palette.secondary);
+        painting::bordered(context, &track, track_radius, surface, palette.secondary);
     }
     let knob_size = scale(SWITCH_HEIGHT - 8, dpi);
     let knob_left = if on {
@@ -120,17 +120,18 @@ pub fn draw_action(
         palette,
     } = look;
     painting::fill(context, &area, palette.background);
-    painting::rounded(context, &area, scale(RADIUS, dpi), palette.selected);
+    let radius = scale(RADIUS, dpi);
     if highlighted {
-        outline(context, area, scale(RADIUS, dpi), palette.accent);
+        painting::bordered(context, &area, radius, palette.selected, palette.accent);
+    } else {
+        painting::rounded(context, &area, radius, palette.selected);
     }
     let mut text_left = area.left + scale(16, dpi);
     if let Some(color) = swatch {
         let size = scale(14, dpi);
         let top = area.top + (area.bottom - area.top - size) / 2;
         let swatch_area = painting::rectangle(text_left, top, text_left + size, top + size);
-        painting::rounded(context, &swatch_area, size / 2, color);
-        outline(context, swatch_area, size / 2, palette.secondary);
+        painting::bordered(context, &swatch_area, size / 2, color, palette.secondary);
         text_left += size + scale(10, dpi);
     }
     painting::text(
@@ -145,25 +146,4 @@ pub fn draw_action(
         fonts.detail,
         palette.text,
     );
-}
-
-/// A one-pixel rounded border.
-fn outline(context: HDC, area: RECT, radius: i32, color: COLORREF) {
-    unsafe {
-        let state = SaveDC(context);
-        let pen = CreatePen(PS_SOLID, 1, color);
-        SelectObject(context, pen.into());
-        SelectObject(context, GetStockObject(NULL_BRUSH));
-        let _ = RoundRect(
-            context,
-            area.left,
-            area.top,
-            area.right - 1,
-            area.bottom - 1,
-            radius * 2,
-            radius * 2,
-        );
-        let _ = RestoreDC(context, state);
-        let _ = DeleteObject(pen.into());
-    }
 }

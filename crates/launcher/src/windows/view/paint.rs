@@ -85,6 +85,10 @@ impl View {
                 self.draw_mixer_row(item.hDC, item.rcItem, row, level, selected);
                 return;
             }
+            if row.options && selected {
+                self.draw_collection_row(item.hDC, item.rcItem, row);
+                return;
+            }
             painting::result_row(
                 item.hDC,
                 item.rcItem,

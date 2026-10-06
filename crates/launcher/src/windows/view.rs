@@ -46,8 +46,10 @@ mod media_bar;
 mod mixer_rows;
 mod output;
 mod paint;
+mod play_options;
 mod power;
 mod preference_changes;
+mod results_list;
 mod settings_bridge;
 
 use icon_cache::IconCache;
@@ -55,12 +57,14 @@ use preference_changes::PreferenceChanges;
 
 pub use footer::CLOCK_TIMER;
 pub use media_bar::{
-    button_areas as media_button_areas, BarPresence, BarVolume, MediaBarClick, MediaBarContent,
-    MEDIA_INFO_ID, MEDIA_NEXT_ID, MEDIA_PLAY_ID, MEDIA_PREVIOUS_ID, MEDIA_PROGRESS_TIMER,
+    button_areas as media_button_areas, is_media_button, mode_button_areas as media_mode_areas,
+    mode_command as media_mode_command, BarPresence, BarVolume, MediaBarClick, MediaBarContent,
+    MEDIA_INFO_ID, MEDIA_NEXT_ID, MEDIA_PREVIOUS_ID, MEDIA_PROGRESS_TIMER,
     VOLUME_CHANGED as MEDIA_VOLUME_CHANGED, VOLUME_WANTED as MEDIA_VOLUME_WANTED,
 };
 pub use mixer_rows::{MIXER_CHANGED, MIXER_MUTE, MIXER_RELEASED};
 pub use output::OUTPUT_ID;
+pub use play_options::PLAY_OPTION_CHOSEN;
 
 pub use super::theme::scale;
 pub const INPUT_ID: usize = 100;
@@ -152,6 +156,9 @@ pub struct View {
     /// The volume mixer's sliders in the rows. Boxed: the results list's window procedure
     /// keeps its address.
     mixer_rows: Box<mixer_rows::MixerRows>,
+    /// The shuffle and repeat buttons beside a selected playlist, album or artist. Boxed for
+    /// the same reason.
+    play_options: Box<play_options::PlayOptions>,
     /// Icons shown recently, for results that come back.
     icon_cache: RefCell<IconCache>,
     /// Created the first time something plays.
@@ -211,6 +218,7 @@ impl View {
             layout_key: Cell::new(LayoutKey::STALE),
             rows: RefCell::new(Vec::new()),
             mixer_rows: mixer_rows::MixerRows::new(),
+            play_options: play_options::PlayOptions::new(),
             icon_cache: RefCell::new(IconCache::default()),
             media_bar: OnceCell::new(),
             media_bar_shown: Cell::new(false),
@@ -239,6 +247,7 @@ impl View {
                 RESULTS_ID,
             )?;
             view.mixer_rows.install(view.results)?;
+            view.play_options.install(view.results)?;
             view.footer = child(
                 parent,
                 instance,
@@ -314,6 +323,7 @@ impl View {
         let previous = self.fonts.replace(fonts);
         self.dpi.set(dpi);
         self.mixer_rows.set_dpi(dpi);
+        self.play_options.set_dpi(dpi);
         unsafe {
             for (control, font) in [
                 (self.input, fonts.input),
@@ -704,6 +714,7 @@ impl View {
             .map(DisplayRow::new)
             .collect();
         self.mixer_rows.set_rows(&rows);
+        self.play_options.set_rows(&rows);
         let laid_out = self.layout_key.get() == self.current_layout_key();
         // The same results again (an exchange-rate refresh, a repeated search): the list,
         // its selection and the window already show them.
@@ -862,6 +873,7 @@ impl View {
                 None,
             );
         }
+        self.row_picked();
     }
 }
 

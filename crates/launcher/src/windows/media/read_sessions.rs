@@ -1,15 +1,18 @@
 //! Reads Windows' media sessions into the engine's plain data. WinRT objects stay here.
 use core_engine::media::{
-    classify_app, known_app_name, MediaControls, MediaSession, PlaybackState, Timeline,
+    classify_app, known_app_name, MediaControls, MediaSession, PlaybackState, RepeatMode, Timeline,
 };
 use std::{sync::Arc, time::Duration};
 use windows::{
     core::{Result, HSTRING},
-    Media::Control::{
-        GlobalSystemMediaTransportControlsSession as Session,
-        GlobalSystemMediaTransportControlsSessionManager as SessionManager,
-        GlobalSystemMediaTransportControlsSessionMediaProperties as MediaProperties,
-        GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status,
+    Media::{
+        Control::{
+            GlobalSystemMediaTransportControlsSession as Session,
+            GlobalSystemMediaTransportControlsSessionManager as SessionManager,
+            GlobalSystemMediaTransportControlsSessionMediaProperties as MediaProperties,
+            GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status,
+        },
+        MediaPlaybackAutoRepeatMode as AutoRepeat,
     },
 };
 
@@ -83,6 +86,19 @@ fn read_session(
         next: controls.IsNextEnabled()?,
         previous: controls.IsPreviousEnabled()?,
         seek: controls.IsPlaybackPositionEnabled()?,
+        // A player that offers a setting without saying how it stands has it off.
+        shuffle: controls.IsShuffleEnabled()?.then(|| {
+            playback
+                .IsShuffleActive()
+                .and_then(|active| active.Value())
+                .unwrap_or(false)
+        }),
+        repeat: controls.IsRepeatEnabled()?.then(|| {
+            playback
+                .AutoRepeatMode()
+                .and_then(|mode| mode.Value())
+                .map_or(RepeatMode::Off, repeat_mode)
+        }),
     };
     let media_properties = if properties {
         match finish!(session.TryGetMediaPropertiesAsync()?, OPERATION_TIMEOUT) {
@@ -134,6 +150,25 @@ fn playback_state(status: Status) -> Option<PlaybackState> {
     }
 }
 
+fn repeat_mode(mode: AutoRepeat) -> RepeatMode {
+    if mode == AutoRepeat::List {
+        RepeatMode::All
+    } else if mode == AutoRepeat::Track {
+        RepeatMode::One
+    } else {
+        RepeatMode::Off
+    }
+}
+
+/// Windows' name for a repeat mode, for asking a player to use it.
+pub(super) fn auto_repeat(mode: RepeatMode) -> AutoRepeat {
+    match mode {
+        RepeatMode::Off => AutoRepeat::None,
+        RepeatMode::All => AutoRepeat::List,
+        RepeatMode::One => AutoRepeat::Track,
+    }
+}
+
 pub(super) fn read_timeline(session: &Session) -> Option<Timeline> {
     let timeline = session.GetTimelineProperties().ok()?;
     Some(Timeline {
@@ -163,6 +198,15 @@ mod tests {
         assert_eq!(cut.chars().count(), TEXT_LIMIT + 1);
         assert!(cut.ends_with('…'));
         assert_eq!(&*bounded("  Song  "), "Song");
+    }
+
+    #[test]
+    fn repeat_modes_keep_their_meaning_to_and_from_windows() {
+        for mode in [RepeatMode::Off, RepeatMode::All, RepeatMode::One] {
+            assert_eq!(repeat_mode(auto_repeat(mode)), mode);
+        }
+        assert_eq!(auto_repeat(RepeatMode::All), AutoRepeat::List);
+        assert_eq!(auto_repeat(RepeatMode::One), AutoRepeat::Track);
     }
 
     #[test]

@@ -172,6 +172,7 @@ mod tests {
                 next: true,
                 previous: true,
                 seek: false,
+                ..MediaControls::default()
             },
             timeline: None,
         }

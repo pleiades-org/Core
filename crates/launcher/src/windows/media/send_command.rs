@@ -1,7 +1,7 @@
 //! Sends a control to the chosen player. The session is chosen again from a fresh reading, so a
 //! press never acts on a player that closed or changed state since the results were shown.
 use super::{
-    read_sessions::{read_sessions, OPERATION_TIMEOUT},
+    read_sessions::{auto_repeat, read_sessions, OPERATION_TIMEOUT},
     window_players, MediaAction, MediaOutcome, MediaRequest,
 };
 use core_engine::media::{choose_target, MediaCommand, MediaSession, PlaybackState};
@@ -33,6 +33,7 @@ pub(super) fn execute(manager: Option<&SessionManager>, request: &MediaRequest) 
             app_id: None,
             app_name: None,
             before: None,
+            controls: None,
             // Nothing is visible to Windows: the keyboard's media key may still reach a player
             // that listens for it. A media-key shortcut sending its own key would only trigger
             // itself again.
@@ -99,11 +100,14 @@ pub(super) fn execute(manager: Option<&SessionManager>, request: &MediaRequest) 
         app_id: Some(info.app_id.clone()),
         app_name: Some(info.app_name.clone()),
         before: Some(info.state),
+        controls: Some(info.controls),
         result,
     }
 }
 
-/// Play/pause follows the state Core read, because not every player supports toggling.
+/// Play/pause follows the state Core read, because not every player supports toggling; so do
+/// shuffle and repeat, which Windows sets to a value instead of switching. False when the
+/// player did not accept, or does not offer the setting.
 fn send(session: &Session, info: &MediaSession, action: MediaAction) -> Result<bool> {
     let operation = match action {
         MediaAction::Control(MediaCommand::TogglePlayPause)
@@ -117,6 +121,18 @@ fn send(session: &Session, info: &MediaSession, action: MediaAction) -> Result<b
         MediaAction::Control(MediaCommand::Pause) => session.TryPauseAsync()?,
         MediaAction::Control(MediaCommand::Next) => session.TrySkipNextAsync()?,
         MediaAction::Control(MediaCommand::Previous) => session.TrySkipPreviousAsync()?,
+        MediaAction::Control(command @ MediaCommand::Shuffle) => {
+            match info.controls.after(command).shuffle {
+                Some(on) => session.TryChangeShuffleActiveAsync(on)?,
+                None => return Ok(false),
+            }
+        }
+        MediaAction::Control(command @ MediaCommand::Repeat) => {
+            match info.controls.after(command).repeat {
+                Some(mode) => session.TryChangeAutoRepeatModeAsync(auto_repeat(mode))?,
+                None => return Ok(false),
+            }
+        }
         MediaAction::Seek(position) => session.TryChangePlaybackPositionAsync(position)?,
     };
     finish!(operation, OPERATION_TIMEOUT)
@@ -129,6 +145,8 @@ fn describe(action: MediaAction) -> &'static str {
         MediaAction::Control(MediaCommand::Pause) => "pause",
         MediaAction::Control(MediaCommand::Next) => "next track",
         MediaAction::Control(MediaCommand::Previous) => "previous track",
+        MediaAction::Control(MediaCommand::Shuffle) => "a change of shuffle",
+        MediaAction::Control(MediaCommand::Repeat) => "a change of repeat",
         MediaAction::Seek(_) => "a new position",
     }
 }
@@ -139,6 +157,7 @@ fn failure(request: &MediaRequest, message: String) -> MediaOutcome {
         app_id: None,
         app_name: None,
         before: None,
+        controls: None,
         result: Err(message),
     }
 }
@@ -152,6 +171,9 @@ fn media_key(action: MediaAction) -> std::result::Result<(), String> {
         ) => VK_MEDIA_PLAY_PAUSE,
         MediaAction::Control(MediaCommand::Next) => VK_MEDIA_NEXT_TRACK,
         MediaAction::Control(MediaCommand::Previous) => VK_MEDIA_PREV_TRACK,
+        MediaAction::Control(MediaCommand::Shuffle | MediaCommand::Repeat) => {
+            return Err("No player is visible to Windows".into())
+        }
         MediaAction::Seek(_) => return Err("Seeking needs Windows media sessions".into()),
     };
     let input = |flags| INPUT {

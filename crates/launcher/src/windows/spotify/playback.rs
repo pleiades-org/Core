@@ -1,7 +1,10 @@
-//! Explicit device selection and confirmation for a user-selected song.
-use super::api::{valid_album_uri, valid_track_uri, ApiError, ApiResult, Client};
+//! Explicit device selection and confirmation for what the person chose: a song, or a
+//! playlist, album or artist played as a whole.
+use super::api::{
+    valid_album_uri, valid_collection_uri, valid_track_uri, ApiError, ApiResult, Client,
+};
 use super::encoding::url_encode;
-use core_engine::search::SongStatus;
+use core_engine::search::{PlayMode, SongStatus};
 use std::{sync::Arc, thread, time::Duration};
 use windows::{core::HSTRING, Data::Json::JsonObject};
 
@@ -27,13 +30,50 @@ struct Reading {
     device_id: Option<String>,
     uri: Option<String>,
     linked_uri: Option<String>,
+    /// The album, playlist or artist Spotify is playing from, when it plays from one.
+    context_uri: Option<String>,
+    /// Spotify's shuffle switch, when it reports one.
+    shuffle: Option<bool>,
+    /// Spotify's repeat setting: `off`, `track` or `context`.
+    repeat: Option<String>,
     playing: bool,
 }
 
+/// What was sent to start playback, kept for sending again.
+struct Sent<'request> {
+    play: &'request str,
+    body: &'request [u8],
+    /// The request for shuffle or repeat, when the person asked for one.
+    mode: Option<&'request str>,
+}
+
+/// What the person chose, which the confirmation afterwards looks for.
+#[derive(Clone, Copy)]
+enum Asked<'uri> {
+    Song(&'uri str),
+    Collection(&'uri str, PlayMode),
+}
+
 impl Reading {
-    fn selected(&self, uri: &str, device: &Device) -> bool {
+    /// A song is confirmed by the song itself; a playlist, album or artist by being what
+    /// Spotify plays from, whichever of its songs came first.
+    fn selected(&self, asked: Asked, device: &Device) -> bool {
         self.device_id.as_deref() == Some(&device.id)
-            && (self.uri.as_deref() == Some(uri) || self.linked_uri.as_deref() == Some(uri))
+            && match asked {
+                Asked::Song(uri) => {
+                    self.uri.as_deref() == Some(uri) || self.linked_uri.as_deref() == Some(uri)
+                }
+                Asked::Collection(uri, _) => self.context_uri.as_deref() == Some(uri),
+            }
+    }
+
+    /// Whether the shuffle or repeat that was asked for is in effect; true when none was.
+    fn has_mode(&self, asked: Asked) -> bool {
+        match asked {
+            Asked::Collection(_, PlayMode::Shuffled) => self.shuffle == Some(true),
+            Asked::Collection(_, PlayMode::Looped) => self.repeat.as_deref() == Some("context"),
+            Asked::Song(_) | Asked::Collection(_, PlayMode::AsItIs) => true,
+        }
     }
 }
 
@@ -49,24 +89,85 @@ pub fn play_song(
     if !valid_track_uri(uri) {
         return Err(ApiError::invalid());
     }
+    let body = play_request(uri, album);
+    start(
+        client,
+        Asked::Song(uri),
+        &body,
+        computer_name,
+        wait,
+        cancelled,
+    )
+}
+
+pub fn play_collection(
+    client: &mut Client,
+    uri: &str,
+    mode: PlayMode,
+    computer_name: &str,
+    wait: impl Fn(Duration),
+    cancelled: &impl Fn() -> bool,
+) -> ApiResult<PlaybackTarget> {
+    if !valid_collection_uri(uri) {
+        return Err(ApiError::invalid());
+    }
+    let body = collection_request(uri);
+    start(
+        client,
+        Asked::Collection(uri, mode),
+        &body,
+        computer_name,
+        wait,
+        cancelled,
+    )
+}
+
+/// The request that turns shuffle or repeat on for `device`; None for anything played as it
+/// is. It has no body: the setting is in its address.
+fn mode_request(asked: Asked, device: &Device) -> Option<String> {
+    let setting = match asked {
+        Asked::Collection(_, PlayMode::Shuffled) => "shuffle?state=true",
+        Asked::Collection(_, PlayMode::Looped) => "repeat?state=context",
+        Asked::Song(_) | Asked::Collection(_, PlayMode::AsItIs) => return None,
+    };
+    Some(format!(
+        "/v1/me/player/{setting}&device_id={}",
+        url_encode(&device.id)
+    ))
+}
+
+/// Chooses the device, sends `body` to it and confirms that what was asked for plays there,
+/// with the shuffle or repeat the person asked for.
+fn start(
+    client: &mut Client,
+    asked: Asked,
+    body: &str,
+    computer_name: &str,
+    wait: impl Fn(Duration),
+    cancelled: &impl Fn() -> bool,
+) -> ApiResult<PlaybackTarget> {
     check_cancelled(cancelled)?;
     let devices = client
         .authenticated("GET", DEVICES_PATH, &[])
         .map_err(device_access_error)?;
     let device = choose_device(&parse_devices(&devices.body)?, computer_name)?;
     let path = format!("/v1/me/player/play?device_id={}", url_encode(&device.id));
-    let body = play_request(uri, album);
+    let mode = mode_request(asked, &device);
+    // Shuffle has to be on before the playlist starts for its first song to be a random one
+    // too. Spotify only takes that from a device already in use, so a refusal here is not
+    // an error: the confirmation below sees to the setting once the playlist plays.
+    if let (Some(mode), Asked::Collection(_, PlayMode::Shuffled)) = (&mode, asked) {
+        check_cancelled(cancelled)?;
+        let _ = client.authenticated_if_current("PUT", mode, &[], cancelled);
+    }
     check_cancelled(cancelled)?;
     client.authenticated_if_current("PUT", &path, body.as_bytes(), cancelled)?;
-    confirm_playback(
-        client,
-        uri,
-        &device,
-        &path,
-        body.as_bytes(),
-        wait,
-        cancelled,
-    )?;
+    let sent = Sent {
+        play: &path,
+        body: body.as_bytes(),
+        mode: mode.as_deref(),
+    };
+    confirm_playback(client, asked, &device, &sent, wait, cancelled)?;
     Ok(PlaybackTarget { name: device.name })
 }
 
@@ -86,6 +187,12 @@ fn play_request(uri: &str, album: Option<&str>) -> String {
         ),
         None => format!("{{\"uris\":[\"{uri}\"],\"position_ms\":0}}"),
     }
+}
+
+/// A playlist, album or artist is asked for as the place to play from, which every Spotify
+/// device accepts. It starts at its first song, or wherever Spotify's shuffle puts it.
+fn collection_request(uri: &str) -> String {
+    format!("{{\"context_uri\":\"{uri}\"}}")
 }
 
 pub fn wait(duration: Duration) {
@@ -189,27 +296,43 @@ fn read_playback(client: &mut Client) -> ApiResult<Option<Reading>> {
         .as_ref()
         .and_then(|item| item.GetNamedObject(&HSTRING::from("linked_from")).ok());
     Ok(Some(Reading {
+        context_uri: root
+            .GetNamedObject(&HSTRING::from("context"))
+            .ok()
+            .and_then(|context| optional_string(&context, "uri")),
         device_id: optional_string(&device, "id"),
         uri: item.as_ref().and_then(|item| optional_string(item, "uri")),
         linked_uri: linked
             .as_ref()
             .and_then(|linked| optional_string(linked, "uri")),
+        shuffle: root.GetNamedBoolean(&HSTRING::from("shuffle_state")).ok(),
+        repeat: optional_string(&root, "repeat_state"),
         playing: root
             .GetNamedBoolean(&HSTRING::from("is_playing"))
             .map_err(|_| ApiError::invalid())?,
     }))
 }
 
+const MODE_NOT_SET: &str = "It plays, but Spotify did not turn its shuffle or repeat on.";
+
+/// Reads what Spotify plays until it is what was asked for, playing, and with the shuffle or
+/// repeat that was asked for.
+///
+/// Spotify answers a request for shuffle or repeat with success whatever its app then does.
+/// On the desktop app on 6 October 2026, asking for shuffle before the playlist started and
+/// again straight after it left shuffle off, though both requests succeeded; asking only
+/// before left it on. So no answer is taken on trust: the setting is asked for only when
+/// Spotify's own state lacks it once the playlist plays, and again until Spotify reports it.
 fn confirm_playback(
     client: &mut Client,
-    uri: &str,
+    asked: Asked,
     device: &Device,
-    path: &str,
-    body: &[u8],
+    sent: &Sent,
     wait: impl Fn(Duration),
     cancelled: &impl Fn() -> bool,
 ) -> ApiResult<()> {
     let mut resumed = false;
+    let mut plays = false;
     for attempt in 0..CONFIRMATION_ATTEMPTS {
         if attempt != 0 {
             wait(CONFIRMATION_PAUSE);
@@ -218,22 +341,47 @@ fn confirm_playback(
         let reading = read_playback(client)?;
         let selected = reading
             .as_ref()
-            .is_some_and(|reading| reading.selected(uri, device));
+            .is_some_and(|reading| reading.selected(asked, device));
         let playing = reading.as_ref().is_some_and(|reading| reading.playing);
-        eprintln!("Spotify playback confirmation: selected={selected}, playing={playing}");
-        if selected && playing {
+        let set = reading
+            .as_ref()
+            .is_some_and(|reading| reading.has_mode(asked));
+        match sent.mode {
+            Some(_) => eprintln!(
+                "Spotify playback confirmation: selected={selected}, playing={playing}, shuffle or repeat set={set}"
+            ),
+            None => {
+                eprintln!("Spotify playback confirmation: selected={selected}, playing={playing}")
+            }
+        }
+        plays |= selected && playing;
+        if selected && playing && set {
             return Ok(());
         }
-        // The explicit URI keeps this retry safe if another controller changes tracks.
-        if selected && !playing && !resumed && attempt != 0 && attempt + 1 < CONFIRMATION_ATTEMPTS {
+        let more = attempt + 1 < CONFIRMATION_ATTEMPTS;
+        if let (true, true, Some(mode)) = (selected && playing, more, sent.mode) {
             check_cancelled(cancelled)?;
-            client.authenticated_if_current("PUT", path, body, cancelled)?;
+            client
+                .authenticated_if_current("PUT", mode, &[], cancelled)
+                .map_err(|error| ApiError {
+                    status: error.status,
+                    message: MODE_NOT_SET,
+                })?;
+        }
+        // The explicit URI keeps this retry safe if another controller changes tracks.
+        if selected && !playing && !resumed && attempt != 0 && more {
+            check_cancelled(cancelled)?;
+            client.authenticated_if_current("PUT", sent.play, sent.body, cancelled)?;
             resumed = true;
         }
     }
     Err(ApiError {
         status: SongStatus::NetworkError,
-        message: "Spotify did not start the song. Try its Web Player.",
+        message: match asked {
+            Asked::Song(_) => "Spotify did not start the song. Try its Web Player.",
+            Asked::Collection(..) if plays => MODE_NOT_SET,
+            Asked::Collection(..) => "Spotify did not start the playlist. Try again in a moment.",
+        },
     })
 }
 
@@ -269,6 +417,32 @@ mod tests {
         ] {
             assert_eq!(play_request(uri, Some(invalid)), alone, "{invalid}");
         }
+    }
+
+    #[test]
+    fn a_playlist_is_asked_for_as_the_place_to_play_from() {
+        assert_eq!(
+            collection_request("spotify:playlist:abcdefghijkl0123456789"),
+            r#"{"context_uri":"spotify:playlist:abcdefghijkl0123456789"}"#
+        );
+    }
+
+    #[test]
+    fn shuffle_and_repeat_are_asked_of_the_chosen_device_and_only_for_a_playlist() {
+        let device = device("pc_device", "This PC", true, false);
+        let playlist = "spotify:playlist:abcdefghijkl0123456789";
+        assert_eq!(
+            mode_request(Asked::Collection(playlist, PlayMode::Shuffled), &device).as_deref(),
+            Some("/v1/me/player/shuffle?state=true&device_id=pc_device")
+        );
+        assert_eq!(
+            mode_request(Asked::Collection(playlist, PlayMode::Looped), &device).as_deref(),
+            Some("/v1/me/player/repeat?state=context&device_id=pc_device")
+        );
+        assert!(mode_request(Asked::Collection(playlist, PlayMode::AsItIs), &device).is_none());
+        assert!(
+            mode_request(Asked::Song("spotify:track:0123456789abcdefghijkl"), &device).is_none()
+        );
     }
 
     #[test]
@@ -316,14 +490,41 @@ mod tests {
             device_id: Some("phone".into()),
             uri: Some("selected".into()),
             linked_uri: None,
+            context_uri: None,
+            shuffle: Some(false),
+            repeat: Some("off".into()),
             playing: true,
         };
-        assert!(!reading.selected("selected", &device));
+        assert!(!reading.selected(Asked::Song("selected"), &device));
         reading.device_id = Some("pc".into());
-        assert!(reading.selected("selected", &device));
-        assert!(!reading.selected("different", &device));
+        assert!(reading.selected(Asked::Song("selected"), &device));
+        assert!(!reading.selected(Asked::Song("different"), &device));
         reading.linked_uri = Some("original".into());
-        assert!(reading.selected("original", &device));
+        assert!(reading.selected(Asked::Song("original"), &device));
+        // A playlist is what Spotify plays from, not the song that happens to play.
+        let playlist = |uri| Asked::Collection(uri, PlayMode::AsItIs);
+        assert!(!reading.selected(playlist("selected"), &device));
+        reading.context_uri = Some("playlist".into());
+        assert!(reading.selected(playlist("playlist"), &device));
+        assert!(reading.selected(Asked::Collection("playlist", PlayMode::Shuffled), &device));
+        assert!(!reading.selected(playlist("another"), &device));
+        reading.device_id = Some("phone".into());
+        assert!(!reading.selected(playlist("playlist"), &device));
+
+        // Shuffle and repeat count only when Spotify itself reports them.
+        let shuffled = Asked::Collection("playlist", PlayMode::Shuffled);
+        let looped = Asked::Collection("playlist", PlayMode::Looped);
+        assert!(reading.has_mode(playlist("playlist")) && reading.has_mode(Asked::Song("song")));
+        assert!(!reading.has_mode(shuffled) && !reading.has_mode(looped));
+        reading.shuffle = Some(true);
+        assert!(reading.has_mode(shuffled) && !reading.has_mode(looped));
+        // Repeating one song is not repeating the playlist.
+        reading.repeat = Some("track".into());
+        assert!(!reading.has_mode(looped));
+        reading.repeat = Some("context".into());
+        assert!(reading.has_mode(looped));
+        (reading.shuffle, reading.repeat) = (None, None);
+        assert!(!reading.has_mode(shuffled) && !reading.has_mode(looped));
         for invalid in ["", "bad&id=other", "bad\r\nheader"] {
             assert!(!valid_device_id(invalid));
         }

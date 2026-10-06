@@ -87,6 +87,8 @@ impl View {
                 Some(LPARAM(caret as isize)),
             );
         }
+        // Core's own state may be busy when the box announces this change, so it is told here.
+        self.query_changed();
         Ok(())
     }
 }

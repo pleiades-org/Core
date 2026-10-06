@@ -335,7 +335,7 @@ impl SettingsPage {
                 WINDOW_STYLE(slider::STYLE) | WS_TABSTOP,
                 slider_id,
             )?;
-            slider::configure(control, maximum, page);
+            slider::configure(control, maximum, page)?;
             self.add(
                 parent,
                 instance,

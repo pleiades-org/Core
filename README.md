@@ -6,7 +6,7 @@
 
 Core opens your apps, does sums and conversions, runs commands, controls your music and sets each program's volume, all from one small window that gets out of the way when you are done. It is a single program of about 2 MB, written in Rust. It needs no account, and while it is hidden it sits idle: no timers and no polling.
 
-**New in 2.6.0:** aliases, a volume mixer (`@volume`) and Ctrl+Backspace. See the [release notes](https://github.com/pleiades-org/Core/releases/latest).
+**New in 2.7.0:** shuffle and repeat on the now-playing bar, `@album` and `@artist`, and smoother corners. See the [release notes](https://github.com/pleiades-org/Core/releases/latest).
 
 ## Install
 
@@ -72,11 +72,14 @@ There are more in [the full list](#the-full-list) below.
 | Type | What happens |
 | --- | --- |
 | `play`, `pause`, `next`, `previous` | Controls your music: Spotify, Apple Music, a browser tab and others |
+| `shuffle`, `repeat` or `loop` | Turns the player's shuffle on or off, or moves its repeat on: everything, one track, off |
 | `@media` | Shows what is playing, and every open player |
 | `@volume` or `@mix` | A volume mixer: the whole PC and each program, with a slider and a mute button |
 | `@song basorexia` | Searches Spotify and plays the song you choose. Optional: see [Spotify song search](#spotify-song-search) |
+| `@album absolution`, `@artist muse` | Searches Spotify for an album or an artist and plays the one you choose. Needs the same Spotify connection |
+| `@playlist`, `@playlist chill` | Lists your own Spotify playlists, or the ones whose name matches, and plays the one you choose. Needs the same Spotify connection |
 
-While something plays, a bar above the search box shows the album art, the track's progress and previous, play and next buttons. Rest the pointer on the album art to get a volume slider for that player.
+While something plays, a bar above the search box shows the album art, the track's progress and previous, play and next buttons. Rest the pointer on the album art to get a volume slider for that player. Move it over the buttons or the time, and shuffle and repeat buttons take the time's place: a dot under one means it is on, and repeat steps through everything, one track and off. They appear for players that let Windows change these settings, such as Spotify.
 
 In the mixer, **↑ ↓** choose a row, **← →** change its volume and **Enter** mutes it. You can also drag a slider or click a speaker.
 
@@ -126,7 +129,7 @@ Website quicklinks show the site's icon, and files and folders show their Window
 
 ### Spotify song search
 
-`@song` is optional and off by default. It plays through your own Spotify Premium account, after a one-time setup:
+`@song`, `@album`, `@artist` and `@playlist` are optional and off by default. They play through your own Spotify Premium account, after a one-time setup:
 
 1. Open [Spotify's developer dashboard](https://developer.spotify.com/dashboard) with your Premium account, create an app and select **Web API**.
 2. In the app's settings, add this exact Redirect URI: `http://127.0.0.1:43821/callback`. Copy the **Client ID**. No client secret is needed.
@@ -135,6 +138,12 @@ Website quicklinks show the site's icon, and files and folders show their Window
 5. Click **Connect Spotify** and approve it in your browser.
 
 Then type `@song` and a song or artist, choose a result and press Enter. The song plays on the Spotify device you are using, so keep Spotify open on this PC for it to appear as a device.
+
+`@album` and `@artist` search Spotify the same way, as in `@album absolution` or `@artist muse`. Enter plays the album from its first song, or the artist's songs as Spotify orders them.
+
+Type `@playlist` to see the playlists in your Spotify library, your own and the ones you follow. Keep typing to narrow them by name, as in `@playlist chill`, and press Enter to play the one you choose. If you connected Spotify before Core had playlists, Core asks you to click **Connect Spotify** once more, because listing playlists is a permission of its own.
+
+A selected playlist, album or artist has two buttons beside it, shuffle and repeat. Pick a row with **↑** or **↓**, then press **→** to move onto a button and Enter to play it that way; **←** goes back to the row. Or click the button. While you are still typing, **←** and **→** move through your text as usual. These buttons are an experiment and may change.
 
 The media controls, the now-playing bar and the volume mixer work without any of this.
 
@@ -151,7 +160,7 @@ Every update is signed, and Core installs nothing that is not signed with its ow
   - **Updates:** GitHub, at most once a day.
   - **Currency rates:** the European Central Bank's public rates file.
   - **Website quicklink icons:** Google's favicon service, which therefore sees the domain names of your website quicklinks. Addresses on your own network are never sent to it.
-  - **Spotify**, only if you connect it, and only for `@song` searches, playback and album covers.
+  - **Spotify**, only if you connect it, and only for `@song`, `@album` and `@artist` searches, your list of playlists, playback and cover pictures.
 - There is no telemetry and no account. Your settings, history and log stay in `%APPDATA%\Pleiades\Core\v2` on your PC.
 
 ## Something not working?
@@ -201,8 +210,11 @@ Every update is signed, and Core installs nothing that is not signed with its ow
 | `taskbar`, `tb`, `@taskbar` | Shows the Windows taskbar on Core's display |
 | `@media`, `@music`, `@media spotify next` | Media controls, for the chosen player or one you name |
 | `play`, `pause`, `next`, `previous`, `now playing` | That media control straight away. Core stays open for another press |
+| `shuffle`, `repeat`, `loop`, `@media spotify shuffle` | Shuffle on or off, or repeat's next setting, for a player that lets Windows change them |
 | `@volume`, `@mix`, `@mix spot` | The volume mixer, or only the programs whose name matches |
 | `@song basorexia` | Spotify song search, once connected |
+| `@album absolution`, `@artist muse` | Spotify album and artist search. Enter plays the chosen one; after **↑** or **↓**, **→** then Enter plays it shuffled or on repeat |
+| `@playlist`, `@playlists`, `@playlist chill` | Your Spotify playlists, narrowed by what you type. Enter plays the chosen one; after **↑** or **↓**, **→** then Enter plays it shuffled or on repeat |
 | `@update` | Checks for and installs updates |
 | `@info`, `@about`, `@version` | Core's version, the latest release and this version's release notes |
 

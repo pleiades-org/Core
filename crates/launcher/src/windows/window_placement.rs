@@ -92,11 +92,11 @@ impl Corner {
         Self::BottomRight,
     ];
 
-    fn is_left(self) -> bool {
+    pub fn is_left(self) -> bool {
         matches!(self, Self::TopLeft | Self::BottomLeft)
     }
 
-    fn is_top(self) -> bool {
+    pub fn is_top(self) -> bool {
         matches!(self, Self::TopLeft | Self::TopRight)
     }
 }

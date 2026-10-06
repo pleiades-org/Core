@@ -17,6 +17,8 @@ pub struct SearchLayout {
     /// Empty when the bar is hidden.
     pub media_info: RECT,
     pub media_buttons: [RECT; 3],
+    /// Shuffle and repeat, left of previous, which the bar shows under the pointer.
+    pub media_modes: [RECT; 2],
 }
 
 impl SearchLayout {
@@ -83,6 +85,11 @@ impl SearchLayout {
                 super::view::media_button_areas(width, 0, dpi)
             } else {
                 [RECT::default(); 3]
+            },
+            media_modes: if top > 0 {
+                super::view::media_mode_areas(width, 0, dpi)
+            } else {
+                [RECT::default(); 2]
             },
         }
     }
@@ -154,7 +161,10 @@ mod tests {
         assert!(with_bar
             .media_buttons
             .iter()
+            .chain(&with_bar.media_modes)
             .all(|button| button.top >= 0 && button.bottom <= bar && button.right <= 960));
         assert!(with_bar.media_buttons[2].left > with_bar.media_buttons[0].left);
+        assert!(with_bar.media_modes[1].right <= with_bar.media_buttons[0].left);
+        assert_eq!(plain.media_modes, [RECT::default(); 2]);
     }
 }

@@ -1,8 +1,12 @@
 //! Media controls in search: `@media` / `@music`, and the words play, pause, next, previous,
-//! prev and now playing typed on their own, which offer a control above application matches.
+//! prev, shuffle, repeat, loop and now playing typed on their own, which offer a control above
+//! application matches.
 use super::{parse_query, Action, CommandKind, ParsedQuery, ResultKind, SearchBatch, SearchResult};
 use crate::{
-    media::{choose_target, MediaCommand, MediaPolicy, MediaSession, MediaState, PlaybackState},
+    media::{
+        choose_target, MediaCommand, MediaPolicy, MediaSession, MediaState, PlaybackState,
+        RepeatMode,
+    },
     VISIBLE_RESULT_LIMIT,
 };
 use std::sync::Arc;
@@ -16,17 +20,20 @@ const UNAVAILABLE_MESSAGE: &str =
     "Windows media sessions are unavailable · Enter sends the media key";
 
 /// Whole-query words; anything longer (`playlist`, `next friday`) searches as usual.
-const KEYWORDS: [(&str, MediaCommand); 6] = [
+const KEYWORDS: [(&str, MediaCommand); 9] = [
     ("play", MediaCommand::Play),
     ("pause", MediaCommand::Pause),
     ("next", MediaCommand::Next),
     ("previous", MediaCommand::Previous),
     ("prev", MediaCommand::Previous),
+    ("shuffle", MediaCommand::Shuffle),
+    ("repeat", MediaCommand::Repeat),
+    ("loop", MediaCommand::Repeat),
     ("now playing", MediaCommand::TogglePlayPause),
 ];
 
 /// Words that end an `@media` query, as in `@media spotify next`.
-const PAYLOAD_COMMANDS: [(&str, MediaCommand); 8] = [
+const PAYLOAD_COMMANDS: [(&str, MediaCommand); 11] = [
     ("play", MediaCommand::Play),
     ("resume", MediaCommand::Play),
     ("pause", MediaCommand::Pause),
@@ -34,6 +41,9 @@ const PAYLOAD_COMMANDS: [(&str, MediaCommand); 8] = [
     ("skip", MediaCommand::Next),
     ("previous", MediaCommand::Previous),
     ("prev", MediaCommand::Previous),
+    ("shuffle", MediaCommand::Shuffle),
+    ("repeat", MediaCommand::Repeat),
+    ("loop", MediaCommand::Repeat),
     ("toggle", MediaCommand::TogglePlayPause),
 ];
 
@@ -69,7 +79,7 @@ fn same_words(text: &str, phrase: &str) -> bool {
 pub(super) fn keyword_result(command: MediaCommand, state: Option<&MediaState>) -> SearchResult {
     match state {
         None => command_row(command, None, "Uses your music app first"),
-        Some(state) if blind(state) => command_row(command, None, MEDIA_KEY_DETAIL),
+        Some(state) if blind(state) => command_row(command, None, blind_detail(command)),
         Some(state) => command_row(command, state.target(command), missing_target(command)),
     }
 }
@@ -80,14 +90,22 @@ fn blind(state: &MediaState) -> bool {
     state.unavailable || state.sessions.is_empty()
 }
 
+/// What a control does while no player is visible. The keyboard has no key for shuffle or
+/// repeat, so those have nothing to reach.
+fn blind_detail(command: MediaCommand) -> &'static str {
+    match command {
+        MediaCommand::Shuffle | MediaCommand::Repeat => "No media app is open",
+        _ => MEDIA_KEY_DETAIL,
+    }
+}
+
 /// `@media [app] [command]`: the chosen player's controls, then the other players.
 pub(super) fn media_results(payload: &str, state: Option<&MediaState>) -> SearchBatch {
     let (filter, explicit) = split_payload(payload);
     let Some(state) = state.filter(|state| !blind(state)) else {
-        let detail = if state.is_some() {
-            MEDIA_KEY_DETAIL
-        } else {
-            "Uses your music app first"
+        let detail = |command| match state {
+            Some(_) => blind_detail(command),
+            None => "Uses your music app first",
         };
         if !filter.is_empty() && state.is_some() {
             return SearchBatch {
@@ -107,7 +125,7 @@ pub(super) fn media_results(payload: &str, state: Option<&MediaState>) -> Search
         return SearchBatch {
             results: commands
                 .into_iter()
-                .map(|command| command_row(command, None, detail))
+                .map(|command| command_row(command, None, detail(command)))
                 .collect(),
             message: match state {
                 Some(state) if state.unavailable => UNAVAILABLE_MESSAGE,
@@ -160,7 +178,12 @@ pub(super) fn media_results(payload: &str, state: Option<&MediaState>) -> Search
     }
     if let Some(session) = main {
         results.push(now_playing_row(session));
-        for command in [MediaCommand::Next, MediaCommand::Previous] {
+        for command in [
+            MediaCommand::Next,
+            MediaCommand::Previous,
+            MediaCommand::Shuffle,
+            MediaCommand::Repeat,
+        ] {
             if Some(command) != explicit && session.controls.allows(command, session.state) {
                 results.push(command_row(command, Some(session), ""));
             }
@@ -202,7 +225,28 @@ fn missing_target(command: MediaCommand) -> &'static str {
     match command {
         MediaCommand::Pause => "Nothing is playing",
         MediaCommand::Play => "Already playing",
+        MediaCommand::Shuffle | MediaCommand::Repeat => "No open player lets Core change this",
         _ => "No media app is open",
+    }
+}
+
+/// What shuffle or repeat is on `session` now and what Enter does about it; None for the
+/// other controls, and for a player that does not offer the setting.
+fn mode_detail(command: MediaCommand, session: &MediaSession) -> Option<&'static str> {
+    match command {
+        MediaCommand::Shuffle => session.controls.shuffle.map(|on| {
+            if on {
+                "On · Enter to turn off"
+            } else {
+                "Off · Enter to turn on"
+            }
+        }),
+        MediaCommand::Repeat => session.controls.repeat.map(|mode| match mode {
+            RepeatMode::Off => "Off · Enter to repeat everything",
+            RepeatMode::All => "Repeating everything · Enter to repeat one track",
+            RepeatMode::One => "Repeating one track · Enter to turn off",
+        }),
+        _ => None,
     }
 }
 
@@ -213,6 +257,8 @@ fn command_id(command: MediaCommand) -> &'static str {
         MediaCommand::Pause => "pause",
         MediaCommand::Next => "next",
         MediaCommand::Previous => "previous",
+        MediaCommand::Shuffle => "shuffle",
+        MediaCommand::Repeat => "repeat",
     }
 }
 
@@ -234,7 +280,10 @@ fn command_row(
         .into(),
         title: command.label().into(),
         description: match target {
-            Some(session) => format!("{} · {}", session.app_name, session.heading()).into(),
+            Some(session) => match mode_detail(command, session) {
+                Some(mode) => format!("{} · {mode}", session.app_name).into(),
+                None => format!("{} · {}", session.app_name, session.heading()).into(),
+            },
             None => missing.into(),
         },
         action: Action::Media {
@@ -302,6 +351,7 @@ mod tests {
                 next: true,
                 previous: true,
                 seek: false,
+                ..MediaControls::default()
             },
             timeline: None,
         }
@@ -335,11 +385,23 @@ mod tests {
             (" PAUSE ", MediaCommand::Pause),
             ("Next", MediaCommand::Next),
             ("prev", MediaCommand::Previous),
+            ("Shuffle", MediaCommand::Shuffle),
+            ("repeat", MediaCommand::Repeat),
+            ("loop", MediaCommand::Repeat),
             ("now   playing", MediaCommand::TogglePlayPause),
         ] {
             assert_eq!(keyword(text), Some(command), "{text}");
         }
-        for text in ["playn", "next friday", "now", "playing", "", "play pause"] {
+        for text in [
+            "playn",
+            "next friday",
+            "now",
+            "playing",
+            "",
+            "play pause",
+            "loopback",
+            "repeat all",
+        ] {
             assert_eq!(keyword(text), None, "{text}");
         }
         assert!(wants_media("@music"));
@@ -434,6 +496,83 @@ mod tests {
                 .description
                 .as_ref(),
             MEDIA_KEY_DETAIL
+        );
+    }
+
+    #[test]
+    fn shuffle_and_repeat_are_offered_by_the_player_that_has_them_and_say_what_enter_does() {
+        let mut state = state();
+        // Nothing open offers either: the word still answers, and says why Enter does nothing.
+        let nobody = keyword_result(MediaCommand::Shuffle, Some(&state));
+        assert_eq!(target(&nobody), (MediaCommand::Shuffle, None));
+        assert_eq!(
+            nobody.description.as_ref(),
+            "No open player lets Core change this"
+        );
+        assert!(batch_targets(&media_results("", Some(&state)))
+            .iter()
+            .all(|(command, _)| !matches!(command, MediaCommand::Shuffle | MediaCommand::Repeat)));
+
+        let mut sessions = state.sessions.to_vec();
+        sessions[1].controls.shuffle = Some(false);
+        sessions[1].controls.repeat = Some(RepeatMode::All);
+        state.sessions = sessions.into();
+        let shuffle = keyword_result(MediaCommand::Shuffle, Some(&state));
+        assert_eq!(
+            target(&shuffle),
+            (MediaCommand::Shuffle, Some("Spotify.exe"))
+        );
+        assert_eq!(shuffle.title.as_ref(), "Shuffle");
+        assert_eq!(
+            shuffle.description.as_ref(),
+            "Spotify · Off · Enter to turn on"
+        );
+        // The player's own rows gain both, after next and previous.
+        let batch = media_results("", Some(&state));
+        assert_eq!(
+            batch_targets(&batch),
+            [
+                (MediaCommand::TogglePlayPause, Some("Spotify.exe")),
+                (MediaCommand::Next, Some("Spotify.exe")),
+                (MediaCommand::Previous, Some("Spotify.exe")),
+                (MediaCommand::Shuffle, Some("Spotify.exe")),
+                (MediaCommand::Repeat, Some("Spotify.exe")),
+                (MediaCommand::TogglePlayPause, Some("Chrome")),
+            ]
+        );
+        assert_eq!(
+            batch.results[4].description.as_ref(),
+            "Spotify · Repeating everything · Enter to repeat one track"
+        );
+        // `@media loop` puts repeat first and does not list it twice.
+        let asked = media_results("loop", Some(&state));
+        assert_eq!(
+            target(&asked.results[0]),
+            (MediaCommand::Repeat, Some("Spotify.exe"))
+        );
+        assert_eq!(
+            batch_targets(&asked)
+                .iter()
+                .filter(|(command, _)| *command == MediaCommand::Repeat)
+                .count(),
+            1
+        );
+        // A named player that lacks the setting keeps the row and says so.
+        let chrome = media_results("chrome shuffle", Some(&state));
+        assert_eq!(
+            target(&chrome.results[0]),
+            (MediaCommand::Shuffle, Some("Chrome"))
+        );
+        assert_eq!(
+            chrome.results[0].description.as_ref(),
+            "Google Chrome · No open player lets Core change this"
+        );
+        // No player at all: the keyboard has no key for these.
+        assert_eq!(
+            keyword_result(MediaCommand::Repeat, Some(&MediaState::default()))
+                .description
+                .as_ref(),
+            "No media app is open"
         );
     }
 

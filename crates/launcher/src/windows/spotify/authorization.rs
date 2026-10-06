@@ -11,7 +11,12 @@ use windows::Win32::Foundation::HWND;
 pub const REDIRECT_URI: &str = "http://127.0.0.1:43821/callback";
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_CALLBACK_BYTES: usize = 8192;
-const AUTHORIZATION_SCOPES: &str = "user-modify-playback-state user-read-playback-state";
+/// What reading the person's playlists needs. A connection made before Core asked for it
+/// lacks it, and connecting again grants it.
+pub(super) const PLAYLIST_SCOPE: &str = "playlist-read-private";
+/// Playing what was chosen, confirming that it plays, and listing the person's playlists,
+/// including the ones they share with others.
+const AUTHORIZATION_SCOPES: &str = "user-modify-playback-state user-read-playback-state playlist-read-private playlist-read-collaborative";
 
 pub struct Authorization {
     pub code: String,
@@ -145,6 +150,20 @@ fn url_decode(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connecting_asks_for_the_playlists_core_later_checks_for() {
+        let asked: Vec<&str> = AUTHORIZATION_SCOPES.split(' ').collect();
+        assert!(asked.contains(&PLAYLIST_SCOPE));
+        // Nothing that could change the person's library or account is asked for.
+        assert!(asked
+            .iter()
+            .all(|scope| !scope.contains("modify") || *scope == "user-modify-playback-state"));
+        assert!(asked
+            .iter()
+            .all(|scope| !scope.contains("private") || *scope == PLAYLIST_SCOPE));
+    }
+
     #[test]
     fn callback_requires_the_expected_path_state_and_unique_fields() {
         assert_eq!(

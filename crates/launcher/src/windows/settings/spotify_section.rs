@@ -94,7 +94,7 @@ impl SpotifySection {
             parent,
             instance,
             STATUS_ID,
-            "Connect once, then use @song followed by a song or artist.",
+            "Connect once, then use @song, @album, @artist or @playlist.",
             w!("STATIC"),
             WINDOW_STYLE(0),
         )?;

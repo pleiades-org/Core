@@ -9,9 +9,9 @@ use super::{
 };
 use super::{
     view::{
-        View, INPUT_ID, MEDIA_INFO_ID, MEDIA_NEXT_ID, MEDIA_PLAY_ID, MEDIA_PREVIOUS_ID,
-        MEDIA_PROGRESS_TIMER, MEDIA_VOLUME_CHANGED, MEDIA_VOLUME_WANTED, MIXER_CHANGED, MIXER_MUTE,
-        MIXER_RELEASED, RESULTS_ID, SETTINGS_ID,
+        is_media_button, View, INPUT_ID, MEDIA_INFO_ID, MEDIA_PROGRESS_TIMER, MEDIA_VOLUME_CHANGED,
+        MEDIA_VOLUME_WANTED, MIXER_CHANGED, MIXER_MUTE, MIXER_RELEASED, PLAY_OPTION_CHOSEN,
+        RESULTS_ID, SETTINGS_ID,
     },
     wide,
 };
@@ -339,10 +339,7 @@ unsafe fn message_loop(window: HWND, shell: &RefCell<LauncherState>) -> windows:
                     let identifier = GetDlgCtrlID(message.hwnd) as usize;
                     if identifier == super::power_menu::POWER_ID
                         || super::power_menu::action(identifier).is_some()
-                        || matches!(
-                            identifier,
-                            MEDIA_PREVIOUS_ID | MEDIA_PLAY_ID | MEDIA_NEXT_ID
-                        )
+                        || is_media_button(identifier)
                     {
                         post(
                             window,
@@ -445,6 +442,22 @@ unsafe fn message_loop(window: HWND, shell: &RefCell<LauncherState>) -> windows:
                     shell
                         .borrow_mut()
                         .mixer_step(message.wParam.0 == VK_RIGHT.0 as usize);
+                    continue;
+                }
+                // Beside a selected playlist, album or artist are two buttons: Right moves
+                // onto them and Left back. Left on the row itself stays the caret's, and so
+                // do both keys while the person types, until Up, Down or a click picks a row.
+                VK_LEFT | VK_RIGHT
+                    if GetKeyState(VK_CONTROL.0 as i32) >= 0
+                        && GetKeyState(VK_SHIFT.0 as i32) >= 0
+                        && view.as_ref().is_some_and(|view| {
+                            view.move_play_option(
+                                message.hwnd,
+                                message.wParam.0 == VK_RIGHT.0 as usize,
+                            )
+                        }) =>
+                {
+                    shell.borrow().refresh_footer();
                     continue;
                 }
                 _ => {}
@@ -636,12 +649,7 @@ unsafe extern "system" fn window_proc(
             );
             LRESULT(0)
         }
-        WM_COMMAND
-            if matches!(
-                word.0 & 0xffff,
-                MEDIA_PREVIOUS_ID | MEDIA_PLAY_ID | MEDIA_NEXT_ID
-            ) && (word.0 >> 16) as u32 == BN_CLICKED =>
-        {
+        WM_COMMAND if is_media_button(word.0 & 0xffff) && (word.0 >> 16) as u32 == BN_CLICKED => {
             shell.media_bar_button(word.0 & 0xffff);
             LRESULT(0)
         }
@@ -724,7 +732,19 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_COMMAND if word.0 & 0xffff == RESULTS_ID && (word.0 >> 16) as u32 == LBN_SELCHANGE => {
+            // Another row: the last one's shuffle or repeat button is no longer the choice.
+            if let Some(view) = &shell.view {
+                view.row_picked();
+            }
             shell.refresh_footer();
+            LRESULT(0)
+        }
+        // A click on the shuffle or repeat button beside the selected row plays it so.
+        WM_COMMAND
+            if word.0 & 0xffff == RESULTS_ID && (word.0 >> 16) as u32 == PLAY_OPTION_CHOSEN =>
+        {
+            shell.set_accept_mode(RunMode::Capture);
+            shell.accept();
             LRESULT(0)
         }
         // The volume mixer's rows: a slider moved or let go of, and a mute button pressed.

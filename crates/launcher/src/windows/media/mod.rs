@@ -47,7 +47,7 @@ pub fn decode_artwork(
 
 use super::application_icon::ApplicationIcon;
 use core_engine::media::{
-    MediaCommand, MediaPolicy, MediaSession, MixerApp, PlaybackState, VolumeLevel,
+    MediaCommand, MediaControls, MediaPolicy, MediaSession, MixerApp, PlaybackState, VolumeLevel,
 };
 use std::{
     collections::VecDeque,
@@ -88,6 +88,8 @@ pub struct MediaOutcome {
     pub app_name: Option<Arc<str>>,
     /// The player's state when the command was sent.
     pub before: Option<PlaybackState>,
+    /// What the player allowed then, and how its shuffle and repeat stood.
+    pub controls: Option<MediaControls>,
     pub result: Result<(), String>,
 }
 

@@ -1,6 +1,6 @@
 use super::{
     info::{self, AppInfo},
-    media, mixer,
+    media, mixer, playlists,
     power::power_results,
     recent_applications::recent_results,
     run_target, songs, taskbar, terminal, PowerAction, RunMode, ShellKind,
@@ -26,6 +26,8 @@ const EMPTY_QUERY_CATALOGS: usize = 3;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     PlaySong(super::Song),
+    /// A Spotify playlist, album or artist, played from its start.
+    PlayCollection(super::Collection),
     LaunchApplication(Arc<str>),
     CopyText(Arc<str>),
     OpenUrl(Arc<str>),
@@ -101,6 +103,8 @@ pub struct SearchEngine {
     /// Media sessions and priorities; None until the launcher has read them.
     media: Option<Arc<MediaState>>,
     songs: Option<Arc<super::SongSearch>>,
+    /// The person's Spotify playlists; None until the launcher has asked for them.
+    playlists: Option<Arc<super::PlaylistLibrary>>,
     /// Windows' volume mixer; None until the launcher has read it for `@volume`.
     mixer: Option<Arc<[MixerApp]>>,
     /// Core's version and what the last update check saw, for `@info`.
@@ -115,6 +119,11 @@ pub struct SearchEngine {
 impl SearchEngine {
     pub fn set_songs(&mut self, songs: Option<Arc<super::SongSearch>>) {
         self.songs = songs;
+    }
+
+    /// A snapshot of the person's Spotify playlists, replaced each time the launcher reads them.
+    pub fn set_playlists(&mut self, playlists: Option<Arc<super::PlaylistLibrary>>) {
+        self.playlists = playlists;
     }
 
     /// A snapshot of Windows' volume mixer, replaced each time the launcher reads it.
@@ -222,9 +231,13 @@ impl SearchEngine {
                 payload,
             } => info::info_results(payload, self.app_info.as_deref()),
             ParsedQuery::Command {
-                kind: CommandKind::Songs,
+                kind: kind @ (CommandKind::Songs | CommandKind::Albums | CommandKind::Artists),
                 payload,
-            } => songs::song_results(payload, self.songs.as_deref()),
+            } => songs::catalog_results(kind, payload, self.songs.as_deref()),
+            ParsedQuery::Command {
+                kind: CommandKind::Playlists,
+                payload,
+            } => playlists::playlist_results(payload, self.playlists.as_deref()),
             ParsedQuery::Command {
                 kind: CommandKind::Mixer,
                 payload,
@@ -611,6 +624,9 @@ fn command_hints(prefix: &str) -> SearchBatch {
             "song",
             "Search Spotify songs · optional connection in Music settings",
         ),
+        ("album", "Play an album from Spotify"),
+        ("artist", "Play an artist from Spotify"),
+        ("playlist", "Play one of your Spotify playlists"),
         ("info", "Core's version and the latest release"),
     ]
     .into_iter()

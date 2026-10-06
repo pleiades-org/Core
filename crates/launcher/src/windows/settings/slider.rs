@@ -4,6 +4,7 @@ use crate::windows::{
 };
 use windows::Win32::{
     Foundation::*,
+    Graphics::Gdi::InvalidateRect,
     UI::{
         Controls::{
             InitCommonControlsEx, CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDIS_HOT, CDIS_SELECTED,
@@ -13,7 +14,8 @@ use windows::Win32::{
             TB_ENDTRACK, TB_THUMBTRACK,
         },
         Input::KeyboardAndMouse::GetFocus,
-        WindowsAndMessaging::{SendMessageW, WM_USER},
+        Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
+        WindowsAndMessaging::{GetClientRect, SendMessageW, WM_NCDESTROY, WM_PAINT, WM_USER},
     },
 };
 
@@ -21,6 +23,7 @@ pub use windows::Win32::UI::Controls::{TBS_NOTICKS as STYLE, TRACKBAR_CLASSW as 
 
 /// Not exported by the `windows` crate; documented as `WM_USER` in CommCtrl.h.
 const TBM_GETPOS: u32 = WM_USER;
+const REPAINT_SUBCLASS: usize = 8;
 const TRACK_THICKNESS: i32 = 2;
 const FILLED_THICKNESS: i32 = 4;
 const THUMB_DIAMETER: i32 = 16;
@@ -60,8 +63,9 @@ pub fn register() -> windows::core::Result<()> {
     }
 }
 
-pub fn configure(control: HWND, maximum: u32, page: u32) {
+pub fn configure(control: HWND, maximum: u32, page: u32) -> windows::core::Result<()> {
     unsafe {
+        SetWindowSubclass(control, Some(repaint_proc), REPAINT_SUBCLASS, 0).ok()?;
         SendMessageW(control, TBM_SETRANGEMIN, Some(WPARAM(0)), Some(LPARAM(0)));
         SendMessageW(
             control,
@@ -72,6 +76,33 @@ pub fn configure(control: HWND, maximum: u32, page: u32) {
         SendMessageW(control, TBM_SETLINESIZE, None, Some(LPARAM(1)));
         SendMessageW(control, TBM_SETPAGESIZE, None, Some(LPARAM(page as isize)));
     }
+    Ok(())
+}
+
+/// Makes every repaint of a slider a whole one. Windows repaints only the area of its own
+/// thumb as that moves or changes state, and the thumb Core draws is wider and, with its
+/// ring, taller: what lay outside stayed behind as arcs, and the new thumb showed cut off.
+/// So before the slider paints, all of it is marked as needing to.
+unsafe extern "system" fn repaint_proc(
+    control: HWND,
+    message: u32,
+    word: WPARAM,
+    data: LPARAM,
+    _subclass: usize,
+    _reference: usize,
+) -> LRESULT {
+    match message {
+        WM_PAINT => {
+            let _ = InvalidateRect(Some(control), None, false);
+        }
+        WM_NCDESTROY
+            if !RemoveWindowSubclass(control, Some(repaint_proc), REPAINT_SUBCLASS).as_bool() =>
+        {
+            eprintln!("Could not remove the slider's repaint subclass");
+        }
+        _ => {}
+    }
+    DefSubclassProc(control, message, word, data)
 }
 
 pub fn set_position(control: HWND, value: u32) {
@@ -94,6 +125,12 @@ pub fn position(control: HWND) -> u32 {
 /// Paints a thin track, a filled portion up to the thumb and a round thumb in the Core palette.
 pub fn custom_draw(draw: &NMCUSTOMDRAW, dpi: u32, palette: Palette) -> LRESULT {
     if draw.dwDrawStage == CDDS_PREPAINT {
+        // Windows leaves the slider's top rows as they are, and the thumb's ring reaches
+        // them: each repaint starts from a slider that is all background.
+        let mut client = RECT::default();
+        if unsafe { GetClientRect(draw.hdr.hwndFrom, &mut client) }.is_ok() {
+            painting::fill(draw.hdc, &client, palette.background);
+        }
         return LRESULT(CDRF_NOTIFYITEMDRAW as isize);
     }
     if draw.dwDrawStage != CDDS_ITEMPREPAINT {
@@ -162,6 +199,96 @@ fn draw_thumb(draw: &NMCUSTOMDRAW, dpi: u32, palette: Palette) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The slider is never shown. Its drawing goes to a surface larger than it, as Windows
+    /// would hand it when it starts to repaint.
+    #[test]
+    fn each_repaint_starts_from_a_slider_that_is_all_background() {
+        use crate::windows::settings::BackgroundColor;
+        use windows::{
+            core::w,
+            Win32::{
+                Graphics::Gdi::*,
+                System::LibraryLoader::GetModuleHandleW,
+                UI::{Controls::NMHDR, WindowsAndMessaging::*},
+            },
+        };
+        let _serial = crate::windows::GUI_RESOURCE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        register().unwrap();
+        let instance: HINSTANCE = unsafe { GetModuleHandleW(None) }.unwrap().into();
+        let window = |class, style, parent| {
+            unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE(0),
+                    class,
+                    w!(""),
+                    style,
+                    0,
+                    0,
+                    120,
+                    30,
+                    parent,
+                    None,
+                    Some(instance),
+                    None,
+                )
+            }
+            .unwrap()
+        };
+        let parent = window(w!("STATIC"), WS_POPUP, None);
+        let control = window(CLASS, WS_CHILD | WINDOW_STYLE(STYLE), Some(parent));
+        configure(control, 32, 4).unwrap();
+        let palette = Palette::for_background(BackgroundColor::parse("#181818").unwrap());
+        let white = COLORREF(0x00FF_FFFF);
+        unsafe {
+            let screen = GetDC(None);
+            let context = CreateCompatibleDC(Some(screen));
+            let bitmap = CreateCompatibleBitmap(screen, 140, 40);
+            ReleaseDC(None, screen);
+            let previous = SelectObject(context, bitmap.into());
+            // What an earlier thumb left behind, anywhere on the slider.
+            painting::fill(context, &painting::rectangle(0, 0, 140, 40), white);
+            let draw = NMCUSTOMDRAW {
+                hdr: NMHDR {
+                    hwndFrom: control,
+                    ..Default::default()
+                },
+                dwDrawStage: CDDS_PREPAINT,
+                hdc: context,
+                ..Default::default()
+            };
+            assert_eq!(
+                custom_draw(&draw, 96, palette).0,
+                CDRF_NOTIFYITEMDRAW as isize
+            );
+            // Its top rows included, which Windows itself does not repaint.
+            for (x, y) in [(0, 0), (119, 0), (60, 1), (0, 29), (119, 29)] {
+                assert_eq!(GetPixel(context, x, y), palette.background, "({x}, {y})");
+            }
+            // Nothing beyond the slider is touched.
+            for (x, y) in [(120, 0), (0, 30), (139, 39)] {
+                assert_eq!(GetPixel(context, x, y), white, "({x}, {y})");
+            }
+            // The other stages draw the track and the thumb, and erase nothing.
+            painting::fill(context, &painting::rectangle(0, 0, 140, 40), white);
+            let later = NMCUSTOMDRAW {
+                dwDrawStage: CDDS_ITEMPREPAINT,
+                dwItemSpec: usize::MAX,
+                ..draw
+            };
+            assert_eq!(
+                custom_draw(&later, 96, palette).0,
+                CDRF_SKIPDEFAULT as isize
+            );
+            assert_eq!(GetPixel(context, 60, 1), white);
+            SelectObject(context, previous);
+            let _ = DeleteObject(bitmap.into());
+            let _ = DeleteDC(context);
+            DestroyWindow(parent).unwrap();
+        }
+    }
 
     #[test]
     fn drag_steps_and_release_are_distinguished() {

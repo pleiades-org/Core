@@ -10,7 +10,10 @@ use crate::windows::{
         TitleWatch,
     },
     settings::{shortcut_recorder, MediaShortcutAction, MusicApp, MusicSettings, Shortcut},
-    view::{BarPresence, MediaBarClick, MediaBarContent, MEDIA_NEXT_ID, MEDIA_PREVIOUS_ID},
+    view::{
+        media_mode_command, BarPresence, MediaBarClick, MediaBarContent, MEDIA_NEXT_ID,
+        MEDIA_PREVIOUS_ID,
+    },
 };
 use core_engine::media::{
     app_key, classify_app, known_app, AppClass, MediaCommand, MediaSession, MediaState,
@@ -316,6 +319,17 @@ impl LauncherState {
                     self.set_media_state(&app, PlaybackState::Playing);
                 }
                 match outcome.action {
+                    MediaAction::Control(
+                        command @ (MediaCommand::Shuffle | MediaCommand::Repeat),
+                    ) => {
+                        // What the player was asked for, shown until it reports for itself.
+                        let controls = outcome.controls.unwrap_or_default().after(command);
+                        self.change_session(&app, |session| session.controls = controls);
+                        let mode = controls
+                            .mode_label(command)
+                            .unwrap_or_else(|| command.label());
+                        format!("{mode} · {name}")
+                    }
                     MediaAction::Control(MediaCommand::Next) => format!("Next track · {name}"),
                     MediaAction::Control(MediaCommand::Previous) => {
                         format!("Previous track · {name}")
@@ -334,6 +348,10 @@ impl LauncherState {
 
     /// Shows a command's effect at once; the player's own announcement follows.
     fn set_media_state(&mut self, app_id: &str, state: PlaybackState) {
+        self.change_session(app_id, |session| session.state = state);
+    }
+
+    fn change_session(&mut self, app_id: &str, change: impl Fn(&mut MediaSession)) {
         self.media.sessions = self
             .media
             .sessions
@@ -341,7 +359,7 @@ impl LauncherState {
             .map(|session| {
                 let mut session = session.clone();
                 if &*session.app_id == app_id {
-                    session.state = state;
+                    change(&mut session);
                 }
                 session
             })
@@ -601,7 +619,7 @@ impl LauncherState {
         let command = match identifier {
             MEDIA_PREVIOUS_ID => MediaCommand::Previous,
             MEDIA_NEXT_ID => MediaCommand::Next,
-            _ => MediaCommand::TogglePlayPause,
+            _ => media_mode_command(identifier).unwrap_or(MediaCommand::TogglePlayPause),
         };
         let target = self.view.as_ref().and_then(|view| view.media_bar_app());
         self.send_media(MediaAction::Control(command), target);

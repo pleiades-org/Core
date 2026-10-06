@@ -131,7 +131,7 @@ or in every app. Shortcut boxes record keys: click one and press the keys.
 
 Optional: Settings > Music > Spotify song search connects your own Spotify
 Premium account. Type @song and a song or artist, then press Enter to play
-the chosen song. The Spotify volume switch beside it makes the bar's slider
+the chosen song, or @playlist to play one of your own playlists. The Spotify volume switch beside it makes the bar's slider
 set Spotify's own volume. Off by default; the README at
 github.com/pleiades-org/Core has the one-time setup.
 
