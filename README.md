@@ -130,8 +130,9 @@ Website quicklinks show the site's icon, and files and folders show their Window
 
 1. Open [Spotify's developer dashboard](https://developer.spotify.com/dashboard) with your Premium account, create an app and select **Web API**.
 2. In the app's settings, add this exact Redirect URI: `http://127.0.0.1:43821/callback`. Copy the **Client ID**. No client secret is needed.
-3. In Core, open **Settings → Music → Spotify song search**, turn it on and paste the Client ID.
-4. Click **Connect Spotify** and approve it in your browser.
+3. You may also need to add yourself to the app: open its **User Management** tab and add your name and the email address of your Spotify account. Spotify refuses accounts that are not on that list.
+4. In Core, open **Settings → Music → Spotify song search**, turn it on and paste the Client ID.
+5. Click **Connect Spotify** and approve it in your browser.
 
 Then type `@song` and a song or artist, choose a result and press Enter. The song plays on the Spotify device you are using, so keep Spotify open on this PC for it to appear as a device.
 
@@ -157,7 +158,7 @@ Every update is signed, and Core installs nothing that is not signed with its ow
 
 - **Nothing happens when I press the shortcut.** Another program may already use Ctrl+Alt+Space. Open Core from its tray icon and choose another shortcut in **Settings → Behaviour**.
 - **A newly installed app is not found.** Core reads the list of apps when it starts. Exit Core from the tray and open it again.
-- **`@song` finds nothing or does not play.** It needs Spotify Premium, the one-time setup above, and Spotify open on a device.
+- **`@song` finds nothing or does not play.** It needs Spotify Premium, the one-time setup above, and Spotify open on a device. If Core says that Spotify refused access, add your Spotify account's email address under **User Management** in your Spotify app (step 3 of the setup).
 - **Anything else.** Core writes problems to `%APPDATA%\Pleiades\Core\v2\core.log`. Please [open an issue](https://github.com/pleiades-org/Core/issues) saying what you typed and what happened.
 
 ## The full list
