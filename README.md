@@ -1,179 +1,127 @@
 # Core
 
-**A small, fast launcher for Windows.** Press a shortcut, type a few letters, press Enter.
+A native Windows launcher for applications, commands, calculations, and media controls.
 
-![Core showing the now-playing bar and the volume mixer](.github/preview.png)
+Core brings app search, quicklinks, unit and currency conversions, shell commands, music controls, and per-application volume into one keyboard-driven window. It is written in Rust and requires no account.
 
-Core opens your apps, does sums and conversions, runs commands, controls your music and sets each program's volume, all from one small window that gets out of the way when you are done. It is a single program of about 2 MB, written in Rust. It needs no account, and while it is hidden it sits idle: no timers and no polling.
+![Core showing the now-playing bar and volume mixer](.github/preview.png)
 
-**New in 2.7.0:** shuffle and repeat on the now-playing bar, `@album` and `@artist`, and smoother corners. See the [release notes](https://github.com/pleiades-org/Core/releases/latest).
+## Installation
 
-## Install
+Requires **64-bit Windows** and the **Microsoft Visual C++ runtime for x64**.
 
-1. Download **`Core-Setup-<version>.exe`** from the [latest release](https://github.com/pleiades-org/Core/releases/latest).
-2. Run it and choose **Install**. Core installs for your Windows account only, so there is no administrator prompt.
-3. Press **Ctrl+Alt+Space** to open Core.
+1. Download `Core-Setup-<version>.exe` from the [latest public release](https://github.com/pleiades-org/Core/releases/latest).
+2. Run the installer. Core installs for the current Windows account without an administrator prompt.
+3. Press **Ctrl+Alt+Space** to open the launcher.
 
-Good to know:
+A portable ZIP is available from the same release page; extract it and run `core-v2.exe`. The setup file currently has no publisher certificate, so Windows may display a SmartScreen warning. Close an existing Core instance from its tray menu before installing or uninstalling.
 
-- **"Windows protected your PC"** may appear the first time, because the setup file is not signed with a publisher certificate. Choose **More info**, then **Run anyway**.
-- **Portable use:** download the ZIP from the same page instead and run `core-v2.exe` from any folder.
-- **Requirements:** 64-bit Windows and the Microsoft Visual C++ runtime (x64), which most PCs already have.
-- **Uninstall** from **Settings → Apps → Installed apps** in Windows. Your Core settings are kept.
-- If Core is already running, exit it from its tray icon before installing or uninstalling.
+Uninstall through **Windows Settings → Apps → Installed apps**. User settings are retained.
 
-## The basics
+## Everyday use
 
-| Press | To |
+| Action | Shortcut |
 | --- | --- |
-| **Ctrl+Alt+Space** | Open or hide Core |
-| **↑** **↓** | Move through the results |
-| **Enter** | Open, copy or run the selected result |
-| **Esc**, or a click elsewhere | Hide Core |
-| **Ctrl+,** | Open Settings |
-| **Ctrl+Backspace** | Delete the word before the caret |
+| Open or hide Core | Ctrl+Alt+Space |
+| Select a result | ↑ / ↓ |
+| Open, copy, or run the selected result | Enter |
+| Hide the launcher | Esc or click outside |
+| Open settings | Ctrl+, |
+| Delete the previous word | Ctrl+Backspace |
 
-- The line at the bottom of the window always says what Enter will do, such as **Enter to open** or **Enter to copy**.
-- Open Core without typing and it shows the apps you used most recently, like the Start menu.
-- Core lives in the system tray. Its icon's menu opens Core, opens Settings or exits.
-- The shortcut can be changed in Settings, or set to the Windows key on its own.
+The footer describes the selected action. Opening Core with an empty query shows recent applications. The tray menu provides access to the launcher, settings, and exit. The activation shortcut is configurable.
 
-## What you can type
+## Search and commands
 
-Just type. Core works out whether you mean an app, a sum, a conversion or a time. Everything else is a command that starts with `@`; type `@` on its own to see them all.
-
-### Apps, files and websites
-
-| Type | What happens |
+| Example | Result |
 | --- | --- |
-| `code`, `vsc`, `studio code` | Finds apps by name, by the start of any word, or by initials |
-| `cmd`, `wt`, `taskmgr` | Finds apps by the short names Windows gives them |
-| `> docs` | Opens one of your [quicklinks](#quicklinks) |
-| `@web rust windows` | Searches Google in your browser |
-| `@run notepad`, `shell:startup`, `%appdata%` | Opens anything the Windows Run box (Win+R) accepts |
+| `code`, `vsc`, `studio code` | Find applications by name, word prefix, or initials |
+| `cmd`, `wt`, `taskmgr` | Resolve familiar Windows application names |
+| `> docs`, `@quicklink docs` | Find saved quicklinks |
+| `2 + 3 * 4`, `sqrt(81)`, `25% of 80` | Calculate and copy results |
+| `10 kg to lb`, `4.7GB to MiB` | Convert units and data sizes |
+| `100 usd to eur`, `£50 in dollars` | Convert currencies using ECB reference rates |
+| `2 days from now`, `9pm et to uk` | Calculate dates and convert time zones |
+| `@web rust windows` | Search the web in the default browser |
+| `@run notepad`, `shell:startup` | Open Windows Run targets |
+| `/ipconfig /all` | Run a shell command in Core's terminal |
 
-### Sums, conversions and time
+Type `@` to browse command scopes. Shell commands support **Ctrl+Enter** for an external terminal and **Ctrl+Shift+Enter** for an elevated terminal. Power actions such as sleep, restart, and shutdown require confirmation.
 
-| Type | What you get |
-| --- | --- |
-| `2 + 3 * 4`, `sqrt(81)`, `25% of 80` | The answer. Enter copies it |
-| `10 kg to lb`, `4.7GB to MiB`, `30 mpg to l/100km` | Unit conversions |
-| `100 usd to eur`, `£50 in dollars` | Currency, at the European Central Bank's reference rates |
-| `20% off 80`, `tip 15% on 80 split 4` | Discounts, tips and split bills |
-| `255 to hex`, `#ff8800`, `unix now` | Number bases, colours and Unix time |
-| `10 GB at 100 Mbps`, `5 km in 25 min` | Download times and running pace |
-| `2 days from now`, `next Friday`, `2026-12-25 - 2026-09-21` | Dates, and the days between them |
-| `9pm et to uk` | Time zones, with daylight saving handled |
+### Media and volume
 
-There are more in [the full list](#the-full-list) below.
+Use `play`, `pause`, `next`, `previous`, `shuffle`, and `repeat` to control compatible Windows media sessions. `@media` lists available players; `@volume` or `@mix` opens the volume mixer.
 
-### Music and volume
+The now-playing bar provides artwork, track progress, and transport controls. Hover over the artwork for player volume. In the mixer, use **↑ / ↓** to select a row, **← / →** to adjust volume, and **Enter** to toggle mute. Player support determines which transport options are available.
 
-| Type | What happens |
-| --- | --- |
-| `play`, `pause`, `next`, `previous` | Controls your music: Spotify, Apple Music, a browser tab and others |
-| `shuffle`, `repeat` or `loop` | Turns the player's shuffle on or off, or moves its repeat on: everything, one track, off |
-| `@media` | Shows what is playing, and every open player |
-| `@volume` or `@mix` | A volume mixer: the whole PC and each program, with a slider and a mute button |
-| `@song basorexia` | Searches Spotify and plays the song you choose. Optional: see [Spotify song search](#spotify-song-search) |
-| `@album absolution`, `@artist muse` | Searches Spotify for an album or an artist and plays the one you choose. Needs the same Spotify connection |
-| `@playlist`, `@playlist chill` | Lists your own Spotify playlists, or the ones whose name matches, and plays the one you choose. Needs the same Spotify connection |
+### Spotify search
 
-While something plays, a bar above the search box shows the album art, the track's progress and previous, play and next buttons. Rest the pointer on the album art to get a volume slider for that player. Move it over the buttons or the time, and shuffle and repeat buttons take the time's place: a dot under one means it is on, and repeat steps through everything, one track and off. They appear for players that let Windows change these settings, such as Spotify.
+`@song`, `@album`, `@artist`, and `@playlist` require an optional Spotify connection and Spotify Premium:
 
-In the mixer, **↑ ↓** choose a row, **← →** change its volume and **Enter** mutes it. You can also drag a slider or click a speaker.
+1. Create a Web API application in Spotify's developer dashboard.
+2. Add the redirect URI `http://127.0.0.1:43821/callback` and copy the Client ID. Core does not require a client secret.
+3. Add the Spotify account to the application's permitted users if required by its access settings.
+4. Open **Settings → Music → Spotify song search**, enable it, and enter the Client ID.
+5. Select **Connect Spotify** and approve access in the browser.
 
-### Commands and your PC
+Keep Spotify active on an available playback device. `@playlist` lists library playlists and filters them by name. Existing connections may need authorization again when playlist access is added. After selecting an album, artist, or playlist with **↑ / ↓**, use **→** to reach shuffle/repeat actions and **←** to return to the result.
 
-| Type | What happens |
-| --- | --- |
-| `/ipconfig /all` | Runs a command in Core's own terminal. **Ctrl+Enter** opens a terminal window instead, and **Ctrl+Shift+Enter** runs as administrator |
-| `@power`, `sleep`, `restart`, `power off` | Power actions. Each asks you to confirm |
-| `taskbar` | Shows the Windows taskbar when it is hidden |
-| `@update` | Update status. Enter checks now and downloads a new version |
-| `@info` | Core's version and what is new in it |
+Standard Windows media controls and the volume mixer work without a Spotify developer application.
 
-## Make it yours
+## Configuration
 
-Open Settings with **Ctrl+,**, the gear in Core's window, or the tray menu. Changes save by themselves.
+Settings save automatically. Configure appearance, window position, activation behavior, startup, the command shell, preferred player, and media shortcuts from **Ctrl+,** or the tray menu.
 
 ### Aliases
 
-Short names for things you type often. In **Settings → Aliases**, enter the alias and what it stands for:
-
-| Alias | Stands for | So that |
-| --- | --- | --- |
-| `d` | `Discord` | `d` finds Discord |
-| `@s` | `@song` | `@s basorexia` searches Spotify |
-| `ip` | `/ipconfig /all` | `ip` becomes that command |
-
-An alias replaces the first word you type and keeps the rest. Only a whole word counts, so `do` and `discord` still search as usual.
+Aliases replace the first complete word of a query and preserve the remaining text. For example, map `d` to `Discord`, `@s` to `@song`, or `ip` to `/ipconfig /all` in **Settings → Aliases**.
 
 ### Quicklinks
 
-Save websites, files, folders and app links under a name in **Settings → Quicklinks**. Open one by typing its name, or type `>` to list them all.
+Save websites, local paths, folders, and application links in **Settings → Quicklinks**. Search by their names or type `>` to list them. Examples include `https://github.com`, `C:\Projects`, and `steam://rungameid/2379780`.
 
-| Link | Name |
-| --- | --- |
-| `https://github.com` | `GitHub` |
-| `C:\Projects` | `Projects` |
-| `steam://rungameid/2379780` | `My game` |
+## Updates and privacy
 
-Website quicklinks show the site's icon, and files and folders show their Windows icon.
+Core can check GitHub for updates when opened, at most once a day, download a signed update, and apply it after exit. Update verification uses Core's own signing key; this is separate from a Windows publisher certificate. Failed startup can trigger rollback. Update behavior is configurable as automatic, notify-only, or off.
 
-### Look and behaviour
+Application search, calculations, unit conversions, and time-zone conversion run locally. Network access is used for GitHub updates, ECB currency rates, website quicklink icons, and connected Spotify features. Google's favicon service receives the domain names of eligible website quicklinks; local-network addresses are excluded.
 
-- **Appearance:** any background colour, seven positions on the screen, corner rounding and distance from the screen edge.
-- **Behaviour:** the shortcut that opens Core (or the Windows key on its own), which display it opens on, starting with Windows, and the shell that `/` commands run in.
-- **Music:** which player Core prefers, the now-playing bar on or off, and media shortcuts that work in every app.
+There is no telemetry or required account. Settings, history, and logs are stored under `%APPDATA%\Pleiades\Core\v2`; caches use local application data.
 
-### Spotify song search
+## Build from source
 
-`@song`, `@album`, `@artist` and `@playlist` are optional and off by default. They play through your own Spotify Premium account, after a one-time setup:
+Requires Windows, the **Rust 1.95.0 MSVC toolchain** pinned in `rust-toolchain.toml`, Visual Studio C++ Build Tools, and a Windows SDK. The workspace contains `crates/engine` for search and calculations and `crates/launcher` for the native application.
 
-1. Open [Spotify's developer dashboard](https://developer.spotify.com/dashboard) with your Premium account, create an app and select **Web API**.
-2. In the app's settings, add this exact Redirect URI: `http://127.0.0.1:43821/callback`. Copy the **Client ID**. No client secret is needed.
-3. You may also need to add yourself to the app: open its **User Management** tab and add your name and the email address of your Spotify account. Spotify refuses accounts that are not on that list.
-4. In Core, open **Settings → Music → Spotify song search**, turn it on and paste the Client ID.
-5. Click **Connect Spotify** and approve it in your browser.
+```powershell
+git clone https://github.com/pleiades-org/Core.git
+cd Core
+```
 
-Then type `@song` and a song or artist, choose a result and press Enter. The song plays on the Spotify device you are using, so keep Spotify open on this PC for it to appear as a device.
+```powershell
+cargo build --release --locked -p core-launcher-v2 --bin core-v2
+cargo test --locked --workspace
+cargo clippy --locked --workspace --all-targets -- -D warnings
+```
 
-`@album` and `@artist` search Spotify the same way, as in `@album absolution` or `@artist muse`. Enter plays the album from its first song, or the artist's songs as Spotify orders them.
+The executable is `target\release\core-v2.exe`. The `--dry-run` option allows interface testing without launching applications, writing to the clipboard, or registering shortcuts.
 
-Type `@playlist` to see the playlists in your Spotify library, your own and the ones you follow. Keep typing to narrow them by name, as in `@playlist chill`, and press Enter to play the one you choose. If you connected Spotify before Core had playlists, Core asks you to click **Connect Spotify** once more, because listing playlists is a permission of its own.
+Release packaging and native verification scripts live in `scripts/`. Native checks open application windows and write records under `docs/measurements/`; create that directory before running the harnesses. These checks require an interactive Windows desktop.
 
-A selected playlist, album or artist has two buttons beside it, shuffle and repeat. Pick a row with **↑** or **↓**, then press **→** to move onto a button and Enter to play it that way; **←** goes back to the row. Or click the button. While you are still typing, **←** and **→** move through your text as usual. These buttons are an experiment and may change.
+## Troubleshooting and limitations
 
-The media controls, the now-playing bar and the volume mixer work without any of this.
+- **Shortcut conflict:** open Core from the tray and change the activation shortcut in Settings.
+- **New application missing:** restart Core to refresh application discovery.
+- **Spotify search unavailable:** check authorization, account access, Premium status, and the active playback device.
+- **Diagnostics:** inspect `%APPDATA%\Pleiades\Core\v2\core.log` and include the query and observed behavior when reporting a problem.
 
-## Updates
+The released application does not provide typo correction.
 
-Core keeps itself up to date. When you open it, at most once a day, it checks GitHub for a new version, downloads it in the background and installs it the next time Core closes. To update straight away, type `@update` and press Enter.
+Screen readers, mixed display scaling, and some input methods are not fully covered by automated checks. Report reproducible issues in the [public issue tracker](https://github.com/pleiades-org/Core/issues).
 
-Every update is signed, and Core installs nothing that is not signed with its own key. If a new version fails to start, Core puts the previous one back. You can change this to notify-only or off in **Settings → Behaviour → Updates**.
-
-## Privacy
-
-- Finding apps, sums, conversions and time zones never use the network.
-- Core connects to the internet only for the things below, and only when you open it:
-  - **Updates:** GitHub, at most once a day.
-  - **Currency rates:** the European Central Bank's public rates file.
-  - **Website quicklink icons:** Google's favicon service, which therefore sees the domain names of your website quicklinks. Addresses on your own network are never sent to it.
-  - **Spotify**, only if you connect it, and only for `@song`, `@album` and `@artist` searches, your list of playlists, playback and cover pictures.
-- There is no telemetry and no account. Your settings, history and log stay in `%APPDATA%\Pleiades\Core\v2` on your PC.
-
-## Something not working?
-
-- **Nothing happens when I press the shortcut.** Another program may already use Ctrl+Alt+Space. Open Core from its tray icon and choose another shortcut in **Settings → Behaviour**.
-- **A newly installed app is not found.** Core reads the list of apps when it starts. Exit Core from the tray and open it again.
-- **`@song` finds nothing or does not play.** It needs Spotify Premium, the one-time setup above, and Spotify open on a device. If Core says that Spotify refused access, add your Spotify account's email address under **User Management** in your Spotify app (step 3 of the setup).
-- **Anything else.** Core writes problems to `%APPDATA%\Pleiades\Core\v2\core.log`. Please [open an issue](https://github.com/pleiades-org/Core/issues) saying what you typed and what happened.
-
-## The full list
+## Command reference
 
 <details>
-<summary>Everything Core understands</summary>
+<summary>Complete command reference</summary>
 
 | Type | What happens |
 | --- | --- |
@@ -221,28 +169,3 @@ Every update is signed, and Core installs nothing that is not signed with its ow
 Sums follow the usual order: `2+3*4` is 14 and `(2+3)*4` is 20. `%` divides by 100, so `25% of 80` is 20 and `20 + 10%` is 20.1.
 
 </details>
-
-## Build it yourself
-
-Core is two Rust crates: `crates/engine` (search, the calculator and conversions, with no dependencies) and `crates/launcher` (the native Windows window).
-
-You need Windows, the Rust MSVC toolchain (its version is pinned in `rust-toolchain.toml`) and the Visual Studio C++ build tools.
-
-```powershell
-cargo build --release --locked -p core-launcher-v2 --bin core-v2
-cargo test --locked --workspace
-cargo clippy --locked --workspace --all-targets -- -D warnings
-```
-
-The result is `target\release\core-v2.exe`. Start it with `--dry-run` to try it without it opening apps, writing to the clipboard or registering shortcuts.
-
-The scripts in `scripts\` run the release checks and build the release package. The checks open Core's windows on screen, and they keep their records in a `docs\measurements` folder that is not part of this repository: create it before running them.
-
-## Status
-
-Core is young and still changing. Known gaps:
-
-- Newly installed apps are found after Core restarts.
-- Typing mistakes are not corrected yet.
-- The setup file has no publisher certificate, so Windows warns about it the first time.
-- Screen readers, mixed display scaling and some input methods are not covered by the automated checks.
