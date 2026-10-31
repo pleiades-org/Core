@@ -8,11 +8,12 @@ lto = "fat"
 codegen-units = 1
 
 [workspace.package]
-version = "2.7.1"
+version = "2.7.2"
 edition = "2021"
 publish = false
 
 [workspace.dependencies]
 core-engine = { path = "crates/engine" }
-gpui = { git = "https://github.com/zed-industries/zed", rev = "43585afc29ea95e0c879309e08436bc25f5fab16" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "43585afc29ea95e0c879309e08436bc25f5fab16" }
+# Pin both GPUI crates after the async-tar fix for CVE-2026-53600.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "a1230fc5847e881f584cad2694a3885747572f2a" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "a1230fc5847e881f584cad2694a3885747572f2a" }
