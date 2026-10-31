@@ -1,3 +1,4 @@
+use core_engine::search::PowerAction;
 use windows::core::w;
 use windows::Win32::{Foundation::COLORREF, Graphics::Gdi::*};
 
@@ -25,6 +26,8 @@ pub const SELECTED: COLORREF = rgb(18, 18, 18);
 pub const TEXT: COLORREF = rgb(239, 241, 245);
 pub const SECONDARY: COLORREF = rgb(163, 171, 187);
 pub const ACCENT: COLORREF = rgb(191, 204, 234);
+const MINIMUM_ACTION_CONTRAST: f64 = 4.5;
+const COLOR_BLEND_STEP: usize = 10;
 
 const fn rgb(red: u32, green: u32, blue: u32) -> COLORREF {
     COLORREF(red | (green << 8) | (blue << 16))
@@ -52,6 +55,25 @@ impl Default for Palette {
 }
 
 impl Palette {
+    /// Power actions retain their meaning on light, dark, and custom backgrounds.
+    pub fn power_color(&self, action: PowerAction) -> COLORREF {
+        let (dark, light) = match action {
+            PowerAction::ShutDown => (rgb(255, 119, 128), rgb(180, 34, 48)),
+            PowerAction::Restart => (rgb(255, 196, 97), rgb(132, 79, 0)),
+            PowerAction::Sleep => (rgb(129, 170, 255), rgb(34, 82, 173)),
+        };
+        let preferred = if self.is_dark() { dark } else { light };
+        for percent in (0..=100).step_by(COLOR_BLEND_STEP) {
+            let color = blend(preferred, self.text, percent);
+            if contrast(color, self.background) >= MINIMUM_ACTION_CONTRAST
+                && contrast(color, self.selected) >= MINIMUM_ACTION_CONTRAST
+            {
+                return color;
+            }
+        }
+        self.text
+    }
+
     /// Dark backgrounds get dark native scrollbars.
     pub fn is_dark(&self) -> bool {
         luminance(self.background) <= 0.179
@@ -116,6 +138,29 @@ fn contrast(first: COLORREF, second: COLORREF) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn power_colors_stay_readable_on_default_light_and_custom_backgrounds() {
+        for background in [
+            "000000", "FFFFFF", "777777", "123456", "FF0000", "00FF00", "0000FF",
+        ] {
+            let palette = Palette::for_background(
+                super::super::settings::BackgroundColor::parse(background).unwrap(),
+            );
+            for action in PowerAction::ALL {
+                let color = palette.power_color(action);
+                assert!(
+                    contrast(color, palette.background) >= MINIMUM_ACTION_CONTRAST,
+                    "{background}: {action:?}"
+                );
+                assert!(
+                    contrast(color, palette.selected) >= MINIMUM_ACTION_CONTRAST,
+                    "selected {background}: {action:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn custom_backgrounds_keep_text_readable_on_rows_and_background() {
         for color in [

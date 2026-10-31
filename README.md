@@ -110,7 +110,7 @@ Release packaging and native verification scripts live in `scripts/`. Native che
 ## Troubleshooting and limitations
 
 - **Shortcut conflict:** open Core from the tray and change the activation shortcut in Settings.
-- **New application missing:** restart Core to refresh application discovery.
+- **New application missing:** open Core to refresh application discovery. While Core stays open, it checks again every 30 seconds.
 - **Spotify search unavailable:** check authorization, account access, Premium status, and the active playback device.
 - **Diagnostics:** inspect `%APPDATA%\Pleiades\Core\v2\core.log` and include the query and observed behavior when reporting a problem.
 

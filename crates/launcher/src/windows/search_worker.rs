@@ -45,6 +45,7 @@ pub struct Completion {
 #[derive(Default)]
 struct Pending {
     request: Option<Request>,
+    discovering: bool,
     shutdown: bool,
 }
 
@@ -88,28 +89,55 @@ impl SearchWorker {
             search_thread: Some(search_thread),
         };
         if discover {
-            let (pending, events, stopped) = (
-                worker.pending.clone(),
-                worker.events.clone(),
-                worker.stopped.clone(),
-            );
-            // Detached: Shell enumeration can block without checking `stopped`, and exit must
-            // not wait for it. The shutdown check below prevents posting to a closed window.
-            thread::Builder::new()
-                .name("core-discovery".into())
-                .spawn(move || {
-                    let catalog = discover_applications(&stopped);
-                    // Drop sets `shutdown` under this lock, so no wake can follow it.
-                    let state = pending.0.lock().expect("search request lock");
-                    if state.shutdown {
-                        return;
-                    }
-                    *events.catalog.lock().expect("catalog event lock") = Some(catalog);
-                    wake(address);
-                    drop(state);
-                })?;
+            worker.refresh_catalog(window)?;
         }
         Ok(worker)
+    }
+
+    /// Rescan on a separate thread; repeated requests share the scan already in progress.
+    pub fn refresh_catalog(&self, window: HWND) -> std::io::Result<()> {
+        self.start_discovery(window, discover_applications)
+    }
+
+    fn start_discovery(
+        &self,
+        window: HWND,
+        discover: impl FnOnce(&AtomicBool) -> Discovery + Send + 'static,
+    ) -> std::io::Result<()> {
+        let mut state = self.pending.0.lock().expect("search request lock");
+        if state.shutdown || state.discovering {
+            return Ok(());
+        }
+        state.discovering = true;
+        drop(state);
+        let (pending, events, stopped) = (
+            self.pending.clone(),
+            self.events.clone(),
+            self.stopped.clone(),
+        );
+        let address = window.0 as usize;
+        // Detached: Shell enumeration can block, and exit must not wait for it.
+        let spawned = thread::Builder::new()
+            .name("core-discovery".into())
+            .spawn(move || {
+                let catalog = discover(&stopped);
+                // Drop sets `shutdown` under this lock, so no wake can follow it.
+                let mut state = pending.0.lock().expect("search request lock");
+                state.discovering = false;
+                if !state.shutdown {
+                    *events.catalog.lock().expect("catalog event lock") = Some(catalog);
+                    wake(address);
+                }
+            });
+        if let Err(error) = spawned {
+            self.pending
+                .0
+                .lock()
+                .expect("search request lock")
+                .discovering = false;
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub fn submit(&self, generation: u64, query: String, context: SearchContext) {
@@ -126,6 +154,11 @@ impl SearchWorker {
     pub fn cancel(&self, generation: u64) {
         self.generation.store(generation, Ordering::Release);
         self.pending.0.lock().expect("search request lock").request = None;
+        self.events
+            .results
+            .lock()
+            .expect("search results lock")
+            .take();
     }
 }
 
@@ -208,15 +241,20 @@ fn run_search(
         {
             continue;
         }
-        let should_wake = events
-            .results
-            .lock()
-            .expect("search results lock")
+        let mut results = events.results.lock().expect("search results lock");
+        // Cancellation clears this mailbox under the same lock; recheck before publishing.
+        if stopped.load(Ordering::Acquire)
+            || generation.load(Ordering::Acquire) != request.generation
+        {
+            continue;
+        }
+        let should_wake = results
             .replace(Completion {
                 generation: request.generation,
                 batch,
             })
             .is_none();
+        drop(results);
         if should_wake {
             wake(address);
         }
@@ -239,6 +277,8 @@ fn wake(address: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core_engine::applications::Application;
+    use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
     fn context(catalog: &Arc<ApplicationCatalog>, quicklinks: &Arc<[Quicklink]>) -> SearchContext {
@@ -264,6 +304,135 @@ mod tests {
             assert!(Instant::now() < deadline, "search worker did not respond");
             thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    fn discovery(name: &str) -> Discovery {
+        let identifier: Arc<str> = name.into();
+        Discovery {
+            catalog: Arc::new(ApplicationCatalog::new(vec![Application {
+                id: identifier.clone(),
+                name: name.into(),
+                description: "Discovery test".into(),
+                pinned: false,
+                launches: 0,
+                aliases: Arc::from([]),
+            }])),
+            targets: [(identifier, std::path::PathBuf::from(format!("{name}.lnk")))].into(),
+            aliases: Default::default(),
+            warnings: Vec::new(),
+        }
+    }
+
+    fn wait_for_discovery(pending: &Mutex<Pending>) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while pending.lock().unwrap().discovering {
+            assert!(Instant::now() < deadline, "discovery did not finish");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn catalog_refreshes_are_serial_and_do_not_block_search() {
+        let _serial = crate::windows::GUI_RESOURCE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let worker = SearchWorker::new(HWND::default(), false).unwrap();
+        let (started, entered) = mpsc::channel();
+        let (finish, released) = mpsc::channel();
+        worker
+            .start_discovery(HWND::default(), move |_| {
+                started.send(()).unwrap();
+                released.recv().unwrap();
+                discovery("Existing")
+            })
+            .unwrap();
+        entered.recv_timeout(Duration::from_secs(10)).unwrap();
+        let (duplicate, unexpected) = mpsc::channel();
+        worker
+            .start_discovery(HWND::default(), move |_| {
+                duplicate.send(()).unwrap();
+                discovery("Duplicate")
+            })
+            .unwrap();
+        assert!(matches!(
+            unexpected.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+
+        let catalog = Arc::new(ApplicationCatalog::default());
+        let quicklinks: Arc<[Quicklink]> = Arc::from([]);
+        worker.submit(1, "2+2".into(), context(&catalog, &quicklinks));
+        assert_eq!(
+            next_completion(&worker).batch.results[0].title.as_ref(),
+            "4"
+        );
+        finish.send(()).unwrap();
+        wait_for_discovery(&worker.pending.0);
+        let first = worker.events.catalog.lock().unwrap().take().unwrap();
+        assert!(first.targets.contains_key("Existing"));
+
+        worker
+            .start_discovery(HWND::default(), |_| discovery("Installed"))
+            .unwrap();
+        wait_for_discovery(&worker.pending.0);
+        let refreshed = worker.events.catalog.lock().unwrap().take().unwrap();
+        assert!(refreshed.targets.contains_key("Installed"));
+        assert!(!refreshed.targets.contains_key("Existing"));
+        worker.submit(
+            2,
+            "@app Installed".into(),
+            context(&refreshed.catalog, &quicklinks),
+        );
+        assert_eq!(
+            next_completion(&worker).batch.results[0].title.as_ref(),
+            "Installed"
+        );
+    }
+
+    #[test]
+    fn shutdown_does_not_wait_for_discovery_or_publish_to_a_closed_window() {
+        let _serial = crate::windows::GUI_RESOURCE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let worker = SearchWorker::new(HWND::default(), false).unwrap();
+        let (started, entered) = mpsc::channel();
+        let (finish, released) = mpsc::channel();
+        worker
+            .start_discovery(HWND::default(), move |_| {
+                started.send(()).unwrap();
+                released.recv().unwrap();
+                discovery("Too late")
+            })
+            .unwrap();
+        entered.recv_timeout(Duration::from_secs(10)).unwrap();
+        let pending = worker.pending.clone();
+        let events = worker.events.clone();
+
+        drop(worker);
+        assert!(pending.0.lock().unwrap().shutdown);
+        finish.send(()).unwrap();
+        wait_for_discovery(&pending.0);
+        assert!(events.catalog.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn cancellation_discards_a_result_that_finished_before_invalidation() {
+        let _serial = crate::windows::GUI_RESOURCE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let worker = SearchWorker::new(HWND::default(), false).unwrap();
+        let catalog = Arc::new(ApplicationCatalog::default());
+        let quicklinks: Arc<[Quicklink]> = Arc::from([]);
+        worker.submit(1, "2+2".into(), context(&catalog, &quicklinks));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while worker.events.results.lock().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "search worker did not respond");
+            thread::sleep(Duration::from_millis(5));
+        }
+
+        worker.cancel(2);
+
+        assert!(worker.events.results.lock().unwrap().is_none());
     }
 
     #[test]

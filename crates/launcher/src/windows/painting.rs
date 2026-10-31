@@ -7,7 +7,7 @@ use super::{
 pub use core_engine::search::ResultKind;
 use core_engine::{
     media::VolumeLevel,
-    search::{Action, SearchResult},
+    search::{Action, PowerAction, SearchResult},
 };
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 use windows::Win32::{Foundation::*, Graphics::Gdi::*};
@@ -54,6 +54,8 @@ pub struct DisplayRow {
     pub title: Arc<str>,
     pub detail: String,
     pub kind: ResultKind,
+    /// The action's semantic color and icon, including the confirmation row.
+    pub power: Option<PowerAction>,
     /// A row of the volume mixer carries its level, drawn as a slider.
     pub volume: Option<VolumeLevel>,
     /// A playlist, album or artist: selected, its row ends in buttons that play it shuffled
@@ -84,6 +86,13 @@ impl DisplayRow {
             title: result.title.clone(),
             detail,
             kind: result.kind,
+            power: match &result.action {
+                Action::Power(action) => Some(*action),
+                Action::FillQuery(query) if result.kind == ResultKind::Power => query
+                    .strip_prefix("@power confirm ")
+                    .and_then(PowerAction::parse),
+                _ => None,
+            },
             volume: match &result.action {
                 Action::Mixer { level, .. } => Some(*level),
                 _ => None,
@@ -480,7 +489,17 @@ pub fn row_identity(
         .icon
         .as_ref()
         .is_some_and(|icon| icon.draw(context, icon_area, scale(26, dpi)));
-    if !icon_drawn {
+    let action_color = row.power.map(|action| palette.power_color(action));
+    if let Some(action) = row.power {
+        centred_glyph(
+            context,
+            icon_area,
+            super::power_menu::action_glyph(action),
+            dpi,
+            fonts.icon,
+            palette.power_color(action),
+        );
+    } else if !icon_drawn {
         result_icon(context, icon_area, row.kind, fonts, dpi, palette.accent);
     }
     let left = area.left + scale(ROW_TEXT_LEFT, dpi);
@@ -494,7 +513,7 @@ pub fn row_identity(
             area.top + scale(29, dpi),
         ),
         fonts.title,
-        palette.text,
+        action_color.unwrap_or(palette.text),
     );
     text(
         context,

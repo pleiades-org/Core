@@ -32,6 +32,14 @@ pub fn action(identifier: usize) -> Option<PowerAction> {
     }
 }
 
+pub fn action_glyph(action: PowerAction) -> &'static str {
+    match action {
+        PowerAction::Sleep => "\u{e708}",
+        PowerAction::Restart => "\u{e72c}",
+        PowerAction::ShutDown => "\u{e7e8}",
+    }
+}
+
 /// Inline child controls keep the menu inside Core's focus/dismissal boundary.
 pub struct PowerMenu {
     panel: HWND,
@@ -163,13 +171,17 @@ impl PowerMenu {
             painting::rounded(item.hDC, &inset, scale(7, dpi), palette.background);
             return true;
         }
-        let glyph = match item.CtlID as usize {
-            SLEEP_ID => "\u{e708}",
-            RESTART_ID => "\u{e72c}",
-            SHUTDOWN_ID => "\u{e7e8}",
-            _ => return false,
+        let Some(action) = action(item.CtlID as usize) else {
+            return false;
         };
-        icon_button(item, glyph, dpi, fonts, palette);
+        tinted_icon_button(
+            item,
+            action_glyph(action),
+            palette.power_color(action),
+            dpi,
+            fonts,
+            palette,
+        );
         true
     }
 }

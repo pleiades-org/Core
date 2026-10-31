@@ -40,6 +40,9 @@ use windows::Win32::{
     },
 };
 
+pub const APPLICATION_REFRESH_TIMER: usize = 48;
+const APPLICATION_REFRESH_INTERVAL_MS: u32 = 30_000;
+
 #[derive(Clone, Copy)]
 pub struct Options {
     pub hidden: bool,
@@ -248,6 +251,43 @@ impl LauncherState {
         Ok(())
     }
 
+    /// Keep discovery off the window thread, including when an app is installed mid-session.
+    pub fn refresh_application_catalog(&self) {
+        if self.options.probe || !self.visible {
+            return;
+        }
+        if let Some(worker) = &self.worker {
+            if let Err(error) = worker.refresh_catalog(self.window) {
+                eprintln!("Could not refresh installed applications: {error}");
+            }
+        }
+    }
+
+    fn set_application_refresh_active(&self, window: HWND, active: bool) {
+        if self.options.probe {
+            return;
+        }
+        if active {
+            self.refresh_application_catalog();
+            if unsafe {
+                SetTimer(
+                    Some(window),
+                    APPLICATION_REFRESH_TIMER,
+                    APPLICATION_REFRESH_INTERVAL_MS,
+                    None,
+                )
+            } == 0
+            {
+                eprintln!(
+                    "Could not schedule application discovery: {}",
+                    windows::core::Error::from_win32()
+                );
+            }
+        } else if let Err(error) = unsafe { KillTimer(Some(window), APPLICATION_REFRESH_TIMER) } {
+            eprintln!("Could not stop application discovery timer: {error}");
+        }
+    }
+
     pub fn configure_shortcut(
         &mut self,
         window: HWND,
@@ -310,13 +350,20 @@ impl LauncherState {
     }
 
     pub fn queue_search(&mut self) {
+        if let Some(view) = &self.view {
+            view.close_power_menu();
+        }
+        self.submit_search();
+    }
+
+    /// Catalog updates repeat the query without dismissing a menu the person is using.
+    fn submit_search(&mut self) {
         let Some(view) = self.view.as_ref() else {
             return;
         };
         if view.settings_open() {
             return;
         }
-        view.close_power_menu();
         self.generation += 1;
         self.pending_accept = None;
         self.searched_query = view.query();
@@ -392,6 +439,8 @@ impl LauncherState {
             discovery.catalog.len()
         );
         let accepting_current = self.pending_accept == Some(self.generation);
+        // Invalidate old results even when settings prevent a new search.
+        self.cancel_background_work();
         for warning in &discovery.warnings {
             eprintln!("Application discovery: {warning}");
         }
@@ -403,7 +452,7 @@ impl LauncherState {
         self.windows_recent.invalidate();
         self.refresh_recent_applications();
         self.offer_music_apps();
-        self.queue_search();
+        self.submit_search();
         if accepting_current {
             self.pending_accept = Some(self.generation);
         }
@@ -485,6 +534,9 @@ impl LauncherState {
         }
         let was_visible = std::mem::replace(&mut self.visible, visible);
         self.pending_accept = None;
+        if visible != was_visible {
+            self.set_application_refresh_active(window, visible);
+        }
         // Opening, not re-showing an open Core: typing so far keeps the bar in place.
         if visible && !was_visible {
             // Before placing the window, so the bar's height is part of the first layout.

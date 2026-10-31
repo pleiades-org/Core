@@ -15,7 +15,7 @@ $version = ($metadata.packages | Where-Object name -eq 'core-launcher-v2').versi
 if (-not $Candidate) { $Candidate = Join-Path $projectRoot 'target\styling\release\core-v2.exe' }
 if ((& $Candidate --version | Out-String).Trim() -ne "Core $version") { throw 'Candidate version does not match Cargo.toml.' }
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Candidate).Hash
-$required = @('release-controls','release-extensions','release-settings','release-shortcuts','release-integration','release-styling','release-quicklinks','release-commands','release-updates','release-installer')
+$required = @('release-controls','release-extensions','release-settings','release-shortcuts','release-integration','release-discovery','release-styling','release-quicklinks','release-commands','release-updates','release-installer')
 if (-not $SkipInteractive) { $required += 'release-dismissal' }
 foreach ($name in $required) {
     $record = Get-Content -LiteralPath (Join-Path "$projectRoot\docs\measurements" "$name.json") -Raw | ConvertFrom-Json
@@ -51,6 +51,7 @@ Ctrl+Alt+Space opens or hides Core by default. Escape or clicking outside hides 
 With nothing typed, Core shows your recently used apps as a grid: apps opened
 from Core first, then apps Windows has seen you start (read locally from
 Windows' own usage record). Arrow keys move; Enter or a click opens.
+Application discovery refreshes when Core opens and every 30 seconds while visible.
 
 The top-right gear opens Settings, with categories in a left sidebar and their
 controls on the right. Appearance controls the background, seven screen
@@ -85,7 +86,8 @@ search. cd carries over from one command to the next.
 
 The bottom-right power icon opens Sleep, Restart and Power off. Commands such as
 @power and restart work too. Each action has a separate confirmation; Cancel is
-selected by default. Power icons highlight on hover. The footer remains visible
+selected by default. Power off is red, Restart amber and Sleep blue, including
+their confirmation rows. Power icons highlight on hover. The footer remains visible
 when Windows limits Core's size to fit the display.
 
 The footer shows one hint for the selected action, such as Enter to copy or

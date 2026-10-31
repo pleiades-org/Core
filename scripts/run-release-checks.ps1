@@ -25,6 +25,7 @@ $runs = @(
     @{ Script = 'test-extensions.ps1'; Label = 'release-extensions'; Extra = @() },
     @{ Script = 'test-shortcuts.ps1'; Label = 'release-shortcuts'; Extra = $(if ($PhysicalKeyboard) { @() } else { @('-RegistrationOnly') }) },
     @{ Script = 'test-windows.ps1'; Label = 'release-integration'; Extra = @() },
+    @{ Script = 'test-discovery.ps1'; Label = 'release-discovery'; Extra = @() },
     @{ Script = 'test-styling.ps1'; Label = 'release-styling'; Extra = @() },
     @{ Script = 'test-quicklinks.ps1'; Label = 'release-quicklinks'; Extra = $(if ($PhysicalKeyboard) { @() } else { @('-SkipKeyboard') }) },
     @{ Script = 'test-commands.ps1'; Label = 'release-commands'; Extra = @() },

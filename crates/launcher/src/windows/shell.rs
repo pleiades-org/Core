@@ -1,7 +1,10 @@
 use super::{
     foreground_observer::FOREGROUND_CHANGED,
     icon_worker::ICONS_READY,
-    launcher_state::{run_mode, LauncherState, Options, COMMAND_OUTPUT_TIMER, MIXER_TIMER},
+    launcher_state::{
+        run_mode, LauncherState, Options, APPLICATION_REFRESH_TIMER, COMMAND_OUTPUT_TIMER,
+        MIXER_TIMER,
+    },
     media::{MEDIA_READY, MEDIA_TITLE_CHANGED},
     search_worker::WORKER_READY,
     settings::{page::DONE_ID, shortcut_recorder, SETTINGS_SAVED},
@@ -779,6 +782,10 @@ unsafe extern "system" fn window_proc(
         WM_TIMER if word.0 == super::settings::AUTO_SAVE_TIMER => {
             // Quicklink typing leaves the full check to this pause, so the draft is read again.
             shell.flush_settings(window);
+            LRESULT(0)
+        }
+        WM_TIMER if word.0 == APPLICATION_REFRESH_TIMER => {
+            shell.refresh_application_catalog();
             LRESULT(0)
         }
         WM_TIMER if word.0 == COMMAND_OUTPUT_TIMER => {

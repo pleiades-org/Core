@@ -904,6 +904,7 @@ fn same_places(current: &[DisplayRow], next: &[DisplayRow]) -> bool {
             current.identifier == next.identifier
                 && current.title == next.title
                 && current.kind == next.kind
+                && current.power == next.power
         })
 }
 
